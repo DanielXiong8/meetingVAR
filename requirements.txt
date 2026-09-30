@@ -1,0 +1,21 @@
+# meetingVAR 依赖清单（spike 阶段从宽，进 main 后再锁版本）
+# 安装顺序注意：torch 先按本机 CUDA 版本单独装（见 SETUP.md），再装其余
+
+# --- C1 · ASR + 说话人分离（离线） ---
+torch>=2.1          # 先单独按 CUDA 装：见 https://pytorch.org/get-started/locally/
+torchaudio
+funasr>=1.1
+modelscope          # 模型权重下载（装完权重固化 models/，之后可断网）
+numpy<2.3           # funasr 兼容性从宽
+
+# --- C2 · 系统音频环回 ---
+PyAudioWPatch
+
+# --- C4 · 低帧率录屏 ---
+dxcam ; platform_system == "Windows"
+mss
+
+# --- C5 · 热词增强（funasr 自带，无需额外依赖） ---
+
+# --- 通用 ---
+rich                # CLI 输出美化，spike 脚本用
