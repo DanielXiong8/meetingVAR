@@ -21,8 +21,12 @@ MODELS_ROOT = Path("D:/env/models")
 
 
 def find_model_dir(keyword: str) -> str:
-    """在 modelscope 缓存目录里按关键词定位含 config.yaml 的模型目录。"""
-    hits = [p.parent for p in MODELS_ROOT.rglob("config.yaml") if keyword.lower() in str(p).lower()]
+    """在 modelscope 缓存目录里按关键词定位模型目录（认 config.yaml 或 configuration.json）。"""
+    hits = [
+        p.parent
+        for p in list(MODELS_ROOT.rglob("config.yaml")) + list(MODELS_ROOT.rglob("configuration.json"))
+        if keyword.lower() in str(p).lower()
+    ]
     if not hits:
         raise FileNotFoundError(f"MODELS_ROOT 下没找到含 {keyword!r} 的模型：检查 snapshot_download 是否完成")
     return str(hits[0])
@@ -36,13 +40,19 @@ def main() -> None:
 
     sv_dir = find_model_dir("SenseVoiceSmall")
     campp_dir = find_model_dir("campplus")
-    print(f"[load] SenseVoice: {sv_dir}\n[load] CAM++:     {campp_dir}")
+    vad_dir = find_model_dir("fsmn_vad")
+    print(f"[load] SenseVoice: {sv_dir}\n[load] CAM++:     {campp_dir}\n[load] fsmn-vad:  {vad_dir}")
 
     from funasr import AutoModel
+    import re
+
+    def clean(t: str) -> str:
+        return re.sub(r"<\|[^|]*\|>", "", t)
 
     try:
         model = AutoModel(
             model=sv_dir,
+            vad_model=vad_dir,
             spk_model=campp_dir,
             device=args.device,
             disable_update=True,
@@ -59,10 +69,11 @@ def main() -> None:
     dt = time.time() - t0
 
     print(f"\n[result] spk_model={'on' if spk else 'off'}  elapsed={dt:.1f}s")
-    for seg in res[0]["sentence_info"] if spk and "sentence_info" in res[0] else []:
-        print(f"  [{seg.get('spk', '?')}] {seg['start']/1000:7.1f}s  {seg['text']}")
-    if not (spk and "sentence_info" in res[0]):
-        print(" ", res[0]["text"])
+    if spk and "sentence_info" in res[0]:
+        for seg in res[0]["sentence_info"]:
+            print(f"  [spk{seg.get('spk', '?')}] {seg['start']/1000:7.1f}s  {clean(seg['text'])}")
+    else:
+        print(" ", clean(res[0]["text"]))
 
 
 if __name__ == "__main__":
