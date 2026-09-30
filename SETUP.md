@@ -20,9 +20,12 @@
 
 ## C1 · torch + FunASR/SenseVoice + CAM++（离线）
 
-- 2026-09-30：conda 环境已建，funasr 1.4.16 + torch（CPU 版）已装，`import funasr/torch/modelscope` 通过
-- 待办：cu128 torch 后台替换中；SenseVoice + CAM++ 权重下载固化 `models/`；**拔网线验收**
-- 模型下载：ModelScope 镜像；权重固化到 `models/`，**验收 = 拔网线跑通**
+- 2026-10-01 02:57：**CPU 链路验收通过**——SenseVoice(936MB) + CAM++(28MB) + fsmn-vad 三模型全本地加载（`D:\env\models`），`spk_model=on` 一次成功，输出按句说话人标签 `[spk0] 0.0s …`，17 秒音频 CPU 推理 0.9s。验收脚本 `spikes/c1_asr_offline/run_offline.py`
+- 坑 4：AutoModel 不挂 `vad_model` 就没有 `sentence_info`（CAM++ 白加载），说话人标签必须 `model=sv + vad_model + spk_model` 三件套
+- 坑 5：SenseVoice 输出带 `<|zh|><|NEUTRAL|>` 富标签，展示层要正则剥掉
+- 坑 6：ffmpeg 未装，funasr 用 torchaudio 后端加载 wav 没问题；**后续处理 mp4 音轨时必须装 ffmpeg**
+- 坑 7：modelscope 大文件中断会留 `.incomplete` 且 snapshot_download 仍返回成功——**下载后必须按文件名校验**（model.pt 936,291,369 字节）
+- 待办：cu128 torch（分段下载中）→ `torch.cuda.is_available()` 验证；正式拔网线验收；多说话人归因待剧本音频
 
 ## C2 · pyaudiowpatch 系统音频环回
 
