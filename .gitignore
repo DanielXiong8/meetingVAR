@@ -1,0 +1,30 @@
+# ===== 红线：永不入库 =====
+# 模型权重（GB 级，本地固化即可）
+models/
+*.pt
+*.bin
+*.ckpt
+*.pth
+*.safetensors
+
+# 会议音频/录屏/截图——含他人声音与屏幕内容，隐私红线
+data/
+*.wav
+*.mp4
+*.mkv
+*.webm
+
+# ===== Python =====
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+.pytest_cache/
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+~$*
