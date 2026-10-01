@@ -1,0 +1,11 @@
+# conda 环境定义：conda env create -f environment.yml && conda activate meetingvar
+# Python 锁 3.10：FunASR 生态对 3.11+ 兼容性不稳（SETUP.md 详见）
+name: meetingvar
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - -r requirements.txt
