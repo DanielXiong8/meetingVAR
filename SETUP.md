@@ -25,7 +25,9 @@
 - 坑 5：SenseVoice 输出带 `<|zh|><|NEUTRAL|>` 富标签，展示层要正则剥掉
 - 坑 6：ffmpeg 未装，funasr 用 torchaudio 后端加载 wav 没问题；**后续处理 mp4 音轨时必须装 ffmpeg**
 - 坑 7：modelscope 大文件中断会留 `.incomplete` 且 snapshot_download 仍返回成功——**下载后必须按文件名校验**（model.pt 936,291,369 字节）
-- 待办：cu128 torch（分段下载中）→ `torch.cuda.is_available()` 验证；正式拔网线验收；多说话人归因待剧本音频
+- 待办：~~cu128 torch~~ **已装（2026-10-01 03:15，torch 2.7.1+cu128，`cuda.is_available()=True`，RTX 5060 认到；funasr 兼容无恙，`--device cuda` 验收通过）**；正式拔网线验收；多说话人归因待剧本音频
+- 坑 8：download.pytorch.org 直连/超时（与 GitHub 同一批境外 CDN），**cu128 wheel 从阿里云镜像 `mirrors.aliyun.com/pytorch-wheels/cu128/` 拿**；单连接被限速到 ~200KB/s，**12 段并行 Range 下载聚合 ~850KB/s**，脚本 `D:\downloads\dl_torch_resume.sh`（支持断点续传；电脑睡眠会杀后台任务，长下载前先把电源计划调成不睡眠）
+- 坑 9：代理客户端（10808）国内节点正常（百度 200）但节点出口失效时 GitHub/pytorch 全 000——**换节点**即可，git 流量走 `HTTPS_PROXY` 无需额外配置
 
 ## C2 · pyaudiowpatch 系统音频环回
 
