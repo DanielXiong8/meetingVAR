@@ -13,9 +13,13 @@ PyAudioWPatch
 
 # --- C4 · 低帧率录屏 ---
 dxcam ; platform_system == "Windows"
-mss
+opencv-python-headless   # dxcam 0.3.0 色彩转换强依赖 cv2（坑 12）
+pillow                   # JPEG 编码（缓冲存编码字节，坑见 SETUP C4）
+mss                      # dxcam 失败时的退路后端
 
-# --- C5 · 热词增强（funasr 自带，无需额外依赖） ---
+# --- B1 · 项目记忆 RAG（随 funasr 传入，显式声明） ---
+jieba
+scikit-learn
 
 # --- 通用 ---
 rich                # CLI 输出美化，spike 脚本用
