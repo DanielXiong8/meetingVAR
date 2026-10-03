@@ -41,7 +41,8 @@ def main() -> None:
     sv_dir = find_model_dir("SenseVoiceSmall")
     campp_dir = find_model_dir("campplus")
     vad_dir = find_model_dir("fsmn_vad")
-    print(f"[load] SenseVoice: {sv_dir}\n[load] CAM++:     {campp_dir}\n[load] fsmn-vad:  {vad_dir}")
+    punc_dir = find_model_dir("punc_ct-transformer")
+    print(f"[load] SenseVoice: {sv_dir}\n[load] CAM++:     {campp_dir}\n[load] fsmn-vad:  {vad_dir}\n[load] punc:      {punc_dir}")
 
     from funasr import AutoModel
     import re
@@ -54,6 +55,7 @@ def main() -> None:
             model=sv_dir,
             vad_model=vad_dir,
             spk_model=campp_dir,
+            punc_model=punc_dir,
             device=args.device,
             disable_update=True,
             disable_pbar=True,
