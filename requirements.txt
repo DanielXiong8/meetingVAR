@@ -21,5 +21,8 @@ mss                      # dxcam 失败时的退路后端
 jieba
 scikit-learn
 
+# --- C5 · 转写后术语纠错 ---
+pypinyin
+
 # --- 通用 ---
 rich                # CLI 输出美化，spike 脚本用

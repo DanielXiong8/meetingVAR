@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "meetingvar"
 version = "0.1.0"
 description = "record your meeting like VAR referee"
-requires-python = ">=3.10"
+# FunASR/audioop 运行基线记录在 environment.yml 和 SETUP.md 中：Python 3.10。
+# 先锁定已验证的运行时，避免 Python 3.13+ 在导入 audioop 时才失败。
+requires-python = ">=3.10,<3.11"
 
 [tool.setuptools.packages.find]
 where = ["src"]
