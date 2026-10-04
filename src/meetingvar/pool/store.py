@@ -42,6 +42,7 @@ class Pool:
                 keyframes = [f"{clip_id}/screens/frame_{i:04d}.jpg" for i in range(n)]
 
         clip = Clip(
+            clip_id=clip_id,
             session_id=self.session_id,
             trigger=Trigger(layer=trigger_layer, evidence=evidence, explanation=explanation),
             audio=AudioRef(
