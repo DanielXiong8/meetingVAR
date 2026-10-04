@@ -1,7 +1,8 @@
 """会话编排器：音频进 → 增量转写 → 术语纠错 → 三层监听 → 命中转正 → 片段池。
 
 live（AudioCapture 喂流）与 replay（wav 回放喂流）共用同一套逻辑。
-时间轴：统一用绝对时间戳（live=真实时钟；replay=模拟基点+偏移）。
+时间轴：内部统一用绝对时间戳（live=真实时钟；replay=模拟基点+偏移），
+写入片段池和 transcript.json 时转换为会议内相对秒数，遵守 pool_schema 契约。
 """
 from __future__ import annotations
 
@@ -42,12 +43,15 @@ class Session:
         self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS * 10)
         self._pending: list[tuple[float, bytes]] = []
         self._last_flush_ts: float | None = None
+        self._timeline_start_ts: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
         self.corrections: list[tuple[str, str]] = []
 
     # ---- 音频进 ----
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
+        if self._timeline_start_ts is None:
+            self._timeline_start_ts = start_ts
         step = len(pcm) / 2 / config.ASR_RATE
         for i in range(0, len(pcm), config.ASR_RATE):  # 1s 一格，ring 粒度
             self._ring.append((start_ts + i / config.ASR_RATE, pcm[i : i + config.ASR_RATE]))
@@ -98,10 +102,16 @@ class Session:
         return self.clips[-1]["clip_id"] if self.clips else None
 
     # ---- 命中转正 ----
+    def _relative_ts(self, ts: float) -> float:
+        """把内部绝对时间戳转换为会议内相对秒数。"""
+        base = self._timeline_start_ts if self._timeline_start_ts is not None else ts
+        return max(0.0, ts - base)
+
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
         start_ts = trigger_ts - LOOKBACK_SECONDS
         pcm = b"".join(b for t, b in list(self._ring) if start_ts <= t <= trigger_ts)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
+        clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
         screens = self.screen_capture.frames_since(start_ts) if self.screen_capture else []
         from .capture.audio import pcm_to_wav_bytes
 
@@ -109,10 +119,12 @@ class Session:
             trigger_layer=layer,
             evidence=evidence,
             audio_wav=pcm_to_wav_bytes(pcm),
-            transcript_lines=lines,
+            transcript_lines=clip_lines,
             screens=screens,
         )
-        self.clips.append({"clip_id": clip_id, "layer": layer, "evidence": evidence, "at": trigger_ts})
+        self.clips.append(
+            {"clip_id": clip_id, "layer": layer, "evidence": evidence, "at": self._relative_ts(trigger_ts)}
+        )
         if self.echo:
             print(f"  >>> VAR! [{layer}] {evidence} → clip {clip_id[:8]}（回溯{LOOKBACK_SECONDS}s，{len(lines)}句）")
         return clip_id
@@ -122,13 +134,14 @@ class Session:
         self._flush(force=True)
         out = config.POOL_DIR / self.session_id / "transcript.json"
         out.parent.mkdir(parents=True, exist_ok=True)
+        transcript = [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
         out.write_text(
-            json.dumps({"session_id": self.session_id, "transcript": self.transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
+            json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         summary = {
             "session_id": self.session_id,
-            "lines": len(self.transcript),
+            "lines": len(transcript),
             "clips": len(self.clips),
             "corrections": self.corrections,
             "transcript_json": str(out),
