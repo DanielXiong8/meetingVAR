@@ -6,7 +6,6 @@ LLM 通过环境变量 MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL 接入
 from __future__ import annotations
 
 import json
-import time
 import urllib.request
 from pathlib import Path
 
@@ -15,7 +14,11 @@ from .prompts import THICK_REPORT, THIN_MINUTES
 
 
 def _fmt_ts(ts: float) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(ts))
+    # pool_schema 中的 ts 是会议内相对秒数，不是 Unix 时间戳。
+    total = max(0, int(ts))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def _load_session(session_id: str) -> tuple[list[dict], list[dict]]:
