@@ -32,27 +32,30 @@ class HotwordMonitor:
 
 
 class InterestScorer:
-    """L2：兴趣文档 TF-IDF 相似度。focus_docs = 用户侧重 + 项目记忆段落。"""
+    """L2：兴趣文档 TF-IDF 相似度。
+
+    语料和查询必须使用同一套中文分词，否则中文文档会被当成整段词，
+    查询几乎无法命中；阈值默认读取全局配置，确保 L2 在 pipeline 中真的可用。
+    """
 
     def __init__(self, focus_docs: list[str], threshold: float | None = None):
+        import jieba
         from sklearn.feature_extraction.text import TfidfVectorizer
 
-        self.threshold = threshold
+        self.threshold = config.L2_SIM_THRESHOLD if threshold is None else threshold
+        self._tokenize = lambda text: " ".join(jieba.cut(text))
+        corpus = [self._tokenize(d) for d in focus_docs if d and d.strip()]
         self._vec = TfidfVectorizer()
-        corpus = [d for d in focus_docs if d and d.strip()] or [" "]
-        self._mat = self._vec.fit_transform(corpus)
+        self._mat = self._vec.fit_transform(corpus) if corpus and any(corpus) else None
 
     def score(self, text: str) -> float:
-        import jieba
-
-        tokens = " ".join(jieba.cut(text))
-        q = self._vec.transform([tokens])
+        if not text.strip() or self._mat is None:
+            return 0.0
+        q = self._vec.transform([self._tokenize(text)])
         sims = (q @ self._mat.T).toarray()[0]
         return float(sims.max()) if sims.size else 0.0
 
     def check(self, text: str) -> tuple[bool, float]:
-        if self.threshold is None:
-            return False, 0.0
         s = self.score(text)
         return s >= self.threshold, s
 
