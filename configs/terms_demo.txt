@@ -1,0 +1,11 @@
+# meetingVAR 监听词表（一行一词，# 开头为注释）
+# 正式使用时由项目记忆（术语表等）生成；此处为演示组会剧本的词表
+测序污染
+S3
+index hopping
+kraken2
+UMI
+Q30
+duplication
+重测
+这篇论文对你有影响
