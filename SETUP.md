@@ -12,7 +12,20 @@
 - `.condarc` 已配 TUNA 镜像；pip 一律 `-i https://pypi.tuna.tsinghua.edu.cn/simple`
 - C 盘仅剩 ~6GB：**模型权重/数据一律放 D 盘**。FunASR/ModelScope 下载前先设 `MODELSCOPE_CACHE=D:\env\modelscope_cache`（默认缓存会灌爆 C 盘用户目录）
 
-## 今日踩坑（2026-09-30）
+## 今日踩坑（2026-10-03/04 · MVP 骨架周）
+
+- **坑 14 续 · 环回静音根因锁定**：仓库出现**两个环回端点**（扬声器 + 耳机）。播放走默认输出（当前=耳机），采集若抓另一个端点即全静音。**record 前必跑 `meetingvar devices`，确认默认环回与播放设备一致；耳机线插拔会改变默认端点**。live record 机制已通（线程/会话/落盘正常），端到端仍静音 → 请人工看一眼系统托盘：哪个是默认输出、耳机是否真的在响
+- **坑 15 · funasr 热词参数无效**（C5 实验阴性结论）：SenseVoice 与 SeACo 的 `hotword` 均不改输出（三种调用实测），转向**转写后术语纠错** `transcribe/correct.py` v4——中文（首尾音节锚定+字符重合≥0.5）、拉丁（去数字 difflib≥0.6+汉字数字尾巴转换），五用例全绿
+- **坑 16 · 包内相对导入层级**：包顶层模块用 `from . import`，子包才用 `from .. import`，混用报 attempted relative import beyond top-level package
+
+## MVP 骨架验收记录（2026-10-04）
+
+- `meetingvar replay` **全链路通过**：18s TTS 音频 → 6 句带说话人转写 → L1 命中 4 词 → 4 个 VAR 片段落池（回溯 120s 音频）
+- `meetingvar digest` 通过：薄纪要（结构化版）+ VAR 报告（模板版）落 `data/reports/<session>/`
+- 纠错模块 v4 五用例全绿（含两个防误报用例）
+- `meetingvar record` 机制通、端到端静音（坑 14 续，待人查设备）
+
+## 早期踩坑（2026-09-30 → 10-01）
 
 - **坑 1 · 全局代理劫持 git**：环境变量 `HTTPS_PROXY=http://127.0.0.1:10808` 把 git 全部流量指到本地代理。代理客户端没开时，clone/push 报 `schannel: SSL/TLS handshake failed` 或 502。临时绕过：`git -c http.proxy= -c https.proxy= push`（直连也常被掐，最好还是把代理开着）
 - **坑 2 · Git Bash 参数转换**：`cmdkey /list` 在 Git Bash 里报"命令行参数不正确"——MSYS 把 `/list` 转成了路径。看凭证用 `git credential fill`（非交互须加 `GCM_INTERACTIVE=never`），别用 cmdkey

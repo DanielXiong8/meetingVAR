@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meetingvar"
+version = "0.1.0"
+description = "record your meeting like VAR referee"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+meetingvar = "meetingvar.cli:main"

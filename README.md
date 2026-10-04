@@ -60,8 +60,29 @@ data/            会议音频/录屏素材（不入库——含他人声音与�
 | c4 | dxcam 低帧率内存环形缓冲（退路 mss） | 待验证 |
 | c5 | 热词增强术语纠错可见 | 待验证 |
 
+## 快速开始（MVP 骨架，2026-10-04 起可用）
+
+```bash
+# 环境（一次性）：conda activate meetingvar && pip install -e .
+meetingvar devices                                            # 看环回端点
+meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
+                 --memory spikes/b1_rag/sample_project        # 离线回放走全管线
+meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
+meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
+```
+
+管线：环回音频 → 10min 环形缓冲（不落盘）→ 30s 增量转写（说话人+标点）→ 术语纠错 →
+L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（回溯 120s 音频+截屏）→ 片段池 →
+digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
+
+LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
+未配置时输出结构化模板版并如实标注〔模板版〕。
+
 ## 文档
 
 - [docs/plan.md](docs/plan.md) —— 完整计划书：定位 / 功能规格 / 竞品差异 / 赛程里程碑 / 两人分工
+- [docs/daily_plan.md](docs/daily_plan.md) —— 逐日计划（你每天干什么看这个）
 - [docs/pool_schema.md](docs/pool_schema.md) —— 待审片段池接口契约，**字段变更须两人确认**
+- [docs/github_guide.md](docs/github_guide.md) —— GitHub 速成
+- [docs/demo_script.md](docs/demo_script.md) —— 演示录制台词本
 - [SETUP.md](SETUP.md) —— 环境踩坑记录（谁踩谁写）
