@@ -47,7 +47,14 @@
 
 ## C5 · FunASR 热词增强
 
-（待做：C2 端到端测试里"测序→测试"的错误就是靶子，对比实验直接用它）
+- **2026-10-03 实验结论（如实记录，Issue #6 保持 open）**：
+  1. **SenseVoiceSmall 的 `hotword` 参数是空操作**——开/关热词输出逐字相同（0/7→0/7）；
+  2. **SeACo-Paraformer 的热词同样无效**：空格分隔字符串、裸模型、管线模式三种种法都试过，输出不变；list 形式直接抛异常。funasr 1.4.16 的热词偏置调用方式待进一步考证；
+  3. 干净直连路径上**基线本身 4/7**：misses 全是英文术语转写形式问题（kraken2→"cr 二/crowken 二"、Q30→"q 三十"、index hopping→"index hoping"）；
+  4. **产品决策：转向转写后处理术语纠错**（术语表 + 拼音模糊匹配，引擎无关、可调试、随项目记忆自动更新），热词偏置降级为后续可选项。实验靶子（"测序→测试"劣化）正是纠错模块的标准测试用例。
+- 坑 13：funasr 的 vad+spk 管线在 1.4.16 **要求 punc_model**（否则报 Missing punc_model）——已把 punc_ct-transformer（~270MB）加入模型栈，顺带解决转写无标点问题
+- 坑 14：**环回采集突然全静音**（RMS=0，SoundPlayer 正常返回、SendKeys 提音量无效）——疑似音频会话/驱动状态问题，需人工看系统托盘音量与输出设备。C2 昨天同流程是通的
+- 实验脚本 `spikes/c5_hotwords/hotword_compare.py`（支持 --engine sensevoice|seaco），报告 JSON 在 `data/clips/c5_report_*.json`
 
 ## B1 · 项目记忆 RAG 雏形（B 线）
 
