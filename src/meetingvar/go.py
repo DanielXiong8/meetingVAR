@@ -61,10 +61,16 @@ def cmd_go(args) -> None:
         screen = ScreenCapture()
         print(f"[rec] 录屏缓冲: {screen.backend} @ {config.SCREEN_FPS}fps")
 
+    hd = None
+    if args.hd:
+        from .capture.hd import HDCapture
+
+        hd = HDCapture()
     session = Session(
         session_id, terms=wordlist, focus_docs=focus,
         device=args.device, screen_capture=screen, echo=True,
     )
+    session.hd = hd
     session.scorer = scorer_holder["scorer"]
     print(f"[rec] 会议监听开始。回车=手动 VAR，Ctrl+C 结束。语义层后台增强中…")
 
@@ -143,6 +149,7 @@ def register(sub) -> None:
     g.add_argument("project", help="项目文件夹（代码+文档混放也行）")
     g.add_argument("--no-repo", action="store_true", help="跳过代码符号抽取")
     g.add_argument("--no-screen", action="store_true")
+    g.add_argument("--hd", action="store_true", help="命中后 30fps 高清补录 90s")
     g.add_argument("--llm", action="store_true", help="后台叠加本地/云端小模型语义抽取并热更新")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     g.add_argument("--device", default="cuda", choices=["cpu", "cuda"])

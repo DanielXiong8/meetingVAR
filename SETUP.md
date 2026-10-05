@@ -80,6 +80,13 @@
 - **坑 18 · replay 触发时刻用了墙钟**：replay 模式下模型加载耗时会计入 trigger 时间，clip.at 漂移 55s。修复：触发时刻改用会议时间轴（最后进音频的时间戳）。live 模式两者近似等价，不受影响。
 - **L2 被队友救活**：Qyc 的 InterestScorer 修复（语料与查询统一 jieba 分词 + 阈值接 config）让 L2 首次真实触发（interest_score=0.33）——原实现语料未分词，中文几乎永不命中。
 
+## 高清补录层（2026-10-05/06 · 用户提案落地）
+
+- **分层捕获定案**：常驻 2fps JPEG 环形（命中前 ~120s）+ 命中后 30fps×90s 高清补录（HDCapture，mss 高频抓帧→临时 PNG 序列→ffmpeg 合成 mp4，用完可删）
+- **坑 6 回收**：ffmpeg 一直就在机器上（yt-dlp 附带版，`WinGet/Packages/yt-dlp.FFmpeg/...`）——hd.py 内置该路径探测，PATH 没配也能用；mp4 合成验证通过（Duration/Video 流正常）
+- 用法：`meetingvar go/record --hd`；命中时自动开录 90s，重复命中忽略（一次一场）；无 ffmpeg 时降级保留 PNG 序列
+- 回放叙事：低帧率铺垫 + 高帧率现场（同体育转播"战术机位常开、超慢动机位按需开"）
+
 ## 收尾记录（2026-10-04 晚 · "全部修好"轮）
 
 - PR #13/#12/#14 全部合并，main = MVP 骨架 + review 修复 + 行动项 v2；分支全部清理
