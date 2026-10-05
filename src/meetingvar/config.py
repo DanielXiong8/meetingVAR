@@ -16,8 +16,8 @@ PUNC_KEYWORD = "punc_ct-transformer"
 
 # ---- 音频 ----
 ASR_RATE = 16000          # ASR 统一 16k 单声道
-CHUNK_SECONDS = 30        # 增量转写的块长
-CHUNK_OVERLAP_SECONDS = 5 # 块间重叠，避免句子被截断
+CHUNK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_CHUNK", "8"))   # 增量转写块长（流式化：8s 步长）
+CHUNK_OVERLAP_SECONDS = 3   # 块间重叠，避免句子被截断
 RING_SECONDS = 600        # 音频环形缓冲保留时长（≈10min，命中回溯用）
 
 # ---- 录屏 ----
@@ -25,6 +25,8 @@ SCREEN_FPS = 2.0
 SCREEN_BUFFER_FRAMES = 240  # 2fps × 120s 回溯
 
 # ---- 触发 ----
+LOOKBACK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_LOOKBACK", "300"))  # 命中回溯窗（秒），可 env 调
+
 HOTWORD_DEBOUNCE_SECONDS = 300  # 同一热词 5 分钟内不重复触发
 L2_SIM_THRESHOLD = 0.25         # TF-IDF 兴趣相似度触发阈值（v0 拍脑袋值，用反馈校准）
 
