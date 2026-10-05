@@ -6,7 +6,7 @@ LLM 通过环境变量 MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL 接入
 from __future__ import annotations
 
 import json
-import time
+import re
 import urllib.request
 from pathlib import Path
 
@@ -15,13 +15,47 @@ from .prompts import THICK_REPORT, THIN_MINUTES
 
 
 def _fmt_ts(ts: float) -> str:
-    return time.strftime("%H:%M:%S", time.localtime(ts))
+    # pool_schema 中的 ts 是会议内相对秒数，不是 Unix 时间戳。
+    total = max(0, int(ts))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def _load_session(session_id: str) -> tuple[list[dict], list[dict]]:
     base = config.POOL_DIR / session_id
     t = json.loads((base / "transcript.json").read_text(encoding="utf-8"))
     return t["transcript"], t["clips"]
+
+
+def _chapterize(transcript: list[dict], window: float = 300.0) -> list[tuple[float, list[dict]]]:
+    """按会议内相对时间分章，保留原始句子和时间戳，不做语义编造。"""
+    if not transcript:
+        return []
+    chapters: list[tuple[float, list[dict]]] = []
+    start = float(transcript[0]["ts"])
+    current: list[dict] = []
+    for line in transcript:
+        if current and float(line["ts"]) - start >= window:
+            chapters.append((start, current))
+            start = float(line["ts"])
+            current = []
+        current.append(line)
+    if current:
+        chapters.append((start, current))
+    return chapters
+
+
+_ACTION_RE = re.compile(
+    r"(?:待办|行动项|TODO|会后|下次|负责|请.{0,12}(?:确认|整理|提交|联系|准备|补充|更新|修复|测试)|"
+    r"(?:确认|整理|提交|联系|准备|补充|更新|修复|测试).{0,20}(?:一下|完成|跟进))",
+    re.IGNORECASE,
+)
+
+
+def _extract_action_items(transcript: list[dict]) -> list[dict]:
+    """只提取带明显行动语义的原句，避免离线模板凭空生成任务。"""
+    return [line for line in transcript if _ACTION_RE.search(str(line.get("text", "")))]
 
 
 def _llm_chat(prompt: str) -> str | None:
@@ -44,27 +78,36 @@ def _llm_chat(prompt: str) -> str | None:
 
 
 def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
-    """无 LLM 的薄纪要：按 5 分钟窗归组转写 + 命中统计（结构化、零编造）。"""
+    """无 LLM 的薄纪要：结构化速览 + 5 分钟分章 + 明确行动项。"""
     lines = ["# 薄纪要（结构化版·未接 LLM）", ""]
     if not transcript:
         lines.append("（本场无转写内容）")
         return "\n".join(lines)
-    lines.append(f"- 转写句数：{len(transcript)}；说话人：{sorted({l['speaker'] for l in transcript})}")
-    lines.append(f"- 监听词命中：{terms_hit or '无'}")
-    lines.append("")
-    window, start = 300.0, transcript[0]["ts"]
-    cur: list[dict] = []
-    for l in transcript:
-        if l["ts"] - start >= window:
-            if cur:
-                lines.append(f"## {_fmt_ts(cur[0]['ts'])} 起的片段")
-                lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in cur)
-                lines.append("")
-            cur = []
-        cur.append(l)
-    if cur:
-        lines.append(f"## {_fmt_ts(cur[0]['ts'])} 起的片段")
-        lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in cur)
+    first_ts = float(transcript[0]["ts"])
+    last_ts = float(transcript[-1]["ts"])
+    speakers = sorted({str(l["speaker"]) for l in transcript})
+    lines.extend(
+        [
+            "## 全场速览",
+            f"- 时间范围：{_fmt_ts(first_ts)} – {_fmt_ts(last_ts)}",
+            f"- 转写句数：{len(transcript)}；说话人：{speakers}",
+            f"- 监听词命中：{terms_hit or '无'}",
+            f"- 分章数：{len(_chapterize(transcript))}",
+            "",
+        ]
+    )
+    lines.append("## 分章记录")
+    for start, chapter in _chapterize(transcript):
+        lines.append(f"### {_fmt_ts(start)} 起")
+        lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in chapter)
+        lines.append("")
+
+    actions = _extract_action_items(transcript)
+    lines.append("## 明确行动项")
+    if actions:
+        lines.extend(f"- [ ] [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in actions)
+    else:
+        lines.append("（转写中未发现带明确行动语义的句子）")
     return "\n".join(lines)
 
 

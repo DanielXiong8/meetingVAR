@@ -63,12 +63,18 @@ data/            会议音频/录屏素材（不入库——含他人声音与�
 ## 快速开始（MVP 骨架，2026-10-04 起可用）
 
 ```bash
-# 环境（一次性）：conda activate meetingvar && pip install -e .
+# 环境（一次性）：先按仓库锁定的 Python 3.10 创建环境，环境文件会安装 requirements.txt
+conda env create -f environment.yml
+conda activate meetingvar
+pip install -e .
 meetingvar devices                                            # 看环回端点
 meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
                  --memory spikes/b1_rag/sample_project        # 离线回放走全管线
 meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
 meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
+
+# 不依赖模型和设备的本地回归测试
+python -m unittest discover -s tests -v
 ```
 
 管线：环回音频 → 10min 环形缓冲（不落盘）→ 30s 增量转写（说话人+标点）→ 术语纠错 →
