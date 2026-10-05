@@ -15,8 +15,18 @@ import re
 from collections import Counter
 from pathlib import Path
 
-import jieba
-import jieba.posseg as pseg
+# jieba 懒加载：llm_extract/纯结构化路径不依赖 jieba（CI model-free 环境无此包）；
+# 只有人名/拉丁抽取（_persons/_latin）真正用到，在函数内 import。
+jieba = None
+pseg = None
+
+def _ensure_jieba():
+    global jieba, pseg
+    if jieba is None:
+        import jieba as _j
+        import jieba.posseg as _p
+
+        jieba, pseg = _j, _p
 
 _ROLE_RE = re.compile(r"(?:PI|导师|老板|教授|老师|师兄|师姐|师弟|师妹)[A-Za-z]?")
 _LATIN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{1,}")
@@ -52,6 +62,7 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
 
 
 def _persons(docs: list[str], terms: dict[str, set]) -> None:
+    _ensure_jieba()
     counts: Counter = Counter()
     for doc in docs:
         for w, flag in pseg.cut(doc):
