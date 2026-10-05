@@ -11,7 +11,7 @@ import urllib.request
 from . import config
 
 
-def chat(prompt: str, temperature: float = 0.3, timeout: int = 180) -> str | None:
+def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | None:
     if not (config.LLM_BASE_URL and config.LLM_MODEL):
         return None
     req = urllib.request.Request(

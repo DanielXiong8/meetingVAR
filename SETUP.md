@@ -86,3 +86,13 @@
 - **离线模拟验证通过**（坑 8 的"拔网线"等价测试）：把代理指向死端口强制全部 HTTP 失败，replay 全链路照常出片——端侧零网络依赖坐实，Issue #7 的离线半场关账
 - 坑 19 · 双环回端点并发采集会挂死（两个 pa.open loopback 流在 Realtek 驱动上互锁）——**正式版 record 只开默认端点一路**，多端点探测脚本不得进产品代码
 - 坑 20 · live record 端到端静音仍未解：默认端点=耳机，SoundPlayer 正常返回但环回零信号。已排除：设备切换、主音量（SendKeys 无效）。剩余嫌疑：耳机端点实际未连接/被独占/Realtek 对耳机插孔的环回渲染缺失。**需人工：拔掉耳机让系统回落扬声器，或对着托盘确认播放设备后再跑一次 `meetingvar record`**
+
+## 本地语义引擎基线（2026-10-05 · Qwen3-4B 全离线）
+
+- **路线**：transformers + ModelScope 直拉（放弃 Ollama：1.58GB 安装器代理限速 2h+，且 Ollama 只是推理壳；meetingvar 环境现成的 torch 2.7.1-cu128 + transformers 就是完整推理栈）
+- **模型**：Qwen/Qwen3-4B-Instruct-2507-FP8（ModelScope 4.3GB）→ **FP8 无法在 Windows 推理**（finegrained kernel 依赖 triton，triton 无 Windows 版）→ 写了一次性反量化脚本（block-wise 128×128 dequant）→ **D:\env\models\qwen3-4b-bf16（8.3GB BF16）**
+- **服务**：`scripts/serve_local_llm.py`（OpenAI 兼容 /v1/chat/completions @ 127.0.1:11438；device_map=auto，GPU 6.5GiB + 其余 CPU offload；加载 51s；首测推理 145s/短句——CPU offload 是瓶颈）
+- **坑 21**：装新依赖（accelerate）后必须重启服务进程——Python site-packages 快照在启动时固定，旧进程照旧报缺依赖（本次排查半小时才定位是双进程同端口+旧进程抢答）
+- **坑 22**：nvidia-smi 在 WDDM 下会列大量 N/A 显存的"幽灵进程"（驱动残留），taskkill 全部 Invalid——真实占用看 `Get-Process python*`，我们的 LLM 本身占 6.5GB 是合理配额
+- **端到端验证**：`terms --llm` 真模型抽出人物名单（张伟=负责人/李明=执行人/PI=拍板人，含依据），U MI 去污染等新术语，LLM 焦点一句话——**jieba 层完全给不出的特异性**（用户批评 → 架构升级闭环）。代价：CPU offload 下整次抽取约 3-6 分钟，可接受（会前一次性操作）
+- 待优化：GPU 配额提到 7.5GiB+（唯一方法是换 AWQ/GPTQ int4 权重，显存装下后全 GPU 推理约 10-20s）；或等 triton-windows 成熟
