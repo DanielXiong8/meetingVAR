@@ -67,22 +67,9 @@ def _extract_action_items(transcript: list[dict]) -> list[dict]:
 
 
 def _llm_chat(prompt: str) -> str | None:
-    if not (config.LLM_BASE_URL and config.LLM_MODEL):
-        return None
-    req = urllib.request.Request(
-        config.LLM_BASE_URL.rstrip("/") + "/chat/completions",
-        data=json.dumps(
-            {
-                "model": config.LLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-            }
-        ).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.LLM_API_KEY}"},
-    )
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"]
+    from ..llm import chat
+
+    return chat(prompt)
 
 
 def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
