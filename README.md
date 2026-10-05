@@ -92,3 +92,12 @@ LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`di
 - [docs/github_guide.md](docs/github_guide.md) —— GitHub 速成
 - [docs/demo_script.md](docs/demo_script.md) —— 演示录制台词本
 - [SETUP.md](SETUP.md) —— 环境踩坑记录（谁踩谁写）
+
+## F1 · 词表自动化（agent 自己读记忆）
+
+```bash
+meetingvar terms --memory <项目文件夹> [--extra 手动词表.txt]   # 生成/更新词表
+meetingvar record --memory <项目文件夹>                        # 不给 --terms 时自动抽取
+```
+
+监听词表三路自动抽取：markdown 结构化标记（标题/加粗/`词条：定义`）+ 人名（jieba 词性标注 + PI/师兄等称谓模式）+ 拉丁术语（频次≥2）。**用户手动热词是覆盖项，不是必选项**——给 `--memory` 即零输入开工。
