@@ -73,3 +73,9 @@
 
 - **2026-10-02 跑通**：jieba 分词 + TF-IDF + 余弦 Top-K（零新增依赖），仿真项目语料 12 段落，跨文件检索命中正确（组会纪要/实验记录/术语表）。脚本 `spikes/b1_rag/rag_demo.py`，语料 `spikes/b1_rag/sample_project/`（3 份 md，模拟真实项目记忆）
 - 用途：F1 会前兴趣注入的检索底座 + 厚纪要引用溯源。后续升级路径：TF-IDF → 向量 embedding → 接 agent 记忆
+
+## Review 记录（2026-10-04 · PR #12 review 产物）
+
+- **坑 17 · 自埋 bug 被 review 揪出**：digest 的 terms_hit 循环用 `c["trigger"]` 读 transcript.json 的 clips 条目（实际键为 `evidence`）——第一次 e2e 时报过此错，当时修错了循环且未复跑验证就宣布"digest 通过"（违反"写完必验证"）。本次修复并全链路复跑确认。教训：**修复后必须重跑原始失败用例**。
+- **坑 18 · replay 触发时刻用了墙钟**：replay 模式下模型加载耗时会计入 trigger 时间，clip.at 漂移 55s。修复：触发时刻改用会议时间轴（最后进音频的时间戳）。live 模式两者近似等价，不受影响。
+- **L2 被队友救活**：Qyc 的 InterestScorer 修复（语料与查询统一 jieba 分词 + 阈值接 config）让 L2 首次真实触发（interest_score=0.33）——原实现语料未分词，中文几乎永不命中。

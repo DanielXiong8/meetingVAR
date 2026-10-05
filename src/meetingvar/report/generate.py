@@ -71,8 +71,10 @@ def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
 def digest(session_id: str, use_llm: bool = False) -> Path:
     transcript, clips = _load_session(session_id)
     terms_hit: dict[str, int] = {}
+    # transcript.json 的 clips 条目是 {clip_id, layer, evidence, at}（无 trigger 键）；
+    # 片段池 JSON 是完整 Clip（有 trigger.evidence）。两种形态都兼容。
     for c in clips:
-        ev = c["trigger"]["evidence"]
+        ev = c.get("evidence") or c.get("trigger", {}).get("evidence", "")
         if ev.startswith("热词:"):
             terms_hit[ev[3:]] = terms_hit.get(ev[3:], 0) + 1
 
@@ -93,6 +95,8 @@ def digest(session_id: str, use_llm: bool = False) -> Path:
     pool = Path(config.POOL_DIR / session_id)
     for clip_file in sorted(pool.glob("*.json")):
         c = json.loads(clip_file.read_text(encoding="utf-8"))
+        if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
+            continue
         if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
             continue
         tr = "\n".join(f"[{_fmt_ts(l['ts'])}] {l['speaker']}: {l['text']}" for l in c["transcript"]) or "（回溯窗内无转写句）"
