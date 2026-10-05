@@ -166,6 +166,8 @@ def cmd_terms(args) -> None:
 
 
 def main() -> None:
+    from .go import cmd_go, register as register_go
+
     ap = argparse.ArgumentParser(prog="meetingvar")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -196,9 +198,11 @@ def main() -> None:
     tm.add_argument("--repo", default=None, help="代码仓库路径（L0 工具层：符号抽取，零 LLM）")
     tm.add_argument("--api", action="store_true", help="仓库语义层：API 大模型只读关键文件候选摘要（需 MEETINGVAR_LLM_* 指向 API）")
 
+    register_go(sub)
+
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
-     "devices": cmd_devices, "terms": cmd_terms}[args.cmd](args)
+     "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go}[args.cmd](args)
 
 
 if __name__ == "__main__":
