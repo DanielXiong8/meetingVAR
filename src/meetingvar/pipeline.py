@@ -82,19 +82,22 @@ class Session:
             print(f"  [{time.strftime('%H:%M:%S', time.localtime(last['ts']))}] {last['speaker']}: {last['text'][:80]}")
 
         joined = " ".join(l["text"] for l in new_lines)
-        now = time.time()
-        for term in self.monitor.check(joined, now):
-            self._make_clip("L1", f"热词:{term}", now)
+        # 触发时刻用会议时间轴（最后进音频的绝对时间戳），不用墙钟——
+        # replay 模式下墙钟与模拟时间轴漂移，会造成 clip.at 失真（见 PR #13 review）
+        trigger_ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
+        for term in self.monitor.check(joined, trigger_ts):
+            self._make_clip("L1", f"热词:{term}", trigger_ts)
         if self.scorer:
             hit, score = self.scorer.check(joined)
             if hit:
-                self._make_clip("L2", f"interest_score={score:.2f}", now)
+                self._make_clip("L2", f"interest_score={score:.2f}", trigger_ts)
         if self.manual.consume():
-            self._make_clip("L3", "manual_hotkey", now)
+            self._make_clip("L3", "manual_hotkey", trigger_ts)
 
     def trigger_manual(self) -> str | None:
         """外部（回车/程序）手动 VAR。"""
-        self._make_clip("L3", "manual_hotkey", time.time())
+        ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
+        self._make_clip("L3", "manual_hotkey", ts)
         return self.clips[-1]["clip_id"] if self.clips else None
 
     # ---- 命中转正 ----
