@@ -43,7 +43,7 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
         _add(terms, m.group(1), "结构化")
     for m in re.finditer(r"^#{1,4}\s*(.+?)\s*$", doc, re.M):  # 标题
         title = m.group(1)
-        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title:
+        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title or re.fullmatch(r"[一-鿿]{1,4}\d*", title):
             continue  # 日期标题/带括号/含空格的叙述性标题不是词条
         if not re.fullmatch(r"(?:实验记录|组会纪要|术语表|README|文献笔记|会议纪要)(?:\s*·.*)?", title):
             _add(terms, title, "结构化")
@@ -80,7 +80,7 @@ def _latin(docs: list[str], terms: dict[str, set]) -> None:
 
 def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None) -> dict[str, list[str]]:
     """返回 {词: [来源, …]}。docs = memory_dir 下全部 md/txt。"""
-    _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状"}
+    _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
     docs = [
         f.read_text(encoding="utf-8", errors="ignore")
         for f in sorted(memory_dir.rglob("*"))

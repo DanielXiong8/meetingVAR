@@ -1,0 +1,26 @@
+#!
+# 项目热词库 · sample_project · 更新于 2026-10-06 00:34 · 归档纪要 2 份
+#!keep 我的手动词
+DESeq2
+PI 建议
+Q30
+QC
+S1
+S3
+S3 异常
+S6
+STAR
+UMI
+adapter trimming
+duplication
+fastp
+featureCounts
+index hopping
+kraken2
+reads
+宏基因组流程更新
+师兄
+师弟
+张伟
+我的手动词
+测序污染

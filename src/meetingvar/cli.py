@@ -18,7 +18,16 @@ from . import config
 def load_terms(path: Path) -> list[str]:
     if not path.exists():
         return []
-    return [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
+    out = []
+    for l in path.read_text(encoding="utf-8").splitlines():
+        l = l.strip()
+        if not l or l.startswith("#"):
+            continue
+        if l.startswith("#!keep"):
+            out.append(l.split(maxsplit=1)[1].strip())  # 手动词（rescan 永久保留）
+            continue
+        out.append(l)
+    return out
 
 
 def load_memory_docs(folder: Path) -> list[str]:
@@ -198,12 +207,26 @@ def main() -> None:
     tm.add_argument("--repo", default=None, help="代码仓库路径（L0 工具层：符号抽取，零 LLM）")
     tm.add_argument("--api", action="store_true", help="仓库语义层：API 大模型只读关键文件候选摘要（需 MEETINGVAR_LLM_* 指向 API）")
 
+    rs = sub.add_parser("rescan", help="把项目内全部归档纪要+文档重扫一遍，更新该项目热词库")
+    rs.add_argument("project", help="项目根目录")
+    rs.add_argument("--extra", default=None, help="手动词文件（#!keep 永久保留）")
+    rs.add_argument("--llm", action="store_true", help="叠加本地/云端小模型语义抽取")
+
     register_go(sub)
 
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
-     "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go}[args.cmd](args)
+     "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
 
 
 if __name__ == "__main__":
     main()
+
+
+def cmd_rescan(args) -> None:
+    from .memory.project_store import rescan_terms
+
+    extra = load_terms(Path(args.extra)) if args.extra else []
+    words, n_minutes = rescan_terms(Path(args.project), extra_terms=extra, use_llm=args.llm)
+    print(f"[rescan] 扫描归档纪要 {n_minutes} 份 + 项目文档 -> 热词库 {len(words)} 词")
+    print(f"[rescan] 位置: {Path(args.project) / 'meetingvar' / 'terms.txt'}")
