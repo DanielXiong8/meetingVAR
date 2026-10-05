@@ -17,7 +17,7 @@ from .pool.store import Pool
 from .transcribe.asr import ASR
 from .transcribe.correct import correct
 
-LOOKBACK_SECONDS = 120  # 命中回溯窗：命中时刻往前取多少秒
+LOOKBACK_SECONDS = config.LOOKBACK_SECONDS  # 命中回溯窗（config 可调，env MEETINGVAR_LOOKBACK）
 
 
 class Session:
@@ -71,8 +71,18 @@ class Session:
         span = len(pcm) / 2 / config.ASR_RATE
         if not force and span < config.CHUNK_SECONDS:
             return
-        keep = self._pending[-1] if not force else None
-        self._pending = [keep] if keep else []
+        # 滑窗重叠：保留 CHUNK_OVERLAP_SECONDS 尾巴进下一块，防截句
+        if not force:
+            tail = []
+            t_end = self._pending[-1][0] + len(self._pending[-1][1]) / 2 / config.ASR_RATE
+            for item in reversed(self._pending):
+                if t_end - item[0] <= config.CHUNK_OVERLAP_SECONDS:
+                    tail.insert(0, item)
+                else:
+                    break
+            self._pending = tail
+        else:
+            self._pending = []
 
         segs = self.asr.transcribe_pcm16k(pcm)
         new_lines = []
@@ -131,6 +141,7 @@ class Session:
             audio_wav=pcm_to_wav_bytes(pcm),
             transcript_lines=clip_lines,
             screens=screens,
+            hd_dir=str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None,
         )
         self.clips.append(
             {"clip_id": clip_id, "layer": layer, "evidence": evidence, "at": self._relative_ts(trigger_ts)}

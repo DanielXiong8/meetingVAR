@@ -58,7 +58,15 @@ Merge 后点提示里的 **Delete branch** 清理。PR 描述里写 `Closes #3` 
 4. `.gitignore` 已挡住 `data/`（他人声音/屏幕）与 `models/`（GB 级权重）——**不要用 `git add -f` 绕过它**
 5. 谁踩坑谁写 SETUP.md，和代码同一提交
 
-## 6. 出问题了怎么办
+## 6. CI 红线（model-free 测试，踩过一次：PR #22 事故）
+
+1. **测试文件的 import 链不得触碰重依赖**（jieba/funasr/torch/dxcam）——CI 是
+   `pip install --no-deps` 的，没有这些包，顶层 import 直接 ModuleNotFoundError
+2. 重依赖模块在**源码里也要懒加载**（函数内 `import`），让纯逻辑路径可被无依赖导入
+3. 加测试前先看被测模块的**顶层 import**，链上有重依赖就先改源码再写测试
+4. 本地模拟 CI：屏蔽 sys.modules 里的包再跑（见 tests/test_llm_extract 的验证方式）
+
+## 7. 出问题了怎么办
 
 - `git pull` 报 **conflict**：不要慌，把报错发群里；或 VS Code 打开冲突文件用合并编辑器选保留哪边，改完 add+commit
 - push 被拒（`rejected`）：先 `git pull` 再 push

@@ -14,14 +14,62 @@ import pyaudiowpatch as pyaudio
 from .. import config
 
 
+def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
+    """坑 20 对策：默认环回端点可能静音（播放走另一端点）。
+    并发试采所有环回端点，选 RMS 最大者；全静音则回落默认端点并提示。"""
+    import audioop
+    import threading
+
+    devs = list(pa.get_loopback_device_info_generator())
+    if len(devs) <= 1:
+        return devs[0]
+    # 坑 19：环回流并发互锁；坑 23：残留进程持锁会让 pa.open 永不返回。
+    # 对策：每个端点的探测放独立 daemon 线程 + join 超时，卡住即跳过该端点。
+    results: dict[int, float] = {}
+    for dev in devs:
+        idx = dev["index"]
+        result_box: dict = {}
+
+        def _one(box: dict) -> None:
+            try:
+                rate = int(dev["defaultSampleRate"])
+                ch = int(dev["maxInputChannels"]) or 2
+                st = pa.open(
+                    format=pyaudio.paInt16, channels=ch, rate=rate,
+                    frames_per_buffer=int(rate * 0.1), input=True, input_device_index=idx,
+                )
+                chunks = []
+                t_end = time.time() + probe_seconds
+                while time.time() < t_end:
+                    chunks.append(st.read(int(rate * 0.1), exception_on_overflow=False))
+                st.stop_stream(); st.close()
+                box["rms"] = audioop.rms(b"".join(chunks), 2)
+            except Exception:
+                box["rms"] = -1.0
+
+        th = threading.Thread(target=_one, args=(result_box,), daemon=True)
+        th.start()
+        th.join(timeout=probe_seconds + 5)
+        results[idx] = result_box.get("rms", -2.0)  # -2 = 超时跳过
+    live = {i: r for i, r in results.items() if r > 100}
+    if live:
+        best = max(live, key=live.get)
+        chosen = pa.get_device_info_by_index(best)
+        print(f"[audio] 探测到活动端点: {chosen['name']} (RMS={live[best]:.0f})")
+        return chosen
+    print("[audio] 警告：所有环回端点均静音（系统当前没有声音输出？），回落默认端点")
+    return devs[0]
+
+
 class AudioCapture:
-    def __init__(self, device_index: int | None = None, ring_seconds: int = config.RING_SECONDS):
+    def __init__(self, device_index: int | None = None, ring_seconds: int = config.RING_SECONDS, auto_pick: bool = True):
         self._pa = pyaudio.PyAudio()
-        self._dev = (
-            self._pa.get_device_info_by_index(device_index)
-            if device_index is not None
-            else self._pa.get_default_wasapi_loopback()
-        )
+        if device_index is not None:
+            self._dev = self._pa.get_device_info_by_index(device_index)
+        elif auto_pick:
+            self._dev = pick_live_endpoint(self._pa)
+        else:
+            self._dev = self._pa.get_default_wasapi_loopback()
         self._rate = int(self._dev["defaultSampleRate"])
         self._channels = int(self._dev["maxInputChannels"]) or 2
         self._frames_per_read = int(self._rate * 0.1)  # 100ms

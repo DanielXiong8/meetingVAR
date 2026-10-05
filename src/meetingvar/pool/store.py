@@ -24,6 +24,7 @@ class Pool:
         transcript_lines: list[dict],
         screens: list[tuple[float, bytes]] | None = None,
         explanation: str = "",
+        hd_dir: str | None = None,
     ) -> str:
         clip_id = str(uuid.uuid4())
         clip_media = config.CLIPS_DIR / clip_id
@@ -50,7 +51,7 @@ class Pool:
                 start_ts=transcript_lines[0]["ts"] if transcript_lines else 0.0,
                 end_ts=transcript_lines[-1]["ts"] if transcript_lines else 0.0,
             ),
-            screen=ScreenRef(video_path=None, keyframes=keyframes),
+            screen=ScreenRef(video_path=None, keyframes=keyframes, hd_clip_dir=hd_dir),
             transcript=[
                 TranscriptLine(ts=l["ts"], speaker=l["speaker"], text=l["text"]) for l in transcript_lines
             ],
