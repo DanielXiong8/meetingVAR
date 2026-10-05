@@ -128,9 +128,28 @@ def cmd_terms(args) -> None:
     from .memory.extract import extract_terms, llm_extract, write_terms_file
 
     extra = load_terms(Path(args.extra)) if args.extra else []
-    terms = extract_terms(Path(args.memory), extra_terms=extra)
+    terms = extract_terms(Path(args.memory), extra_terms=extra) if args.memory else {}
     persons = []
-    if args.llm:
+    # L0 工具层：--repo 给了就跑（代码仓库符号抽取，零 LLM，任意大小）
+    if args.repo:
+        from .memory.repo_extract import repo_terms
+
+        rterms, candidates = repo_terms(Path(args.repo))
+        for w, s in rterms.items():
+            terms.setdefault(w, []).extend(s)
+        print(f"[terms] 仓库工具层: {len(rterms)} 词, 关键文件候选 {len(candidates)} 个")
+    # L2 仓库语义层：--api 且给了 repo → API 只读候选摘要
+    if args.api and args.repo:
+        from .memory.repo_extract import repo_semantic
+
+        sterms, files = repo_semantic(candidates)
+        for w, s in sterms.items():
+            terms.setdefault(w, []).extend(s)
+        for f in files:
+            if isinstance(f, dict) and f.get("path") and f.get("function"):
+                print(f"  功能: {f['path']} — {str(f['function'])[:60]}")
+        print(f"[terms] 仓库语义层(API): +{len(sterms)} 词")
+    if args.llm and args.memory:
         r = llm_extract(Path(args.memory))
         if r:
             llm_terms, persons = r
@@ -170,10 +189,12 @@ def main() -> None:
     sub.add_parser("devices", help="列出环回设备")
 
     tm = sub.add_parser("terms", help="F1：从项目记忆自动抽取监听词表（术语+人名）")
-    tm.add_argument("--memory", required=True, help="项目记忆文件夹（md/txt）")
+    tm.add_argument("--memory", default=None, help="项目记忆文件夹（md/txt），文档层输入")
     tm.add_argument("--out", default=str(config.TERMS_FILE))
     tm.add_argument("--extra", default=None, help="手动热词文件（用户主动输入，永远保留）")
-    tm.add_argument("--llm", action="store_true", help="叠加 LLM 语义抽取（人名/角色/焦点，需 MEETINGVAR_LLM_*）")
+    tm.add_argument("--llm", action="store_true", help="文档语义层：本地小模型抽人名/角色/焦点（需 MEETINGVAR_LLM_*）")
+    tm.add_argument("--repo", default=None, help="代码仓库路径（L0 工具层：符号抽取，零 LLM）")
+    tm.add_argument("--api", action="store_true", help="仓库语义层：API 大模型只读关键文件候选摘要（需 MEETINGVAR_LLM_* 指向 API）")
 
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
