@@ -125,14 +125,25 @@ def cmd_devices(args) -> None:
 
 
 def cmd_terms(args) -> None:
-    from .memory.extract import extract_terms, write_terms_file
+    from .memory.extract import extract_terms, llm_extract, write_terms_file
 
     extra = load_terms(Path(args.extra)) if args.extra else []
     terms = extract_terms(Path(args.memory), extra_terms=extra)
+    persons = []
+    if args.llm:
+        r = llm_extract(Path(args.memory))
+        if r:
+            llm_terms, persons = r
+            for w, srcs in llm_terms.items():
+                terms.setdefault(w, []).extend(srcs)
+        else:
+            print("[terms] LLM 未配置或解析失败，已回落 jieba 层")
     n = write_terms_file(terms, Path(args.out))
-    print(f"[terms] {n} 个监听词（自动抽取 + 手动 {len(extra)}）-> {args.out}")
+    print(f"[terms] {n} 个监听词（jieba 自动抽取 + 手动 {len(extra)} + LLM{' ON' if args.llm else ' OFF'}）-> {args.out}")
     for w, src in terms.items():
         print(f"  {w}  {'/'.join(src)}")
+    for p in persons:
+        print(f"  人物: {p['name']} — {p.get('role', '?')}（{p.get('why', '')}）")
 
 
 def main() -> None:
@@ -162,6 +173,7 @@ def main() -> None:
     tm.add_argument("--memory", required=True, help="项目记忆文件夹（md/txt）")
     tm.add_argument("--out", default=str(config.TERMS_FILE))
     tm.add_argument("--extra", default=None, help="手动热词文件（用户主动输入，永远保留）")
+    tm.add_argument("--llm", action="store_true", help="叠加 LLM 语义抽取（人名/角色/焦点，需 MEETINGVAR_LLM_*）")
 
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,

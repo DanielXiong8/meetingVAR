@@ -118,3 +118,56 @@ def time_tag() -> str:
     import time
 
     return time.strftime("%Y-%m-%d %H:%M")
+
+
+# ---- LLM 特异性层（可选）：语义理解抽取，jieba 层的升级而非替代 ----
+# jieba 是统计刀：认得出"李明"像人名，但不知道李明负责 S3、PI 是拍板人。
+# 聊天记录/邮件等非结构化来源只有语义层读得懂。配了 MEETINGVAR_LLM_* 才启用，
+# 未配置时上层自动回落 jieba 层——离线故事不断。
+
+_LLM_PROMPT = """你是 meetingVAR 的会前分析师。以下是用户的「项目记忆」全部文档（可能包含笔记、聊天记录、邮件）。
+请抽取出会议监听所需的信息：
+1. terms：监听术语（会议中出现即说明在讨论用户关心的事），8~30 个，中英皆可，来自文档原文；
+2. persons：人物名单，每项 {{name, role, why}}——谁是负责人/拍板人/执行人，依据是什么；
+3. focus：用户关注焦点，一句话。
+只输出 JSON（不要 markdown 代码块）：{{"terms":[…],"persons":[…],"focus":"…"}}。
+红线：不得编造文档中不存在的人名或术语。
+
+<项目记忆>
+{docs}
+</项目记忆>"""
+
+
+def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | None:
+    """LLM 特异性抽取。未配置 LLM 返回 None；解析失败也返回 None（上层回落）。"""
+    import json
+
+    from ..llm import chat
+
+    docs = "\n\n---\n\n".join(
+        f"### {f.relative_to(memory_dir)}\n{f.read_text(encoding='utf-8', errors='ignore')}"
+        for f in sorted(memory_dir.rglob("*"))
+        if f.suffix.lower() in {".md", ".txt"}
+    )
+    if not docs.strip():
+        return None
+    raw = chat(_LLM_PROMPT.format(docs=docs))
+    if raw is None:
+        return None
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group())
+    except json.JSONDecodeError:
+        return None
+    terms: dict[str, list[str]] = {}
+    for t in data.get("terms", []):
+        if isinstance(t, str) and 2 <= len(t) <= 20:
+            terms.setdefault(t.strip(), []).append("LLM")
+    persons = [p for p in data.get("persons", []) if isinstance(p, dict) and p.get("name")]
+    for p in persons:
+        terms.setdefault(str(p["name"]).strip(), []).append(f"LLM人名({p.get('role', '?')})")
+    if data.get("focus"):
+        terms.setdefault(str(data["focus"]).strip(), []).append("LLM焦点")
+    return terms, persons
