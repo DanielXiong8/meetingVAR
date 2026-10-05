@@ -80,9 +80,15 @@ def cmd_record(args) -> None:
         screen = ScreenCapture()
         print(f"[rec] 录屏缓冲: {screen.backend} @ {config.SCREEN_FPS}fps")
 
+    hd = None
+    if args.hd:
+        from .capture.hd import HDCapture
+
+        hd = HDCapture()
     session = Session(
         session_id, terms=terms, focus_docs=focus, device=args.device, screen_capture=screen, echo=True
     )
+    session.hd = hd
     print("[rec] 开始。Ctrl+C 结束；**按回车 = 手动 VAR**")
     stop = threading.Event()
 
@@ -190,6 +196,7 @@ def main() -> None:
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
+    rc.add_argument("--hd", action="store_true", help="命中后 30fps 高清补录 90s")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 

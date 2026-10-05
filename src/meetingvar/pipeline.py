@@ -39,6 +39,7 @@ class Session:
         self.manual = ManualVAR()
         self.screen_capture = screen_capture
         self.echo = echo
+        self.hd = None  # 高清补录层（--hd 时由 cli 装配）
 
         self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS * 10)
         self._pending: list[tuple[float, bytes]] = []
@@ -111,6 +112,8 @@ class Session:
         return max(0.0, ts - base)
 
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
+        if self.hd is not None and not self.hd.is_recording():
+            self.hd.start()  # 高清层：命中后 90s 的 30fps 补录
         start_ts = trigger_ts - LOOKBACK_SECONDS
         pcm = b"".join(b for t, b in list(self._ring) if start_ts <= t <= trigger_ts)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
@@ -146,12 +149,16 @@ class Session:
             json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        if self.hd is not None:
+            self.hd.stop()
+        hd_dir = str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None
         summary = {
             "session_id": self.session_id,
             "lines": len(transcript),
             "clips": len(self.clips),
             "corrections": self.corrections,
             "transcript_json": str(out),
+            "hd_dir": hd_dir,
         }
         (out.parent / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
