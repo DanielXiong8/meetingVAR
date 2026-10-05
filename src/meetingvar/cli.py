@@ -29,10 +29,25 @@ def load_memory_docs(folder: Path) -> list[str]:
     return docs
 
 
+def resolve_terms(args) -> list[str]:
+    """词表解析顺序：显式 --terms 文件 > 从 --memory 自动抽取（agent 自己读）> 空。"""
+    if args.terms:
+        return load_terms(Path(args.terms))
+    if args.memory:
+        from .memory.extract import extract_terms, write_terms_file
+
+        terms = extract_terms(Path(args.memory))
+        out = Path(config.TERMS_FILE)
+        write_terms_file(terms, out)
+        print(f"[terms] 未指定词表，已从项目记忆自动抽取 {len(terms)} 词 -> {out}")
+        return list(terms)
+    return []
+
+
 def cmd_replay(args) -> None:
     from .replay import replay
 
-    terms = load_terms(Path(args.terms))
+    terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
     session_id = f"replay_{int(time.time())}"
     replay(Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device)
@@ -44,7 +59,7 @@ def cmd_record(args) -> None:
     from .capture.screen import ScreenCapture
     from .pipeline import Session
 
-    terms = load_terms(Path(args.terms))
+    terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
     session_id = f"live_{int(time.time())}"
 
@@ -109,18 +124,29 @@ def cmd_devices(args) -> None:
         print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz)")
 
 
+def cmd_terms(args) -> None:
+    from .memory.extract import extract_terms, write_terms_file
+
+    extra = load_terms(Path(args.extra)) if args.extra else []
+    terms = extract_terms(Path(args.memory), extra_terms=extra)
+    n = write_terms_file(terms, Path(args.out))
+    print(f"[terms] {n} 个监听词（自动抽取 + 手动 {len(extra)}）-> {args.out}")
+    for w, src in terms.items():
+        print(f"  {w}  {'/'.join(src)}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="meetingvar")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     rp = sub.add_parser("replay", help="wav 回放走全管线")
     rp.add_argument("--wav", required=True)
-    rp.add_argument("--terms", default=str(config.TERMS_FILE))
+    rp.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rp.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     rp.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 
     rc = sub.add_parser("record", help="实时采集（系统声音）")
-    rc.add_argument("--terms", default=str(config.TERMS_FILE))
+    rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
@@ -132,8 +158,14 @@ def main() -> None:
 
     sub.add_parser("devices", help="列出环回设备")
 
+    tm = sub.add_parser("terms", help="F1：从项目记忆自动抽取监听词表（术语+人名）")
+    tm.add_argument("--memory", required=True, help="项目记忆文件夹（md/txt）")
+    tm.add_argument("--out", default=str(config.TERMS_FILE))
+    tm.add_argument("--extra", default=None, help="手动热词文件（用户主动输入，永远保留）")
+
     args = ap.parse_args()
-    {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest, "devices": cmd_devices}[args.cmd](args)
+    {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
+     "devices": cmd_devices, "terms": cmd_terms}[args.cmd](args)
 
 
 if __name__ == "__main__":
