@@ -115,7 +115,11 @@ class Session:
         pcm = b"".join(b for t, b in list(self._ring) if start_ts <= t <= trigger_ts)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
         clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
-        screens = self.screen_capture.frames_since(start_ts) if self.screen_capture else []
+        # 截屏 manifest 与 JSON 时间语义保持一致：一律会议相对秒
+        screens = [
+            (self._relative_ts(t), jpg)
+            for t, jpg in (self.screen_capture.frames_since(start_ts) if self.screen_capture else [])
+        ]
         from .capture.audio import pcm_to_wav_bytes
 
         clip_id = self.pool.add_clip(
