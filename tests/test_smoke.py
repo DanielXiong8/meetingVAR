@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from meetingvar import config  # noqa: E402
 from meetingvar.monitor.hotwords import HotwordMonitor  # noqa: E402
 from meetingvar.pool.store import Pool  # noqa: E402
-from meetingvar.report.generate import _fmt_ts  # noqa: E402
+from meetingvar.report.generate import _fmt_ts, _thin_no_llm  # noqa: E402
 
 
 class MvpSmokeTests(unittest.TestCase):
@@ -52,6 +52,17 @@ class MvpSmokeTests(unittest.TestCase):
     def test_relative_timestamp_format(self) -> None:
         self.assertEqual(_fmt_ts(0), "00:00:00")
         self.assertEqual(_fmt_ts(3723), "01:02:03")
+
+    def test_thin_minutes_has_overview_chapters_and_explicit_actions(self) -> None:
+        transcript = [
+            {"ts": 0.0, "speaker": "S1", "text": "今天讨论实验方案"},
+            {"ts": 301.0, "speaker": "S2", "text": "会后请确认测序污染结果"},
+        ]
+        minutes = _thin_no_llm(transcript, {"S3": 1})
+        self.assertIn("## 全场速览", minutes)
+        self.assertIn("## 分章记录", minutes)
+        self.assertIn("## 明确行动项", minutes)
+        self.assertIn("[ ] [00:05:01] S2: 会后请确认测序污染结果", minutes)
 
 
 if __name__ == "__main__":
