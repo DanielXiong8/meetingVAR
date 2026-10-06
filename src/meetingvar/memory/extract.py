@@ -162,15 +162,23 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
     )
     if not docs.strip():
         return None
-    raw = chat(_LLM_PROMPT.format(docs=docs))
-    if raw is None:
-        return None
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group())
-    except json.JSONDecodeError:
+    # 小模型 JSON 输出不稳：/no_think 关思考、剥代码栅栏、失败重试一次
+    prompt = _LLM_PROMPT.format(docs=docs) + "\n/no_think"
+    raw = None
+    for attempt in range(2):
+        raw = chat(prompt)
+        if raw is None:
+            return None
+        cleaned = re.sub(r"```(?:json)?|```", "", raw)
+        m = re.search(r"\{.*\}", cleaned, re.S)
+        if not m:
+            continue
+        try:
+            data = json.loads(m.group())
+            break
+        except json.JSONDecodeError:
+            data = None
+    if raw is None or not isinstance(data, dict):
         return None
     terms: dict[str, list[str]] = {}
     for t in data.get("terms", []):

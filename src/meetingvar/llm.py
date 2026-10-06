@@ -27,4 +27,8 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+    # Qwen3 等思考模型会输出 <think>…</think>；抽取类任务不需要，通用剥离
+    import re
+
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
