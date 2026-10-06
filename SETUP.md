@@ -113,3 +113,13 @@
 - **坑 23 · 残留进程持锁**：昨晚探测挂死的真因——残留 python 进程持有环回流时，新进程 `pa.open()` 永不返回（串行也死）。对策=探测线程 join 超时跳过。杀干净残留后单端点采集立刻恢复
 - **坑 20 终审**：当前系统所有环回端点 RMS=0 = **没有声音输出在响**（耳机未插/静音/无播放）——不是软件 bug。探测机制会自动选对端点，用户只需确保"开会有声音"
 - **⑤ CI 红线**写进 github_guide §6（PR #22 事故的沉淀）
+
+## 本地语义引擎·最终路线（2026-10-06 · int4+llama.cpp）
+
+- **gptqmodel 路线废弃**（坑 24）：transformers 5.x 的 AWQ 推理改走 gptqmodel，而 gptqmodel 拉进的新 torchao 要求 torch≥2.11，与我们为 funasr 锁定的 2.7.1 死锁——**主线性命 > 增强层**，卸载 gptqmodel、pin torchao==0.12.0 后主线恢复（6/6 测试绿）
+- **最终路线**：`llama-cpp-python[server]`（PyPI Windows 轮子，**纯 CPU**，坑 25）+ ModelScope `Qwen/Qwen3-4B-GGUF` 的 Q4_K_M（2.5GB）
+  - 启动：`python -m llama_cpp.server --model <gguf路径> --port 11439`
+  - 实测：`terms --llm` 全流程 **10.6s**（对比 BF16 offload 的 3–6 分钟，快 20–30 倍），连续两跑稳定
+- **Qwen3 思考模式**：默认输出 <think>（浪费 token），llm.py 通用剥离 + 抽取 prompt 追加 `/no_think` 软开关——关闭后延迟再减半
+- **人物名单质量**：PI=拍板人/张伟=执行人/师弟=负责人，各带依据；两次运行角色细节有小漂移（4B 正常），定位是"供人工确认的候选"
+- 全 GPU 提速（18→100+ tok/s）需自行编译 llama.cpp（GGML_CUDA=on，MSVC 在机），列为可选优化
