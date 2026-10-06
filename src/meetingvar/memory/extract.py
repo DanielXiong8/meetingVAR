@@ -62,7 +62,12 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
 
 
 def _persons(docs: list[str], terms: dict[str, set]) -> None:
-    _ensure_jieba()
+    # POS-based person extraction is an enhancement; basic structured and
+    # Latin term extraction must still work without optional jieba.
+    try:
+        _ensure_jieba()
+    except ImportError:
+        return
     counts: Counter = Counter()
     for doc in docs:
         for w, flag in pseg.cut(doc):

@@ -72,6 +72,8 @@ meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
                  --memory spikes/b1_rag/sample_project        # 离线回放走全管线
 meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
 meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
+meetingvar review --session <id> --summary                   # 会后片段列表与反馈摘要
+meetingvar review --session <id> --clip <id> --status useful  # 写回有用/没用评价
 
 # 不依赖模型和设备的本地回归测试
 python -m unittest discover -s tests -v

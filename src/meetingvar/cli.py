@@ -3,6 +3,7 @@
     meetingvar replay  --wav <file> [--terms data/terms.txt] [--memory <folder>] [--device cuda]
     meetingvar record  [--terms data/terms.txt] [--memory <folder>] [--no-screen] [--duration 600]
     meetingvar digest  --session <id> [--llm]
+    meetingvar review  --session <id> [--clip <id>] [--status useful|useless]
     meetingvar devices
 """
 from __future__ import annotations
@@ -129,6 +130,109 @@ def cmd_digest(args) -> None:
     digest(args.session, use_llm=args.llm)
 
 
+def _review_time(ts: float) -> str:
+    total = max(0, int(float(ts)))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _print_review_clip(clip: dict, index: int | None = None) -> None:
+    prefix = f"[{index}] " if index is not None else ""
+    review = clip.get("review", {})
+    audio = clip.get("audio", {})
+    trigger = clip.get("trigger", {})
+    screen = clip.get("screen", {})
+    print(
+        f"{prefix}{clip['clip_id'][:8]}  "
+        f"[{_review_time(audio.get('start_ts', 0))}–{_review_time(audio.get('end_ts', 0))}]  "
+        f"{trigger.get('layer', '?')} / {trigger.get('evidence', '')}  "
+        f"评价={review.get('status', 'pending')}"
+    )
+    lines = clip.get("transcript", [])
+    if lines:
+        excerpt = " / ".join(f"{x.get('speaker', '?')}: {x.get('text', '')}" for x in lines[:3])
+        print(f"    {excerpt[:240]}")
+    media = len(screen.get("keyframes", []))
+    if media:
+        print(f"    屏幕关键帧: {media} 张；音频: {audio.get('path', '')}")
+    if review.get("note"):
+        print(f"    备注: {review['note']}")
+
+
+def _review_summary(pool) -> None:
+    summary = pool.feedback_summary()
+    counts = summary["by_status"]
+    print(
+        f"[feedback] {summary['session_id']}: 总计 {summary['total']} 片段；"
+        f"待评 {counts['pending']} / 有用 {counts['useful']} / 没用 {counts['useless']}"
+    )
+    for layer, values in sorted(summary["by_layer"].items()):
+        print(f"  {layer}: 待评 {values['pending']} / 有用 {values['useful']} / 没用 {values['useless']}")
+
+
+def cmd_review(args) -> None:
+    """会后评审 CLI mock：查看片段、写回 review、生成反馈摘要。"""
+    from .pool.store import Pool
+
+    pool = Pool(args.session)
+    clips = pool.list_clips()
+    if not clips:
+        print(f"[review] 会话 {args.session} 没有可评审片段")
+        return
+
+    if args.summary:
+        for i, clip in enumerate(clips, 1):
+            _print_review_clip(clip, i)
+        path = pool.write_feedback_summary()
+        _review_summary(pool)
+        print(f"[feedback] 摘要: {path}")
+        return
+
+    if args.clip and args.status:
+        updated = pool.update_review(args.clip, args.status, args.note)
+        path = pool.write_feedback_summary()
+        print(f"[review] 已更新 {updated['clip_id'][:8]} -> {updated['review']['status']}")
+        if updated["review"]["note"]:
+            print(f"[review] 备注: {updated['review']['note']}")
+        _review_summary(pool)
+        print(f"[feedback] 摘要: {path}")
+        return
+
+    if args.clip and not args.status:
+        matches = [c for c in clips if c["clip_id"] == args.clip or c["clip_id"].startswith(args.clip)]
+        if len(matches) != 1:
+            raise SystemExit(f"[review] --clip 必须匹配唯一片段: {args.clip}")
+        _print_review_clip(matches[0])
+        raise SystemExit("[review] 还需同时提供 --status useful|useless 和可选 --note")
+
+    print(f"[review] 会后片段评审（{args.session}）；输入编号，q 退出")
+    for i, clip in enumerate(clips, 1):
+        _print_review_clip(clip, i)
+    while True:
+        choice = input("\n评审片段编号（q 退出）> ").strip()
+        if choice.lower() == "q":
+            break
+        if not choice.isdigit() or not 1 <= int(choice) <= len(clips):
+            print("请输入列表中的编号")
+            continue
+        clip = clips[int(choice) - 1]
+        status = input("评价 [u=有用 / n=没用 / s=跳过] > ").strip().lower()
+        if status == "s":
+            continue
+        status = {"u": "useful", "n": "useless"}.get(status)
+        if not status:
+            print("请输入 u、n 或 s")
+            continue
+        note = input("备注（可空）> ")
+        pool.update_review(clip["clip_id"], status, note)
+        clips = pool.list_clips()
+        print(f"[review] 已写回 {clip['clip_id'][:8]} -> {status}")
+    path = pool.write_feedback_summary()
+    _review_summary(pool)
+    print(f"[feedback] 摘要: {path}")
+
+
 def cmd_devices(args) -> None:
     from .capture.audio import AudioCapture
 
@@ -204,6 +308,13 @@ def main() -> None:
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
 
+    rv = sub.add_parser("review", help="会后评审片段并写回评价反馈")
+    rv.add_argument("--session", required=True)
+    rv.add_argument("--clip", default=None, help="片段完整 id 或唯一前缀")
+    rv.add_argument("--status", choices=["useful", "useless"], default=None)
+    rv.add_argument("--note", default=None, help="评价备注")
+    rv.add_argument("--summary", action="store_true", help="只查看并生成反馈摘要")
+
     sub.add_parser("devices", help="列出环回设备")
 
     tm = sub.add_parser("terms", help="F1：从项目记忆自动抽取监听词表（术语+人名）")
@@ -223,7 +334,8 @@ def main() -> None:
 
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
-     "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
+     "review": cmd_review, "devices": cmd_devices, "terms": cmd_terms,
+     "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
 
 
 if __name__ == "__main__":

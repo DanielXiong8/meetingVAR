@@ -135,8 +135,6 @@ def digest(session_id: str, use_llm: bool = False) -> Path:
         c = json.loads(clip_file.read_text(encoding="utf-8"))
         if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
             continue
-        if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
-            continue
         tr = "\n".join(f"[{_fmt_ts(l['ts'])}] {l['speaker']}: {l['text']}" for l in c["transcript"]) or "（回溯窗内无转写句）"
         prompt = THICK_REPORT.format(
             trigger_evidence=c["trigger"]["evidence"],

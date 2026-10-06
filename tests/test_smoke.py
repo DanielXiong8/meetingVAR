@@ -49,6 +49,35 @@ class MvpSmokeTests(unittest.TestCase):
         self.assertEqual(len(clip["screen"]["keyframes"]), 1)
         self.assertTrue((config.CLIPS_DIR / clip_id / "screens" / "frame_0000.jpg").exists())
 
+    def test_review_round_trip_and_feedback_summary(self) -> None:
+        pool = Pool("review")
+        clip_id = pool.add_clip(
+            "L1",
+            "热词:S3",
+            b"RIFF",
+            [{"ts": 12.0, "speaker": "S1", "text": "S3"}],
+        )
+        updated = pool.update_review(clip_id[:8], "useful", "需要回听 PI 的上下文")
+        self.assertEqual(updated["review"], {"status": "useful", "note": "需要回听 PI 的上下文"})
+        summary = pool.feedback_summary()
+        self.assertEqual(summary["by_status"], {"pending": 0, "useful": 1, "useless": 0})
+        feedback_path = pool.write_feedback_summary()
+        self.assertTrue(feedback_path.exists())
+        self.assertEqual(len(pool.list_clips()), 1)
+
+    def test_term_extraction_degrades_without_jieba(self) -> None:
+        from unittest.mock import patch
+
+        from meetingvar.memory.extract import extract_terms
+
+        memory = Path(self.tmp.name) / "memory"
+        memory.mkdir()
+        (memory / "notes.md").write_text("# 测序污染问题\nUMI\nUMI\n", encoding="utf-8")
+        with patch("meetingvar.memory.extract._ensure_jieba", side_effect=ImportError("missing jieba")):
+            terms = extract_terms(memory)
+        self.assertIn("测序污染问题", terms)
+        self.assertIn("UMI", terms)
+
     def test_relative_timestamp_format(self) -> None:
         self.assertEqual(_fmt_ts(0), "00:00:00")
         self.assertEqual(_fmt_ts(3723), "01:02:03")
