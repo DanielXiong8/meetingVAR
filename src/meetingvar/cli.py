@@ -56,11 +56,18 @@ def resolve_terms(args) -> list[str]:
 
 def cmd_replay(args) -> None:
     from .replay import replay
+    from .memory.calibration import load_threshold
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
     session_id = f"replay_{int(time.time())}"
-    replay(Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device)
+    threshold = load_threshold(Path(args.memory)) if args.memory else None
+    if threshold is not None:
+        print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
+    replay(
+        Path(args.wav), session_id, terms=terms, focus_docs=focus,
+        device=args.device, l2_threshold=threshold,
+    )
     print(f"[next] meetingvar digest --session {session_id}")
 
 
@@ -68,6 +75,7 @@ def cmd_record(args) -> None:
     from .capture.audio import AudioCapture
     from .capture.screen import ScreenCapture
     from .pipeline import Session
+    from .memory.calibration import load_threshold
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
@@ -86,8 +94,12 @@ def cmd_record(args) -> None:
         from .capture.hd import HDCapture
 
         hd = HDCapture()
+    threshold = load_threshold(Path(args.memory)) if args.memory else None
+    if threshold is not None:
+        print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
     session = Session(
-        session_id, terms=terms, focus_docs=focus, device=args.device, screen_capture=screen, echo=True
+        session_id, terms=terms, focus_docs=focus, device=args.device,
+        screen_capture=screen, echo=True, l2_threshold=threshold,
     )
     session.hd = hd
     print("[rec] 开始。Ctrl+C 结束；**按回车 = 手动 VAR**")
@@ -171,6 +183,20 @@ def _review_summary(pool) -> None:
         print(f"  {layer}: 待评 {values['pending']} / 有用 {values['useful']} / 没用 {values['useless']}")
 
 
+def _calibrate_project(pool, project: str | None) -> None:
+    if not project:
+        return
+    from .memory.calibration import apply_reviews
+
+    result = apply_reviews(Path(project), pool.list_clips())
+    print(
+        f"[calibration] 项目 L2 阈值 {result['base_threshold']:.2f} → "
+        f"{result['l2_threshold']:.2f}（显式 L2 评价样本 {result['sample_count']} 条；"
+        f"本次新增/更新 {result['new_samples']} 条）"
+    )
+    print(f"[calibration] 已保存: {result['path']}")
+
+
 def cmd_review(args) -> None:
     """会后评审 CLI mock：查看片段、写回 review、生成反馈摘要。"""
     from .pool.store import Pool
@@ -187,6 +213,7 @@ def cmd_review(args) -> None:
         path = pool.write_feedback_summary()
         _review_summary(pool)
         print(f"[feedback] 摘要: {path}")
+        _calibrate_project(pool, args.project)
         return
 
     if args.clip and args.status:
@@ -197,6 +224,7 @@ def cmd_review(args) -> None:
             print(f"[review] 备注: {updated['review']['note']}")
         _review_summary(pool)
         print(f"[feedback] 摘要: {path}")
+        _calibrate_project(pool, args.project)
         return
 
     if args.clip and not args.status:
@@ -231,6 +259,7 @@ def cmd_review(args) -> None:
     path = pool.write_feedback_summary()
     _review_summary(pool)
     print(f"[feedback] 摘要: {path}")
+    _calibrate_project(pool, args.project)
 
 
 def cmd_devices(args) -> None:
@@ -314,6 +343,7 @@ def main() -> None:
     rv.add_argument("--status", choices=["useful", "useless"], default=None)
     rv.add_argument("--note", default=None, help="评价备注")
     rv.add_argument("--summary", action="store_true", help="只查看并生成反馈摘要")
+    rv.add_argument("--project", default=None, help="项目文件夹；把本会话 L2 评价纳入项目阈值校准")
 
     sub.add_parser("devices", help="列出环回设备")
 

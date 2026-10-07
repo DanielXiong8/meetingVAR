@@ -29,13 +29,14 @@ class Session:
         device: str = "cuda",
         screen_capture=None,
         echo: bool = True,
+        l2_threshold: float | None = None,
     ):
         self.session_id = session_id
         self.terms = terms
         self.pool = Pool(session_id)
         self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
-        self.scorer = InterestScorer(focus_docs) if focus_docs else None
+        self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
         self.manual = ManualVAR()
         self.screen_capture = screen_capture
         self.echo = echo

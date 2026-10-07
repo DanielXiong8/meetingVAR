@@ -50,15 +50,17 @@ models/          模型权重本地固化（不入库）
 data/            会议音频/录屏素材（不入库——含他人声音与屏幕）
 ```
 
-## 当前状态：Spike 阶段（2026-09-29 开工）
+## 当前状态：MVP 命令行骨架（截至 2026-10-07）
 
-| spike | 验证目标 | 状态 |
+| 模块 | 验证目标 | 状态 |
 |---|---|---|
-| c1 | torch+FunASR+CAM++ 离线推理（**断网跑通**，权重固化 models/） | 待验证 |
-| c2 | pyaudiowpatch 采到"系统输出"声音 | 待验证 |
-| c3 | 腾讯会议 + 微信视频实测 c2 | 待验证 |
-| c4 | dxcam 低帧率内存环形缓冲（退路 mss） | 待验证 |
-| c5 | 热词增强术语纠错可见 | 待验证 |
+| c1 | FunASR + VAD + CAM++ 本地推理 | CPU/GPU 冒烟通过；正式拔网线验证和多人剧本归因仍待补 |
+| c2 | WASAPI 系统声音环回 | TTS 系统输出采集并成功送入 ASR，已验证 |
+| c3 | 腾讯会议/微信视频真实会议 | 待人工实测；不能由 TTS 环回测试替代 |
+| c4 | dxcam 低帧率录屏环形缓冲 | Windows 上 2fps JPEG 缓冲已验证 |
+| c5 | 术语增强 | FunASR `hotword` 参数实测无效；现用转写后术语纠错，效果见 SETUP |
+
+当前可运行入口是 CLI，不包含托盘/悬浮条/会后图形界面。真实音频、屏幕、模型权重均不入库；无声卡、模型或真实会议素材的功能只按其实际测试边界标注，不视为端到端验收。
 
 ## 快速开始（MVP 骨架，2026-10-04 起可用）
 
@@ -73,18 +75,25 @@ meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
 meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
 meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
 meetingvar review --session <id> --summary                   # 会后片段列表与反馈摘要
-meetingvar review --session <id> --clip <id> --status useful  # 写回有用/没用评价
+meetingvar review --session <id> --clip <id> --status useful --project <项目目录>  # 评价并校准该项目 L2
+python scripts/demo_feedback_loop.py                         # 无模型的两场反馈演示
 
 # 不依赖模型和设备的本地回归测试
 python -m unittest discover -s tests -v
 ```
 
-管线：环回音频 → 10min 环形缓冲（不落盘）→ 30s 增量转写（说话人+标点）→ 术语纠错 →
-L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（回溯 120s 音频+截屏）→ 片段池 →
+管线：环回音频 → 10min 环形缓冲（不落盘）→ 8s 增量转写（3s 重叠，说话人+标点）→ 术语纠错 →
+L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（默认回溯 300s，可由 `MEETINGVAR_LOOKBACK` 调整）→ 片段池 →
 digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
 
 LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
 未配置时输出结构化模板版并如实标注〔模板版〕。
+
+L2 反馈校准（显式 opt-in）：会后评审时加 `--project <项目目录>`，系统只采纳已评价的 L2 片段，
+把有用样本小幅降低、不相关样本提高该项目的相似度阈值，并将样本与当前阈值保存到
+`<项目目录>/meetingvar/calibration.json`。下一次 `go <项目目录>` 或 `record/replay --memory <项目目录>`
+会读取它。阈值范围限制在 0.05–0.95；L1 热词与 L3 手动 VAR 不参与 L2 校准。此规则是可审计的
+保守启发式，不代表模型训练或统计意义上的准确率保证。
 
 ## 文档
 

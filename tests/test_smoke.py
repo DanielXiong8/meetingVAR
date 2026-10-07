@@ -65,6 +65,53 @@ class MvpSmokeTests(unittest.TestCase):
         self.assertTrue(feedback_path.exists())
         self.assertEqual(len(pool.list_clips()), 1)
 
+    def test_l2_feedback_calibrates_project_threshold_idempotently(self) -> None:
+        from meetingvar.memory.calibration import apply_reviews, load_threshold
+
+        project = Path(self.tmp.name) / "project"
+        pool = Pool("calibration")
+        clip_id = pool.add_clip(
+            "L2",
+            "interest_score=0.34",
+            b"RIFF",
+            [{"ts": 12.0, "speaker": "S1", "text": "项目相关内容"}],
+        )
+        pool.update_review(clip_id, "useless", "这段不相关")
+        # L1 reviews are retained in the clip pool but must not calibrate L2.
+        pool.add_clip(
+            "L1", "热词:S3", b"RIFF", [{"ts": 20.0, "speaker": "S2", "text": "S3"}]
+        )
+
+        first = apply_reviews(project, pool.list_clips())
+        self.assertEqual(first["sample_count"], 1)
+        self.assertEqual(first["by_status"]["useless"], 1)
+        self.assertEqual(first["l2_threshold"], 0.35)
+        self.assertEqual(load_threshold(project), 0.35)
+
+        repeated = apply_reviews(project, pool.list_clips())
+        self.assertEqual(repeated["l2_threshold"], 0.35)
+        self.assertEqual(repeated["new_samples"], 0)
+
+        pool.update_review(clip_id, "useful", "重新评估后保留")
+        corrected = apply_reviews(project, pool.list_clips())
+        self.assertEqual(corrected["sample_count"], 1)
+        self.assertEqual(corrected["by_status"]["useful"], 1)
+        self.assertEqual(corrected["l2_threshold"], 0.23)
+
+    def test_session_passes_project_threshold_into_interest_scorer(self) -> None:
+        import sys
+        import types
+        from unittest.mock import patch
+
+        pypinyin_stub = types.ModuleType("pypinyin")
+        pypinyin_stub.lazy_pinyin = lambda text: list(text)
+        with patch.dict(sys.modules, {"pypinyin": pypinyin_stub}):
+            import meetingvar.pipeline as pipeline
+
+            with patch.object(pipeline, "ASR"), patch.object(pipeline, "InterestScorer") as scorer:
+                pipeline.Session("threshold", terms=[], focus_docs=["项目记忆"], device="cpu", l2_threshold=0.42)
+        self.assertEqual(scorer.call_args.kwargs["threshold"], 0.42)
+
     def test_term_extraction_degrades_without_jieba(self) -> None:
         from unittest.mock import patch
 

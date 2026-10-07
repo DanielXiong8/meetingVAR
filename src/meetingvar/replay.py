@@ -24,13 +24,22 @@ def wav_to_pcm16k(path: Path) -> bytes:
     return mono
 
 
-def replay(wav_path: Path, session_id: str, terms: list[str], focus_docs: list[str] | None, device: str = "cuda") -> dict:
+def replay(
+    wav_path: Path,
+    session_id: str,
+    terms: list[str],
+    focus_docs: list[str] | None,
+    device: str = "cuda",
+    l2_threshold: float | None = None,
+) -> dict:
     pcm = wav_to_pcm16k(wav_path)
     duration = len(pcm) / 2 / config.ASR_RATE
     print(f"[replay] {wav_path} | {duration:.0f}s @16k mono")
 
     base_ts = time.time() - duration  # 让"命中回溯"语义成立
-    session = Session(session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True)
+    session = Session(
+        session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True, l2_threshold=l2_threshold
+    )
 
     step = 5.0  # 5 秒一喂，喂完立即尝试增量转写
     offset = 0.0

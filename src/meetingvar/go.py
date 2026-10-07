@@ -24,6 +24,7 @@ def cmd_go(args) -> None:
     from .capture.screen import ScreenCapture
     from .monitor.hotwords import InterestScorer
     from .pipeline import Session
+    from .memory.calibration import load_threshold
 
     project = Path(args.project)
     memory_dir = project if project.is_dir() else project.parent
@@ -50,7 +51,9 @@ def cmd_go(args) -> None:
         print("[go] 警告：项目里没抽到词，本次只有手动 VAR（回车）兜底")
 
     focus = load_memory_docs(memory_dir)
-    scorer_holder = {"scorer": InterestScorer(focus) if focus else None}
+    l2_threshold = load_threshold(memory_dir)
+    scorer_holder = {"scorer": InterestScorer(focus, threshold=l2_threshold) if focus else None}
+    print(f"[calibration] 项目 L2 阈值: {l2_threshold:.2f}")
 
     # ---- t+5s：录音立即开始 ----
     print("[rec] 打开系统音频环回…")
@@ -68,7 +71,7 @@ def cmd_go(args) -> None:
         hd = HDCapture()
     session = Session(
         session_id, terms=wordlist, focus_docs=focus,
-        device=args.device, screen_capture=screen, echo=True,
+        device=args.device, screen_capture=screen, echo=True, l2_threshold=l2_threshold,
     )
     session.hd = hd
     session.scorer = scorer_holder["scorer"]
@@ -92,7 +95,7 @@ def cmd_go(args) -> None:
                 session.monitor.terms.append(w)
             if scorer_holder["scorer"]:
                 docs = focus + [w for w in llm_terms]
-                scorer_holder["scorer"] = InterestScorer(docs)
+                scorer_holder["scorer"] = InterestScorer(docs, threshold=l2_threshold)
                 session.scorer = scorer_holder["scorer"]
             for p in persons:
                 print(f"  [go+] 人物: {p.get('name')} — {p.get('role', '?')}")
