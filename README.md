@@ -86,6 +86,24 @@ python scripts/demo_feedback_loop.py                         # 无模型的两�
 python -m unittest discover -s tests -v
 ```
 
+### 无模型、无声卡的全流程仿真
+
+使用 Python 3.10，安装轻量依赖即可验证真实 CLI 与管线，不需 CUDA、模型权重或音频设备：
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate；Linux/macOS: source .venv/bin/activate
+python -m pip install -e . -r requirements-simulation.txt
+python -m unittest discover -s tests -v
+python -m meetingvar.simulation --output data/simulation
+```
+
+仿真依次执行 `terms → replay → digest → review → rescan → 下一场 replay → go`。
+音频转换、ASR 适配器、纠错、TF-IDF、三层触发、片段池、纪要、评价校准和归档均使用项目代码；
+仅替换 FunASR 模型输出、系统音频和屏幕来源。生成的 WAV 是编码测试信号，**不是语音，不能用于证明识别准确率**。
+每次运行在 `data/simulation/run_*/` 保留 `result.json`、日志、有效 WAV/JPEG、薄厚纪要与项目归档。
+测试报告见 [docs/test_report_simulation.md](docs/test_report_simulation.md)。
+
 管线：环回音频 → 10min 环形缓冲（不落盘）→ 8s 增量转写（3s 重叠，说话人+标点）→ 术语纠错 →
 L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（默认回溯 300s，可由 `MEETINGVAR_LOOKBACK` 调整）→ 片段池 →
 digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。

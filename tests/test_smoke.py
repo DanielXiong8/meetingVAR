@@ -129,6 +129,26 @@ class MvpSmokeTests(unittest.TestCase):
         self.assertEqual(_fmt_ts(0), "00:00:00")
         self.assertEqual(_fmt_ts(3723), "01:02:03")
 
+    def test_keep_marker_is_not_treated_as_comment(self) -> None:
+        from meetingvar.cli import load_terms
+
+        words = Path(self.tmp.name) / "terms.txt"
+        words.write_text("# ignored\n#!keep 手动术语\nS3\n", encoding="utf-8")
+        self.assertEqual(load_terms(words), ["手动术语", "S3"])
+
+    def test_runtime_documents_are_not_project_memory(self) -> None:
+        from meetingvar.cli import load_memory_docs
+        from meetingvar.memory.extract import extract_terms
+
+        root = Path(self.tmp.name)
+        (root / "notes.md").write_text("# 测序污染", encoding="utf-8")
+        for directory in (".venv", ".venv-smoke", ".tools", ".runtimes"):
+            nested = root / directory
+            nested.mkdir()
+            (nested / "notes.md").write_text("# 依赖噪声", encoding="utf-8")
+        self.assertEqual(load_memory_docs(root), ["# 测序污染"])
+        self.assertNotIn("依赖噪声", extract_terms(root))
+
     def test_short_chinese_heading_is_a_valid_term(self) -> None:
         from meetingvar.memory.extract import _structured
 

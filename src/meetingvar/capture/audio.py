@@ -93,6 +93,7 @@ class AudioCapture:
         )
         self._ring: deque[tuple[float, bytes]] = deque(maxlen=ring_seconds * 10)
         self._state = None  # audioop.ratecv 状态
+        self._next_audio_ts: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self.session_start = time.time()
@@ -112,12 +113,17 @@ class AudioCapture:
                 continue
             mono, self._state = to_pcm16k(raw, self._channels, self._rate, self._state)
             with self._lock:
-                self._ring.append((time.time() - len(mono) / 2 / config.ASR_RATE, mono))
+                duration = len(mono) / 2 / config.ASR_RATE
+                start = self._next_audio_ts
+                if start is None:
+                    start = time.time() - duration
+                self._ring.append((start, mono))
+                self._next_audio_ts = start + duration
 
     def ingest_since(self, since_ts: float) -> tuple[bytes, float]:
         """取出自 since_ts 以来的全部音频，返回 (pcm, 起始绝对时间戳)。"""
         with self._lock:
-            items = [(t, b) for t, b in self._ring if t >= since_ts]
+            items = [(t, b) for t, b in self._ring if t >= since_ts - 0.5 / config.ASR_RATE]
         if not items:
             return b"", time.time()
         return b"".join(b for _, b in items), items[0][0]

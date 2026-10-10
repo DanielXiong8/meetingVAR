@@ -25,3 +25,20 @@ jobs:
 
       - name: Compile source
         run: python -m compileall -q src tests
+
+  simulation:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install isolated simulation dependencies
+        run: python -m pip install -e . -r requirements-simulation.txt
+      - name: Run all regressions, including actual CLI workflow
+        run: python -m unittest discover -s tests -v
+      - name: Run inspectable simulation
+        run: python -m meetingvar.simulation --output data/simulation

@@ -22,20 +22,23 @@ def load_terms(path: Path) -> list[str]:
     out = []
     for l in path.read_text(encoding="utf-8").splitlines():
         l = l.strip()
-        if not l or l.startswith("#"):
+        if not l:
             continue
         if l.startswith("#!keep"):
             out.append(l.split(maxsplit=1)[1].strip())  # 手动词（rescan 永久保留）
+            continue
+        if l.startswith("#"):
             continue
         out.append(l)
     return out
 
 
 def load_memory_docs(folder: Path) -> list[str]:
+    from .memory.files import project_files
+
     docs = []
-    for f in folder.rglob("*") if folder.exists() else []:
-        if f.suffix.lower() in {".md", ".txt"}:
-            docs.append(f.read_text(encoding="utf-8"))
+    for f in project_files(folder, {".md", ".txt"}):
+        docs.append(f.read_text(encoding="utf-8"))
     return docs
 
 
@@ -120,18 +123,22 @@ def cmd_record(args) -> None:
     try:
         while not stop.is_set() and (args.duration <= 0 or time.time() - t0 < args.duration):
             pcm, since = audio.ingest_since(last_ts)
-            last_ts = time.time()
             if pcm:
                 session.ingest_pcm(pcm, since)
+                last_ts = since + len(pcm) / 2 / config.ASR_RATE
             stop.wait(0.5)
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
-        summary = session.finish()
-        audio.stop()
-        if screen:
-            screen.stop()
+        try:
+            summary = session.finish()
+        finally:
+            try:
+                audio.stop()
+            finally:
+                if screen:
+                    screen.stop()
     print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
     print(f"[next] meetingvar digest --session {session_id}")
 
@@ -368,10 +375,6 @@ def main() -> None:
      "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
 
 
-if __name__ == "__main__":
-    main()
-
-
 def cmd_rescan(args) -> None:
     from .memory.project_store import rescan_terms
 
@@ -379,3 +382,7 @@ def cmd_rescan(args) -> None:
     words, n_minutes = rescan_terms(Path(args.project), extra_terms=extra, use_llm=args.llm)
     print(f"[rescan] 扫描归档纪要 {n_minutes} 份 + 项目文档 -> 热词库 {len(words)} 词")
     print(f"[rescan] 位置: {Path(args.project) / 'meetingvar' / 'terms.txt'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -121,18 +121,22 @@ def cmd_go(args) -> None:
     try:
         while not stop.is_set() and (args.duration <= 0 or time.time() - t0 < args.duration):
             pcm, since = audio.ingest_since(last_ts)
-            last_ts = time.time()
             if pcm:
                 session.ingest_pcm(pcm, since)
+                last_ts = since + len(pcm) / 2 / config.ASR_RATE
             stop.wait(0.5)
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
-        summary = session.finish()
-        audio.stop()
-        if screen:
-            screen.stop()
+        try:
+            summary = session.finish()
+        finally:
+            try:
+                audio.stop()
+            finally:
+                if screen:
+                    screen.stop()
     print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
 
     # 项目归档：纪要自动进 <项目>/meetingvar/minutes/，供跨会话热词库演化

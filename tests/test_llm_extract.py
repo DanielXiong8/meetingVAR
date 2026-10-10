@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -50,6 +51,18 @@ class _StubHandler(BaseHTTPRequestHandler):
 
 
 class LlmExtractTests(unittest.TestCase):
+    def test_invalid_model_text_falls_back(self) -> None:
+        with patch("meetingvar.llm.chat", return_value="不是 JSON"):
+            self.assertIsNone(llm_extract(SAMPLE))
+
+    def test_unavailable_endpoint_falls_back(self) -> None:
+        from urllib.error import URLError
+        from meetingvar.llm import chat
+
+        with patch.multiple(config, LLM_BASE_URL="http://127.0.0.1:1/v1", LLM_MODEL="stub"), \
+             patch("urllib.request.urlopen", side_effect=URLError("unavailable")):
+            self.assertIsNone(chat("test", timeout=1))
+
     def test_llm_extract_via_stub(self) -> None:
         srv = HTTPServer(("127.0.0.1", 0), _StubHandler)
         thread = threading.Thread(target=srv.serve_forever, daemon=True)

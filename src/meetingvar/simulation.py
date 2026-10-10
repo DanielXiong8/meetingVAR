@@ -43,13 +43,15 @@ class FixtureModel:
     def __init__(self):
         self.windows: list[dict] = []
 
-    def generate(self, input: str, **kwargs) -> list[dict]:
-        with wave.open(input, "rb") as stream:
-            assert (stream.getnchannels(), stream.getsampwidth(), stream.getframerate()) == (1, 2, 16000)
-            raw = array("h", stream.readframes(stream.getnframes()))
-        if not raw:
+    def generate(self, input, **kwargs) -> list[dict]:
+        import numpy as np
+
+        assert isinstance(input, np.ndarray) and input.dtype == np.float32 and input.ndim == 1
+        assert kwargs["fs"] == 16000 and np.max(np.abs(input)) <= 1
+        raw = np.rint(input * 32768).astype("<i2")
+        if not raw.size:
             return []
-        offset = raw[0] - 1000
+        offset = int(raw[0]) - 1000
         duration = len(raw) / config.ASR_RATE
         self.windows.append({"offset": offset, "duration": duration})
         sentences = [
@@ -165,7 +167,8 @@ def run(output: Path) -> dict:
         minutes = (data / "reports" / session.session_id / "minutes.md").read_text(encoding="utf-8")
         assert "明确行动项" in minutes and "〔模板版〕" in minutes
         assert "@S3" not in minutes and "@UMI" not in minutes
-        chosen = next(clip for clip in clips if clip["trigger"]["layer"] == "L2")
+        first_l2_id = next(clip["clip_id"] for clip in session.clips if clip["layer"] == "L2")
+        chosen = next(clip for clip in clips if clip["clip_id"] == first_l2_id)
         command("review", "--session", session.session_id, "--clip", chosen["clip_id"][:8],
                 "--status", "useless", "--note", "仿真显式评价，用于验证校准回写", "--project", project)
         threshold = load_threshold(project)
@@ -178,6 +181,62 @@ def run(output: Path) -> dict:
         with patch.object(cli.time, "time", return_value=time.time() + 10):
             command("replay", "--wav", wav, "--terms", config.TERMS_FILE, "--memory", project, "--device", "cpu")
         assert sessions[1].scorer.threshold == threshold
+        # Exercise go's real capture loop, finish, digest and automatic archive.
+        from .capture import audio as audio_module, screen as screen_module
+        from . import pipeline as pipeline_module
+        from .capture.screen import ScreenCapture
+        from .replay import wav_to_pcm16k
+
+        class VirtualAudio:
+            name = "SIMULATED loopback (encoded fixture, not speech)"
+            def __init__(self):
+                self.offset = 0
+                self.pcm = wav_to_pcm16k(wav)
+                self.base = time.time()
+                self.stopped = False
+
+            def ingest_since(self, since_ts):
+                if self.offset >= DURATION:
+                    raise KeyboardInterrupt  # deterministic end of the virtual meeting
+                start = self.offset
+                self.offset = min(DURATION, start + 5)
+                return self.pcm[start * 32000:self.offset * 32000], self.base + start
+
+            def stop(self):
+                self.stopped = True
+
+        class VirtualScreen(ScreenCapture):
+            backend = "SIMULATED screen"
+            def __init__(self):
+                self.stopped = False
+                self.jpg = self._encode(Image.new("RGB", (320, 180), (24, 54, 78)))
+
+            def frames_since(self, since_ts):
+                return [(virtual_audio.base + second, self.jpg)
+                        for second in range(virtual_audio.offset)
+                        if virtual_audio.base + second >= since_ts]
+
+            def stop(self):
+                self.stopped = True
+
+        virtual_audio, virtual_screen = VirtualAudio(), VirtualScreen()
+        def live_session(*args, **kwargs):
+            session = Session(*args, **kwargs)
+            session.manual.fire()
+            sessions.append(session)
+            return session
+
+        with patch.object(audio_module, "AudioCapture", return_value=virtual_audio), \
+             patch.object(screen_module, "ScreenCapture", VirtualScreen), \
+             patch.object(VirtualScreen, "__new__", return_value=virtual_screen), \
+             patch.object(VirtualScreen, "__init__", return_value=None), \
+             patch.object(pipeline_module, "Session", live_session), \
+             patch("builtins.input", side_effect=EOFError):
+            command("go", project, "--no-repo", "--device", "cpu")
+        live = sessions[2]
+        assert virtual_audio.stopped and virtual_screen.stopped
+        assert len(live.transcript) == len(SCRIPT)
+        assert (project / "meetingvar" / "minutes" / live.session_id / "minutes.md").exists()
         # Privacy control: no trigger means no audio or screen persistence.
         silent = Session("no_trigger", terms=[], echo=False, device="cpu")
         with patch.object(silent.asr, "transcribe_pcm16k", return_value=[]):
@@ -192,8 +251,10 @@ def run(output: Path) -> dict:
             "transcript_lines": len(transcript), "clips": len(clips),
             "layers": sorted(layers), "verified_jpeg_files": frame_count,
             "asr_windows": model.windows, "next_session_l2_threshold": threshold,
+            "go_session_id": live.session_id, "go_transcript_lines": len(live.transcript),
+            "go_clips": len(live.clips), "go_cleanup_verified": True,
             "archive": str(archive),
-            "simulated": ["FunASR model.generate", "screen source", "human review"],
+            "simulated": ["FunASR model.generate", "WASAPI source", "screen source", "human review"],
             "not_verified": ["real speech recognition accuracy", "WASAPI loopback", "GPU", "real LLM quality"],
         }
     (root / "simulation.log").write_text(log.getvalue(), encoding="utf-8")

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 
 from . import config
@@ -25,9 +26,17 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
         ).encode(),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.LLM_API_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read())
-    content = data["choices"][0]["message"]["content"]
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        content = data["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            return None
+    except (OSError, urllib.error.URLError, ValueError, KeyError, IndexError, TypeError) as exc:
+        # Optional enhancement must not prevent local evidence/report delivery.
+        # Do not log request headers, prompts, keys or server response bodies.
+        print(f"[llm] 请求不可用（{type(exc).__name__}），回落离线模板/规则层")
+        return None
     # Qwen3 等思考模型会输出 <think>…</think>；抽取类任务不需要，通用剥离
     import re
 

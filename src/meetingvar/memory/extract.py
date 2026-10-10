@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
+from .files import project_files
 
 # jieba 懒加载：llm_extract/纯结构化路径不依赖 jieba（CI model-free 环境无此包）；
 # 只有人名/拉丁抽取（_persons/_latin）真正用到，在函数内 import。
@@ -99,8 +100,7 @@ def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None) -> dic
     _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
     docs = [
         f.read_text(encoding="utf-8", errors="ignore")
-        for f in sorted(memory_dir.rglob("*"))
-        if f.suffix.lower() in {".md", ".txt"}
+        for f in project_files(memory_dir, {".md", ".txt"})
     ]
     terms: dict[str, set] = {}
     for doc in docs:
@@ -162,14 +162,14 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
 
     docs = "\n\n---\n\n".join(
         f"### {f.relative_to(memory_dir)}\n{f.read_text(encoding='utf-8', errors='ignore')}"
-        for f in sorted(memory_dir.rglob("*"))
-        if f.suffix.lower() in {".md", ".txt"}
+        for f in project_files(memory_dir, {".md", ".txt"})
     )
     if not docs.strip():
         return None
     # 小模型 JSON 输出不稳：/no_think 关思考、剥代码栅栏、失败重试一次
     prompt = _LLM_PROMPT.format(docs=docs) + "\n/no_think"
     raw = None
+    data = None
     for attempt in range(2):
         raw = chat(prompt)
         if raw is None:

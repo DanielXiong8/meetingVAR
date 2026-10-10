@@ -98,7 +98,6 @@ class Session:
             if len(seg["text"].strip()) < 2:
                 continue  # 噪声碎片（单字/空转写）不进证据流水
             fixed, fixes = correct(seg["text"], self.terms)
-            self.corrections.extend(fixes)
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
             # Overlapping ASR windows can repeat a sentence. Do not duplicate
             # that sentence (or its triggers); later occurrences remain valid.
@@ -106,6 +105,7 @@ class Session:
                    for old in reversed(self.transcript)
                    if old["ts"] >= start_ts - 0.5):
                 continue
+            self.corrections.extend(fixes)
             new_lines.append(line)
             self.transcript.append(line)
         self.transcript.sort(key=lambda line: line["ts"])
@@ -184,7 +184,11 @@ class Session:
 
     # ---- 收尾 ----
     def finish(self) -> dict:
-        self._flush(force=True)
+        try:
+            self._flush(force=True)
+        finally:
+            if self.hd is not None:
+                self.hd.stop()
         out = config.POOL_DIR / self.session_id / "transcript.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         # 零落盘纪律（审计 G1）：没有任何转写与片段时不创建任何文件
@@ -198,8 +202,6 @@ class Session:
             json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        if self.hd is not None:
-            self.hd.stop()
         hd_dir = str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None
         summary = {
             "session_id": self.session_id,
