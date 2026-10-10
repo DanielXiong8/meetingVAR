@@ -155,11 +155,21 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
 
     from ..llm import chat
 
-    docs = "\n\n---\n\n".join(
-        f"### {f.relative_to(memory_dir)}\n{f.read_text(encoding='utf-8', errors='ignore')}"
-        for f in sorted(memory_dir.rglob("*"))
-        if f.suffix.lower() in {".md", ".txt"}
-    )
+    # prompt 预算：小模型上下文有限（llama_cpp 默认 4k，建议 ≥32k 起服务）。
+    # 大仓库不设上限会把 prompt 顶到几万 token 直接 400——单文件留头部、总量封顶。
+    per_doc_chars, total_chars = 6000, 40000
+    parts: list[str] = []
+    total = 0
+    for f in sorted(memory_dir.rglob("*")):
+        if f.suffix.lower() not in {".md", ".txt"}:
+            continue
+        body = f.read_text(encoding="utf-8", errors="ignore")[:per_doc_chars]
+        part = f"### {f.relative_to(memory_dir)}\n{body}"
+        if total + len(part) > total_chars:
+            break
+        parts.append(part)
+        total += len(part)
+    docs = "\n\n---\n\n".join(parts)
     if not docs.strip():
         return None
     # 小模型 JSON 输出不稳：/no_think 关思考、剥代码栅栏、失败重试一次

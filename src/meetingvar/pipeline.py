@@ -127,8 +127,11 @@ class Session:
         # 触发时刻用会议时间轴（最后进音频的绝对时间戳），不用墙钟——
         # replay 模式下墙钟与模拟时间轴漂移，会造成 clip.at 失真（见 PR #13 review）
         trigger_ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
-        for term in self.monitor.check(joined, trigger_ts):
-            self._make_clip("L1", f"热词:{term}", trigger_ts)
+        # 同一转写块内命中的多个词合并为一次回看（evidence 记录全部命中词）：
+        # 各存一份会把同一个 300s 窗口重复保存 N 次——大词表下直接撑爆磁盘（test1 实测 752 片段）
+        fired = self.monitor.check(joined, trigger_ts)
+        if fired:
+            self._make_clip("L1", "热词:" + "+".join(fired), trigger_ts)
         if self.scorer:
             hit, score = self.scorer.check(joined)
             if hit:
