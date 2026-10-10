@@ -95,6 +95,8 @@ class Session:
         segs = self.asr.transcribe_pcm16k(pcm)
         new_lines = []
         for seg in segs:
+            if len(seg["text"].strip()) < 2:
+                continue  # 噪声碎片（单字/空转写）不进证据流水
             fixed, fixes = correct(seg["text"], self.terms)
             self.corrections.extend(fixes)
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
@@ -185,6 +187,12 @@ class Session:
         self._flush(force=True)
         out = config.POOL_DIR / self.session_id / "transcript.json"
         out.parent.mkdir(parents=True, exist_ok=True)
+        # 零落盘纪律（审计 G1）：没有任何转写与片段时不创建任何文件
+        if not self.transcript and not self.clips:
+            return {
+                "session_id": self.session_id, "lines": 0, "clips": 0,
+                "corrections": [], "transcript_json": None,
+            }
         transcript = [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
         out.write_text(
             json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
