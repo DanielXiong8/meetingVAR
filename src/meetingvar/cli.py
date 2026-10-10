@@ -196,7 +196,7 @@ def main() -> None:
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
-    rc.add_argument("--hd", action="store_true", help="命中后 30fps 高清补录 90s")
+    rc.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算，实测约 13-20fps）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 

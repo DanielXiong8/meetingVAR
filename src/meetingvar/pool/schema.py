@@ -33,7 +33,7 @@ class AudioRef:
 class ScreenRef:
     video_path: Optional[str] = None
     keyframes: list[str] = field(default_factory=list)
-    hd_clip_dir: Optional[str] = None  # 命中后 30fps 高清补录产物目录（hd_clip.mp4 所在）
+    hd_clip_dir: Optional[str] = None  # 命中后高帧率补录产物目录（hd_clip.mp4 所在；帧率/预算用量见该目录 meta.json）
 
 
 @dataclass
