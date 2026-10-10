@@ -129,6 +129,14 @@ class MvpSmokeTests(unittest.TestCase):
         self.assertEqual(_fmt_ts(0), "00:00:00")
         self.assertEqual(_fmt_ts(3723), "01:02:03")
 
+    def test_short_chinese_heading_is_a_valid_term(self) -> None:
+        from meetingvar.memory.extract import _structured
+
+        terms = {}
+        _structured("# 测序污染\n# 一\n# 术语表\n", terms)
+        self.assertIn("测序污染", terms)
+        self.assertNotIn("术语表", terms)
+
     def test_thin_minutes_has_overview_chapters_and_explicit_actions(self) -> None:
         transcript = [
             {"ts": 0.0, "speaker": "S1", "text": "今天讨论实验方案"},

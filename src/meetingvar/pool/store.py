@@ -27,6 +27,8 @@ class Pool:
         screens: list[tuple[float, bytes]] | None = None,
         explanation: str = "",
         hd_dir: str | None = None,
+        audio_start_ts: float | None = None,
+        audio_end_ts: float | None = None,
     ) -> str:
         clip_id = str(uuid.uuid4())
         clip_media = config.CLIPS_DIR / clip_id
@@ -50,8 +52,8 @@ class Pool:
             trigger=Trigger(layer=trigger_layer, evidence=evidence, explanation=explanation),
             audio=AudioRef(
                 path=str(wav_path).replace("\\", "/"),
-                start_ts=transcript_lines[0]["ts"] if transcript_lines else 0.0,
-                end_ts=transcript_lines[-1]["ts"] if transcript_lines else 0.0,
+                start_ts=audio_start_ts if audio_start_ts is not None else (transcript_lines[0]["ts"] if transcript_lines else 0.0),
+                end_ts=audio_end_ts if audio_end_ts is not None else (transcript_lines[-1]["ts"] if transcript_lines else 0.0),
             ),
             screen=ScreenRef(video_path=None, keyframes=keyframes, hd_clip_dir=hd_dir),
             transcript=[

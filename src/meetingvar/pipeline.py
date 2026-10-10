@@ -42,21 +42,30 @@ class Session:
         self.echo = echo
         self.hd = None  # 高清补录层（--hd 时由 cli 装配）
 
-        self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS * 10)
+        self._ring: deque[tuple[float, bytes]] = deque()
         self._pending: list[tuple[float, bytes]] = []
         self._last_flush_ts: float | None = None
         self._timeline_start_ts: float | None = None
+        self._processed_until: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
         self.corrections: list[tuple[str, str]] = []
 
     # ---- 音频进 ----
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
+        if not pcm:
+            return
+        if len(pcm) % 2:
+            raise ValueError("16-bit PCM 必须包含完整采样点")
         if self._timeline_start_ts is None:
             self._timeline_start_ts = start_ts
         step = len(pcm) / 2 / config.ASR_RATE
-        for i in range(0, len(pcm), config.ASR_RATE):  # 1s 一格，ring 粒度
-            self._ring.append((start_ts + i / config.ASR_RATE, pcm[i : i + config.ASR_RATE]))
+        bytes_per_second = 2 * config.ASR_RATE
+        for i in range(0, len(pcm), bytes_per_second):
+            self._ring.append((start_ts + i / bytes_per_second, pcm[i : i + bytes_per_second]))
+        cutoff = start_ts + step - config.RING_SECONDS
+        while self._ring and self._ring[0][0] + len(self._ring[0][1]) / bytes_per_second <= cutoff:
+            self._ring.popleft()
         self._pending.append((start_ts, pcm))
         self._last_flush_ts = start_ts + step
         span = self._last_flush_ts - self._pending[0][0]
@@ -70,18 +79,16 @@ class Session:
         start_ts = self._pending[0][0]
         pcm = b"".join(b for _, b in self._pending)
         span = len(pcm) / 2 / config.ASR_RATE
+        end_ts = start_ts + span
+        if self._processed_until is not None and end_ts <= self._processed_until:
+            self._pending = []
+            return
         if not force and span < config.CHUNK_SECONDS:
             return
         # 滑窗重叠：保留 CHUNK_OVERLAP_SECONDS 尾巴进下一块，防截句
         if not force:
-            tail = []
-            t_end = self._pending[-1][0] + len(self._pending[-1][1]) / 2 / config.ASR_RATE
-            for item in reversed(self._pending):
-                if t_end - item[0] <= config.CHUNK_OVERLAP_SECONDS:
-                    tail.insert(0, item)
-                else:
-                    break
-            self._pending = tail
+            tail_size = min(len(pcm), int(config.CHUNK_OVERLAP_SECONDS * 2 * config.ASR_RATE))
+            self._pending = [(end_ts - tail_size / 2 / config.ASR_RATE, pcm[-tail_size:])] if tail_size else []
         else:
             self._pending = []
 
@@ -91,8 +98,16 @@ class Session:
             fixed, fixes = correct(seg["text"], self.terms)
             self.corrections.extend(fixes)
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
+            # Overlapping ASR windows can repeat a sentence. Do not duplicate
+            # that sentence (or its triggers); later occurrences remain valid.
+            if any(abs(old["ts"] - line["ts"]) <= 0.5 and old["text"] == fixed
+                   for old in reversed(self.transcript)
+                   if old["ts"] >= start_ts - 0.5):
+                continue
             new_lines.append(line)
             self.transcript.append(line)
+        self.transcript.sort(key=lambda line: line["ts"])
+        self._processed_until = end_ts
         if self.echo and new_lines:
             last = new_lines[-1]
             print(f"  [{time.strftime('%H:%M:%S', time.localtime(last['ts']))}] {last['speaker']}: {last['text'][:80]}")
@@ -126,13 +141,25 @@ class Session:
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 90s 的 30fps 补录
         start_ts = trigger_ts - LOOKBACK_SECONDS
-        pcm = b"".join(b for t, b in list(self._ring) if start_ts <= t <= trigger_ts)
+        pieces = []
+        media_start = None
+        media_end = trigger_ts
+        for t, b in self._ring:
+            lo = max(0, round((start_ts - t) * config.ASR_RATE))
+            hi = min(len(b) // 2, round((trigger_ts - t) * config.ASR_RATE))
+            if hi > lo:
+                if media_start is None:
+                    media_start = t + lo / config.ASR_RATE
+                media_end = t + hi / config.ASR_RATE
+                pieces.append(b[lo * 2:hi * 2])
+        pcm = b"".join(pieces)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
         clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
         # 截屏 manifest 与 JSON 时间语义保持一致：一律会议相对秒
         screens = [
             (self._relative_ts(t), jpg)
             for t, jpg in (self.screen_capture.frames_since(start_ts) if self.screen_capture else [])
+            if t <= trigger_ts
         ]
         from .capture.audio import pcm_to_wav_bytes
 
@@ -140,6 +167,8 @@ class Session:
             trigger_layer=layer,
             evidence=evidence,
             audio_wav=pcm_to_wav_bytes(pcm),
+            audio_start_ts=self._relative_ts(media_start if media_start is not None else trigger_ts),
+            audio_end_ts=self._relative_ts(media_end),
             transcript_lines=clip_lines,
             screens=screens,
             hd_dir=str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None,

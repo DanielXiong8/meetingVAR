@@ -4,13 +4,13 @@
 """
 from __future__ import annotations
 
-import audioop
 import time
 import wave
 from pathlib import Path
 
 from . import config
 from .pipeline import Session
+from .capture.audio import to_pcm16k
 
 
 def wav_to_pcm16k(path: Path) -> bytes:
@@ -18,9 +18,10 @@ def wav_to_pcm16k(path: Path) -> bytes:
         rate = w.getframerate()
         channels = w.getnchannels()
         sampwidth = w.getsampwidth()
-        assert sampwidth == 2, f"仅支持 16bit wav，当前 {sampwidth*8}bit"
+        if sampwidth != 2:
+            raise ValueError(f"仅支持 16bit wav，当前 {sampwidth*8}bit")
         raw = w.readframes(w.getnframes())
-    mono, _ = audioop.ratecv(raw, 2, channels, rate, config.ASR_RATE, None)
+    mono, _ = to_pcm16k(raw, channels, rate)
     return mono
 
 

@@ -110,7 +110,8 @@ def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
         lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in chapter)
         lines.append("")
 
-    known = {w for w in (terms_hit or {})}
+    # A detected technical term is not evidence of a person's identity.
+    known = set()
     import json as _json
     persons_file = config.DATA_DIR / "persons.json"
     if persons_file.exists():

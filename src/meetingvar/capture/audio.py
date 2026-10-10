@@ -9,9 +9,16 @@ import threading
 import time
 from collections import deque
 
-import pyaudiowpatch as pyaudio
-
 from .. import config
+
+
+def to_pcm16k(raw: bytes, channels: int, rate: int, state=None):
+    """16-bit mono/stereo -> mono 16k, shared by replay and live capture."""
+    if channels == 2:
+        raw = audioop.tomono(raw, 2, 0.5, 0.5)
+    elif channels != 1:
+        raise ValueError(f"仅支持单声道或双声道音频，当前 {channels} 声道")
+    return audioop.ratecv(raw, 2, 1, rate, config.ASR_RATE, state)
 
 
 def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
@@ -19,6 +26,7 @@ def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
     并发试采所有环回端点，选 RMS 最大者；全静音则回落默认端点并提示。"""
     import audioop
     import threading
+    import pyaudiowpatch as pyaudio
 
     devs = list(pa.get_loopback_device_info_generator())
     if len(devs) <= 1:
@@ -63,6 +71,8 @@ def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
 
 class AudioCapture:
     def __init__(self, device_index: int | None = None, ring_seconds: int = config.RING_SECONDS, auto_pick: bool = True):
+        import pyaudiowpatch as pyaudio
+
         self._pa = pyaudio.PyAudio()
         if device_index is not None:
             self._dev = self._pa.get_device_info_by_index(device_index)
@@ -100,11 +110,9 @@ class AudioCapture:
             except OSError:
                 time.sleep(0.1)
                 continue
-            mono, self._state = audioop.ratecv(
-                raw, 2, self._channels, self._rate, config.ASR_RATE, self._state
-            )
+            mono, self._state = to_pcm16k(raw, self._channels, self._rate, self._state)
             with self._lock:
-                self._ring.append((time.time(), mono))
+                self._ring.append((time.time() - len(mono) / 2 / config.ASR_RATE, mono))
 
     def ingest_since(self, since_ts: float) -> tuple[bytes, float]:
         """取出自 since_ts 以来的全部音频，返回 (pcm, 起始绝对时间戳)。"""

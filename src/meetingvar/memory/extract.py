@@ -53,7 +53,7 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
         _add(terms, m.group(1), "结构化")
     for m in re.finditer(r"^#{1,4}\s*(.+?)\s*$", doc, re.M):  # 标题
         title = m.group(1)
-        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title or re.fullmatch(r"[一-鿿]{1,4}\d*", title):
+        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title or re.fullmatch(r"[一二三四五六七八九十百]+[、.．]?\d*", title):
             continue  # 日期标题/带括号/含空格的叙述性标题不是词条
         if not re.fullmatch(r"(?:实验记录|组会纪要|术语表|README|文献笔记|会议纪要)(?:\s*·.*)?", title):
             _add(terms, title, "结构化")
