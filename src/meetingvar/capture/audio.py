@@ -127,16 +127,3 @@ class AudioCapture:
             self._stream.close()
         finally:
             self._pa.terminate()
-
-
-def pcm_to_wav_bytes(pcm: bytes, rate: int = config.ASR_RATE) -> bytes:
-    import io
-    import wave
-
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(pcm)
-    return buf.getvalue()

@@ -13,13 +13,33 @@ from __future__ import annotations
 import difflib
 import re
 
-from pypinyin import lazy_pinyin
+# pypinyin 懒加载：无该依赖的环境（CI model-free、最小安装）仍可跑完整转写管线，
+# 术语纠错降级为恒等变换（不阻塞转写/监听/证据），并提示一次。
+_lazy_pinyin = None   # None=未探测；False=不可用；callable=可用
+_warned = False
+
+
+def _get_pinyin():
+    """返回 lazy_pinyin 可调用对象；环境缺依赖时返回 None（只提示一次）。"""
+    global _lazy_pinyin, _warned
+    if _lazy_pinyin is None:
+        try:
+            from pypinyin import lazy_pinyin
+        except ImportError:
+            if not _warned:
+                print("[correct] 未安装 pypinyin：术语纠错已跳过（转写与证据流水不受影响）")
+                _warned = True
+            _lazy_pinyin = False
+        else:
+            _lazy_pinyin = lazy_pinyin
+    return _lazy_pinyin or None
 
 _CN_NUM = {"零": "0", "一": "1", "二": "2", "两": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
 
 
 def _pinyin_key(word: str) -> str:
-    return "".join(lazy_pinyin(word))
+    pinyin = _get_pinyin()
+    return "".join(pinyin(word)) if pinyin else ""
 
 
 def _latin_tokens(text: str) -> list[str]:
@@ -29,6 +49,9 @@ def _latin_tokens(text: str) -> list[str]:
 def correct(text: str, terms: list[str]) -> tuple[str, list[tuple[str, str]]]:
     fixes: list[tuple[str, str]] = []
     out = text
+    pinyin = _get_pinyin()
+    if pinyin is None or not terms:
+        return out, fixes  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
 
     # a) 中文术语：汉字滑窗 + 首尾音节锚定 + 字符重合
     #    （difflib 分块匹配算不出 0.84 的编辑相似度，改用可解释判定：
@@ -36,14 +59,14 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[tuple[str, str]]]:
     for term in terms:
         if re.fullmatch(r"[A-Za-z0-9\s\-]+", term) or len(term) < 4:
             continue
-        py_term = lazy_pinyin(term)
+        py_term = pinyin(term)
         for run in set(re.findall(r"[\u4e00-\u9fff]{2,}", out)):
             if term in run:
                 continue
             for L in range(len(term) - 1, len(term) + 2):
                 for i in range(0, len(run) - L + 1):
                     seg = run[i : i + L]
-                    py_seg = lazy_pinyin(seg)
+                    py_seg = pinyin(seg)
                     if not py_seg or not py_term:
                         continue
                     head_ok = py_seg[0] == py_term[0]

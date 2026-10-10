@@ -133,15 +133,19 @@ def cmd_go(args) -> None:
     print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
 
     # 项目归档：纪要自动进 <项目>/meetingvar/minutes/，供跨会话热词库演化
-    try:
-        from .memory.project_store import archive_report, project_dir
+    # 零命中会话（零落盘）没有可归档内容——直接告知，不制造空纪要。
+    if summary.get("transcript_json"):
+        try:
+            from .memory.project_store import archive_report, project_dir
 
-        digest_(session_id, use_llm=False)  # 结构化版先落盘（LLM 版用户手动 digest --llm）
-        archive_report(project, session_id)
-        print(f"[go] 纪要已归档至 {project_dir(project) / 'minutes' / session_id}")
-    except Exception as e:  # noqa: BLE001 — 归档失败不阻塞主流程
-        print(f"[go] 归档跳过：{e}")
-    print(f"[next] meetingvar digest --session {session_id} --llm  （重出叙述版会覆盖归档）")
+            digest_(session_id, use_llm=False)  # 结构化版先落盘（LLM 版用户手动 digest --llm）
+            archive_report(project, session_id)
+            print(f"[go] 纪要已归档至 {project_dir(project) / 'minutes' / session_id}")
+        except Exception as e:  # noqa: BLE001 — 归档失败不阻塞主流程
+            print(f"[go] 归档跳过：{e}")
+        print(f"[next] meetingvar digest --session {session_id} --llm  （重出叙述版会覆盖归档）")
+    else:
+        print("[go] 本场零命中：按零落盘策略，全程内容已随会话结束丢弃（磁盘上没有留下任何会议记录）")
 
 
 def register(sub) -> None:
