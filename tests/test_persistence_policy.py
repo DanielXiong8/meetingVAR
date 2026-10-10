@@ -201,6 +201,35 @@ class PersistencePolicyTests(unittest.TestCase):
             ],
         )
 
+    def test_transcribe_mode_is_explicit_opt_in(self) -> None:
+        """transcribe 显式导出：用户点名要转写才有这一份 txt；产物目录纪律不受影响。"""
+        import wave as wavemod
+
+        from _fakes import install_fake_asr, marker_pcm
+        from meetingvar.replay import replay
+
+        install_fake_asr(pipeline_mod, FakeASR(default=SENT_PLAIN))
+        wav = self.tmp / "in.wav"
+        with wavemod.open(str(wav), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(marker_pcm(20))
+        out = self.tmp / "out" / "transcript.txt"
+        fake = FakeASR(default=SENT_PLAIN)
+        replay(wav, "tx_explicit", terms=["量子纠缠"], focus_docs=None, device="cpu",
+               transcript_out=out)
+        self.assertTrue(out.exists() and out.stat().st_size > 0, "显式导出必须写出转写 txt")
+        body = out.read_text(encoding="utf-8")
+        self.assertIn("我们先过一遍昨天的实验数据", body)
+        self.assertLessEqual(snapshot_data(self.tmp / "pool"), set() | snapshot_data(self.tmp / "pool"))
+        # 产物目录仍然零新增（无命中 → 只有显式导出这份 txt，pool/clips 不出现）
+        created = {c for c in snapshot_data(self.tmp) if c.startswith(("pool", "clips"))}
+        self.assertEqual(created, set(), f"transcribe 模式不得顺手产生池产物: {created}")
+
+        # 默认（不传 transcript_out）依旧零落盘
+        out2 = self.tmp / "should_not_exist.txt"
+        replay(wav, "tx_default", terms=["量子纠缠"], focus_docs=None, device="cpu")
+        self.assertFalse(out2.exists())
+
     def test_no_hit_session_digest_is_noop_not_crash(self) -> None:
         """未命中会话（零产物）上跑 digest：应优雅提示"无内容可出"，不得崩栈。"""
         fake = FakeASR(default=SENT_PLAIN)

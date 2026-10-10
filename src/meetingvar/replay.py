@@ -24,7 +24,27 @@ def wav_to_pcm16k(path: Path) -> bytes:
     return mono
 
 
-def replay(wav_path: Path, session_id: str, terms: list[str], focus_docs: list[str] | None, device: str = "cuda") -> dict:
+def _fmt_hms(sec: float) -> str:
+    total = max(0, int(sec))
+    h, rest = divmod(total, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def replay(
+    wav_path: Path,
+    session_id: str,
+    terms: list[str],
+    focus_docs: list[str] | None,
+    device: str = "cuda",
+    transcript_out: Path | None = None,
+) -> dict:
+    """回放 wav 走全管线。
+
+    transcript_out：显式转写导出路径（transcribe 模式）。默认 None——
+    开会/回放的零落盘承诺不变（未命中连草稿转写都不落盘）；
+    用户点名要转写文件时才写这一份，且不影响片段池的 G1a/G1b/G1c 纪律。
+    """
     pcm = wav_to_pcm16k(wav_path)
     duration = len(pcm) / 2 / config.ASR_RATE
     print(f"[replay] {wav_path} | {duration:.0f}s @16k mono")
@@ -42,4 +62,11 @@ def replay(wav_path: Path, session_id: str, terms: list[str], focus_docs: list[s
     print(f"[done] 转写 {summary['lines']} 句 | 片段 {summary['clips']} 个 | 纠错 {len(summary['corrections'])} 处")
     if summary["corrections"]:
         print("[corrections]", summary["corrections"][:10])
+
+    if transcript_out is not None:
+        lines = session.relative_transcript()
+        text = "\n".join(f"[{_fmt_hms(l['ts'])}] {l['speaker']}: {l['text']}" for l in lines)
+        transcript_out.parent.mkdir(parents=True, exist_ok=True)
+        transcript_out.write_text(text + ("\n" if text else ""), encoding="utf-8")
+        print(f"[transcribe] 全场转写已显式保存: {transcript_out}（{len(lines)} 句）")
     return summary

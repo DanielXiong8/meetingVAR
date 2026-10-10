@@ -63,6 +63,24 @@ def cmd_replay(args) -> None:
     print(f"[next] meetingvar digest --session {session_id}")
 
 
+def cmd_transcribe(args) -> None:
+    """转写模式：全场转写显式保存为 txt（用户点名要的落盘；开会模式零落盘默认不变）。"""
+    from .replay import replay
+
+    terms = resolve_terms(args)
+    focus = load_memory_docs(Path(args.memory)) if args.memory else None
+    session_id = f"transcribe_{int(time.time())}"
+    out = Path(args.out) if args.out else None
+    if out is None:
+        raise SystemExit("[transcribe] 必须给 --out <转写txt路径>（这是转写模式与 replay 的唯一区别）")
+    summary = replay(
+        Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out
+    )
+    print(f"[done] 转写 {summary['lines']} 句 / 纠错 {len(summary['corrections'])} 处 -> {out}")
+    if summary["clips"]:
+        print(f"[next] meetingvar digest --session {session_id}  （命中片段纪要）")
+
+
 def cmd_record(args) -> None:
     from .capture.audio import AudioCapture
     from .capture.screen import ScreenCapture
@@ -192,6 +210,13 @@ def main() -> None:
     rp.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     rp.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 
+    tr = sub.add_parser("transcribe", help="转写模式：跑全管线并把全场转写显式存为 txt（--out 必填）")
+    tr.add_argument("--wav", required=True)
+    tr.add_argument("--out", required=True, help="全场转写输出 txt（[时:分:秒] 说话人: 文本 每行一句）")
+    tr.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
+    tr.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
+    tr.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+
     rc = sub.add_parser("record", help="实时采集（系统声音）")
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
@@ -222,7 +247,7 @@ def main() -> None:
     register_go(sub)
 
     args = ap.parse_args()
-    {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
+    {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
      "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
 
 

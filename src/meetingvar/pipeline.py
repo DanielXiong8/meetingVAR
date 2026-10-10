@@ -148,6 +148,10 @@ class Session:
         base = self._timeline_start_ts if self._timeline_start_ts is not None else ts
         return max(0.0, ts - base)
 
+    def relative_transcript(self) -> list[dict]:
+        """全场转写的会议相对秒视图（内存态，供 transcribe 显式导出；默认模式不落盘）。"""
+        return [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
+
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 ≤90s 预算内高帧率补录（帧缩至 1280 宽）
