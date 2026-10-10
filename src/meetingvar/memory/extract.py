@@ -190,6 +190,13 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
         if isinstance(t, str) and 2 <= len(t) <= 20:
             terms.setdefault(t.strip(), []).append("LLM")
     persons = [p for p in data.get("persons", []) if isinstance(p, dict) and p.get("name")]
+    try:
+        from .. import config
+        persons_file = Path(config.DATA_DIR / "persons.json")
+        persons_file.parent.mkdir(parents=True, exist_ok=True)
+        persons_file.write_text(json.dumps(persons, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
     for p in persons:
         terms.setdefault(str(p["name"]).strip(), []).append(f"LLM人名({p.get('role', '?')})")
     if data.get("focus"):

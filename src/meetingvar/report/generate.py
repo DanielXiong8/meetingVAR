@@ -56,14 +56,27 @@ _ACTION_RE = re.compile(
 )
 
 
-def _extract_action_items(transcript: list[dict]) -> list[dict]:
+_NAME_RE = re.compile(r"[A-Z][a-z]{1,6}|[一-鿿]{2,3}(?=在|负责|要|需|来|去|先|再)")
+
+
+def _extract_action_items(transcript: list[dict], known_names: set[str] | None = None) -> list[dict]:
     """只提取带明显行动语义的原句，避免离线模板凭空生成任务。
 
-    v2（PR #14）：扩充动词组与时间线索（"排查脚本本周跑完""对一遍""先查…""下周汇报"）。
-    已知局限：无法区分过去/未来（"然后看了结果"会误入候选）——本清单定位是
-    供人工确认的**候选**，不是最终任务；v3 若接 LLM 由系统二判别时态。
+    v2（PR #14）：扩充动词组与时间线索。
+    v3（借鉴飞书待办提取）：行动句中出现已知人名（来自项目记忆 persons 名单）
+    时挂 @归属，供任务分派视图使用。
     """
-    return [line for line in transcript if _ACTION_RE.search(str(line.get("text", "")))]
+    out = []
+    for line in transcript:
+        if not _ACTION_RE.search(str(line.get("text", ""))):
+            continue
+        item = dict(line)
+        if known_names:
+            hits = sorted(n for n in known_names if n and n in str(line.get("text", "")))
+            if hits:
+                item["assignee"] = hits
+        out.append(item)
+    return out
 
 
 def _llm_chat(prompt: str) -> str | None:
@@ -97,10 +110,20 @@ def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
         lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in chapter)
         lines.append("")
 
-    actions = _extract_action_items(transcript)
+    known = {w for w in (terms_hit or {})}
+    import json as _json
+    persons_file = config.DATA_DIR / "persons.json"
+    if persons_file.exists():
+        try:
+            known |= {p.get("name", "") for p in _json.loads(persons_file.read_text(encoding="utf-8"))}
+        except Exception:
+            pass
+    actions = _extract_action_items(transcript, known_names=known)
     lines.append("## 明确行动项")
     if actions:
-        lines.extend(f"- [ ] [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in actions)
+        for x in actions:
+            tag = " @" + "/".join(x["assignee"]) if x.get("assignee") else ""
+            lines.append(f"- [ ]{tag} [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}")
     else:
         lines.append("（转写中未发现带明确行动语义的句子）")
     return "\n".join(lines)
