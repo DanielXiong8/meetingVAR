@@ -1,6 +1,7 @@
 """F1 可追溯性测试：定位替换 / 同形多处 / 连续改写 / 整行原文精确恢复 / termset_id。"""
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 import tempfile
@@ -20,6 +21,14 @@ from meetingvar.transcribe.correct import correct  # noqa: E402
 T0 = 5_000_000.0
 
 
+def _has_pypinyin() -> bool:
+    try:
+        return importlib.util.find_spec("pypinyin") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@unittest.skipUnless(_has_pypinyin(), "无 pypinyin：纠错恒等返回，守卫语义测试不适用")
 class LocateReplaceTests(unittest.TestCase):
     """correct() 的定位替换语义（F1：record 与具体出现位置一一对应）。"""
 
@@ -70,6 +79,7 @@ class RewriteTraceTests(unittest.TestCase):
         install_fake_asr(pipeline_mod, FakeASR(default=segments))
         return Session(sid, terms=terms, focus_docs=None, device="cpu", echo=False)
 
+    @unittest.skipUnless(_has_pypinyin(), '无 pypinyin：无改写记录可断言')
     def test_records_carry_ts_and_termset_id(self) -> None:
         s = self._session("trace_a", terms=["测序污染"],
                           segments=[(1.0, 3.0, "spk0", "这个测试污染很严重")])
@@ -80,6 +90,7 @@ class RewriteTraceTests(unittest.TestCase):
         self.assertEqual(r["termset_id"], s.termset_id)
         self.assertTrue(r["termset_id"])  # 纠错词表非空 → 哈希非空（不伪造未知）
 
+    @unittest.skipUnless(_has_pypinyin(), '无 pypinyin：无改写记录可断言')
     def test_line_snapshot_restores_original_exactly(self) -> None:
         """整行快照恢复：text 换回 orig_text 必须逐字符等于原始 ASR 文本（含未改部分）。"""
         orig = "这个测试污染和那个测试污染都很重要"  # 同形两处，只改第一处
@@ -92,6 +103,7 @@ class RewriteTraceTests(unittest.TestCase):
         restored = entry["text"].replace(entry["records"][0]["dst"], entry["records"][0]["src"], 1)
         self.assertEqual(restored, orig, "逆序撤销（替换回唯一被改片段）必须精确恢复原文")
 
+    @unittest.skipUnless(_has_pypinyin(), '无 pypinyin：无改写记录可断言')
     def test_transcript_json_carries_rewrites(self) -> None:
         s = self._session("trace_c", terms=["测序污染"],
                           segments=[(1.0, 3.0, "spk0", "这个测试污染很严重"),
@@ -112,6 +124,7 @@ class RewriteTraceTests(unittest.TestCase):
         self.assertNotEqual(s1.termset_id, s3.termset_id)
         self.assertEqual(len(s1.termset_id), 12)
 
+    @unittest.skipUnless(_has_pypinyin(), '无 pypinyin：无改写记录可断言')
     def test_transcribe_export_writes_rewrites_json(self) -> None:
         from meetingvar.replay import replay
 
