@@ -15,21 +15,40 @@ from . import config
 def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | None:
     if not (config.LLM_BASE_URL and config.LLM_MODEL):
         return None
+    try:
+        max_tokens = int(config.LLM_MAX_TOKENS)
+        if max_tokens <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        print("[llm] 输出上限配置无效，回落离线模板/规则层")
+        return None
+    body = {
+        "model": config.LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if config.LLM_THINKING:
+        if config.LLM_THINKING not in ("enabled", "disabled"):
+            print("[llm] 思考模式配置无效，回落离线模板/规则层")
+            return None
+        body["thinking"] = {"type": config.LLM_THINKING}
     req = urllib.request.Request(
         config.LLM_BASE_URL.rstrip("/") + "/chat/completions",
-        data=json.dumps(
-            {
-                "model": config.LLM_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-            }
-        ).encode(),
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.LLM_API_KEY}"},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        if not isinstance(choice, dict):
+            return None
+        # A capped response must not be presented as complete meeting minutes.
+        if choice.get("finish_reason") == "length":
+            print("[llm] 输出达到上限，回落离线模板/规则层")
+            return None
+        content = choice["message"]["content"]
         if not isinstance(content, str):
             return None
     except (OSError, urllib.error.URLError, ValueError, KeyError, IndexError, TypeError) as exc:
@@ -40,4 +59,4 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     # Qwen3 等思考模型会输出 <think>…</think>；抽取类任务不需要，通用剥离
     import re
 
-    return re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip() or None
