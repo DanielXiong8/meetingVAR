@@ -6,6 +6,7 @@ live（AudioCapture 喂流）与 replay（wav 回放喂流）共用同一套逻�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections import deque
@@ -55,7 +56,16 @@ class Session:
         self._timeline_start_ts: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
-        self.corrections: list[tuple[str, str]] = []
+        # 每条纠错记录 = {src,dst,status,reason,rule_id,ts,termset_id}（correct() 产出、此处补 ts/termset_id）
+        self.corrections: list[dict] = []
+        # 整行原文快照（F1 恢复机制）：纠错发生过的行，逐行记录改写前后全文，
+        # 恢复 = 把 text 换回 orig_text（精确），不依赖片段逆替换。局限：行级粒度、随会话内存态。
+        self.rewrite_log: list[dict] = []
+        # 纠错词表版本标识 = 纠错词表排序去重后的 sha256 前 12 位（内容寻址，可复算）
+        joined_terms = "\n".join(sorted(set(self.correction_terms)))
+        self.termset_id = (
+            hashlib.sha256(joined_terms.encode("utf-8")).hexdigest()[:12] if self.correction_terms else ""
+        )
 
     # ---- 音频进 ----
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
@@ -118,8 +128,18 @@ class Session:
                 # 该过滤同时影响触发判断与证据/报告——边界语义固化在
                 # tests/test_short_sentence_filter.py
                 continue
-            fixed, fixes = correct(seg["text"], self.correction_terms)
-            self.corrections.extend(fixes)
+            orig_text = seg["text"]
+            fixed, fixes = correct(orig_text, self.correction_terms)
+            if fixes:
+                line_ts = start_ts + seg["start"]
+                for r in fixes:
+                    r["ts"] = line_ts
+                    r["termset_id"] = self.termset_id
+                self.corrections.extend(fixes)
+                self.rewrite_log.append({
+                    "ts": line_ts, "orig_text": orig_text, "text": fixed,
+                    "termset_id": self.termset_id, "records": fixes,
+                })
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
             new_lines.append(line)
             self.transcript.append(line)
@@ -215,7 +235,11 @@ class Session:
         out.parent.mkdir(parents=True, exist_ok=True)
         transcript = [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
         out.write_text(
-            json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {"session_id": self.session_id, "transcript": transcript, "clips": self.clips,
+                 "rewrites": self.rewrite_log},
+                ensure_ascii=False, indent=2,
+            ),
             encoding="utf-8",
         )
         if self.hd is not None:
@@ -226,6 +250,7 @@ class Session:
             "lines": len(transcript),
             "clips": len(self.clips),
             "corrections": self.corrections,
+            "rewrite_count": len(self.rewrite_log),
             "transcript_json": str(out),
             "hd_dir": hd_dir,
         }

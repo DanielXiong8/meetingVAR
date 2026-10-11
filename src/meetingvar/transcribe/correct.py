@@ -51,14 +51,22 @@ def _latin_tokens(text: str) -> list[str]:
 def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
     """确定性改写（三状态，宁漏勿误——2026-10-11 外部裁决 v1）。
 
-    返回 (改写后文本, records)。record = {src, dst, status, reason}：
+    返回 (改写后文本, records)。record 字段：
+      src/dst/status/reason/rule_id —— 本函数产出；
+      ts/termset_id —— 本函数置 None（不可靠获取即显式未知），
+                       由会话层（pipeline）用行时间戳与词表内容哈希覆盖。
       accepted        证据充分，文本已替换；
       review_required 证据不足/触发守卫，文本保持原文，候选入待审队列
                       （撤销/确认时恢复原文片段，不得反向再跑纠错器）。
+      rule_id: zh_same_len / zh_len_diff / latin_accept / latin_gray_zone / latin_common_source
 
     分级判据（B 组 7457 处误改的对策）：
       中文：等长近音（首尾音节锚定+重合≥0.5）→ accepted；长度差 ±1 → review；
       拉丁：ratio ≥0.75 且原词非常用词 → accepted；0.6–0.75 或原词常用 → review。
+
+    定位替换（F1）：中文改写只在命中的汉字连续段内替换**该处一次**，
+    不再用 str.replace 全局替换——同段多处同形词只改第一处（宁漏勿误），
+    record 与具体出现位置一一对应。等长替换不移动后续位置，遍历安全。
     """
     records: list[dict] = []
     out = text
@@ -66,8 +74,11 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
     if pinyin is None or not terms:
         return out, records  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
 
-    def _rec(src: str, dst: str, status: str, reason: str) -> None:
-        records.append({"src": src, "dst": dst, "status": status, "reason": reason})
+    def _rec(src: str, dst: str, status: str, reason: str, rule_id: str) -> None:
+        records.append({
+            "src": src, "dst": dst, "status": status, "reason": reason,
+            "rule_id": rule_id, "ts": None, "termset_id": None,
+        })
 
     # a) 中文术语：汉字滑窗 + 首尾音节锚定 + 字符重合
     #    （difflib 分块匹配算不出 0.84 的编辑相似度，改用可解释判定：
@@ -76,9 +87,11 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
         if re.fullmatch(r"[A-Za-z0-9\s\-]+", term) or len(term) < 4:
             continue
         py_term = pinyin(term)
-        for run in set(re.findall(r"[\u4e00-\u9fff]{2,}", out)):
+        for m in re.finditer(r"[\u4e00-\u9fff]{2,}", out):
+            run = m.group(0)
             if term in run:
                 continue
+            hit = None  # (段内偏移, 原词, 长度)
             for L in range(len(term) - 1, len(term) + 2):
                 for i in range(0, len(run) - L + 1):
                     seg = run[i : i + L]
@@ -91,12 +104,18 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
                         continue
                     overlap = difflib.SequenceMatcher(None, seg, term).ratio()
                     if overlap >= 0.5 and seg != term:
-                        if L == len(term):
-                            out = out.replace(seg, term)
-                            _rec(seg, term, "accepted", "中文等长近音（锚定+重合）")
-                        else:
-                            _rec(seg, term, "review_required", "中文近音但长度差 ±1，宁漏勿误")
+                        hit = (i, seg, L)
                         break
+                if hit:
+                    break
+            if hit:
+                i, seg, L = hit
+                if L == len(term):
+                    pos = m.start() + i
+                    out = out[:pos] + term + out[pos + L:]  # 等长：不移动后续偏移
+                    _rec(seg, term, "accepted", "中文等长近音（锚定+重合）", "zh_same_len")
+                else:
+                    _rec(seg, term, "review_required", "中文近音但长度差 ±1，宁漏勿误", "zh_len_diff")
 
     # b) 拉丁术语：去数字 difflib + 尾随汉字数字转阿拉伯
     for term in terms:
@@ -113,10 +132,10 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
             if ratio < 0.6 or abs(len(tok_core) - len(term_core)) > 3:
                 continue
             if tok_core in EN_COMMON:
-                _rec(tok, term, "review_required", "原词为常用英文词（常见词互换是 B 组改写链根源）")
+                _rec(tok, term, "review_required", "原词为常用英文词（常见词互换是 B 组改写链根源）", "latin_common_source")
                 break
             if ratio < 0.75:
-                _rec(tok, term, "review_required", f"拉丁相似度 {ratio:.2f} 处于灰区（0.6–0.75）")
+                _rec(tok, term, "review_required", f"拉丁相似度 {ratio:.2f} 处于灰区（0.6–0.75）", "latin_gray_zone")
                 break
             tail_num = ""
             m = re.search(re.escape(tok) + r"([零一二两三四五六七八九]+)", out)
@@ -124,7 +143,7 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
                 tail_num = "".join(_CN_NUM.get(ch, "") for ch in m.group(1))
             replacement = term if not re.search(r"[0-9]", term) else re.sub(r"[0-9]+$", "", term) + tail_num
             out = re.sub(re.escape(tok) + r"[零一二两三四五六七八九]*", replacement, out, count=1)
-            _rec(tok, replacement, "accepted", f"拉丁高相似 {ratio:.2f}")
+            _rec(tok, replacement, "accepted", f"拉丁高相似 {ratio:.2f}", "latin_accept")
             break
 
     return out, records

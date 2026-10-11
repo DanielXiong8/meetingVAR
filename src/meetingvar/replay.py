@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import audioop
+import json
 import time
 import wave
 from pathlib import Path
@@ -71,4 +72,11 @@ def replay(
         transcript_out.parent.mkdir(parents=True, exist_ok=True)
         transcript_out.write_text(text + ("\n" if text else ""), encoding="utf-8")
         print(f"[transcribe] 全场转写已显式保存: {transcript_out}（{len(lines)} 句）")
+        if session.rewrite_log:
+            # 改写与恢复记录随显式导出落盘（显式转写附带的可追溯性清单：原文快照+逐条记录）
+            rw = transcript_out.with_name(transcript_out.stem + ".rewrites.json")
+            rw.write_text(
+                json.dumps(session.rewrite_log, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"[transcribe] 改写记录（含原文快照）: {rw}（{len(session.rewrite_log)} 行）")
     return summary

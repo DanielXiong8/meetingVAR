@@ -116,8 +116,15 @@ class CorrectGuardTests(unittest.TestCase):
         self.assertIn("常用", recs[0]["reason"])
 
     def test_record_shape(self) -> None:
+        """记录七字段：会话层补 ts/termset_id 之前，这两个显式为 None（不伪造）。"""
         _, recs = self.correct("基因学习很重要", ["机器学习"])
-        self.assertEqual(set(recs[0]), {"src", "dst", "status", "reason"})
+        self.assertEqual(
+            set(recs[0]),
+            {"src", "dst", "status", "reason", "rule_id", "ts", "termset_id"},
+        )
+        self.assertIsNone(recs[0]["ts"])
+        self.assertIsNone(recs[0]["termset_id"])
+        self.assertEqual(recs[0]["rule_id"], "zh_same_len")
 
 
 if __name__ == "__main__":
