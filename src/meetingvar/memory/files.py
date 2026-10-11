@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 SKIP_DIRS = {".git", ".venv", "venv", ".tools", ".runtimes", "node_modules",
-             "__pycache__", "dist", "build", ".zcode"}
+             "__pycache__", "dist", "build", ".zcode", ".secrets"}
 
 
 def project_files(root: Path, suffixes: set[str]):

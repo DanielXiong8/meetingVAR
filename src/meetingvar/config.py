@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from .env import load_local_env
+
+load_local_env()
 
 # ---- 模型 ----
 MODELS_ROOT = Path(os.environ.get("MEETINGVAR_MODELS", "D:/env/models"))

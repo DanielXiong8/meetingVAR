@@ -111,6 +111,10 @@ digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
 LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
 未配置时输出结构化模板版并如实标注〔模板版〕。
 
+也可以在仓库根目录填写本机 `.env`（空模板见 `.env.example`），启动时自动读取，进程环境变量优先。
+明文 `.env` 与 `.secrets/` 密钥不入库；向协作者分享时使用认证加密密文，操作见
+[加密配置分享说明](docs/encrypted_env.md)。
+
 L2 反馈校准（显式 opt-in）：会后评审时加 `--project <项目目录>`，系统只采纳已评价的 L2 片段，
 把有用样本小幅降低、不相关样本提高该项目的相似度阈值，并将样本与当前阈值保存到
 `<项目目录>/meetingvar/calibration.json`。下一次 `go <项目目录>` 或 `record/replay --memory <项目目录>`

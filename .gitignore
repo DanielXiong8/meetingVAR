@@ -24,6 +24,9 @@ venv/
 .tools/
 .runtimes/
 .env
+.env.*
+!.env.example
+.secrets/
 .pytest_cache/
 
 # ===== IDE / 系统 =====
