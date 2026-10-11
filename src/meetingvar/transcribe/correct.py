@@ -13,6 +13,8 @@ from __future__ import annotations
 import difflib
 import re
 
+from ..memory.govern import EN_COMMON
+
 # pypinyin 懒加载：无该依赖的环境（CI model-free、最小安装）仍可跑完整转写管线，
 # 术语纠错降级为恒等变换（不阻塞转写/监听/证据），并提示一次。
 _lazy_pinyin = None   # None=未探测；False=不可用；callable=可用
@@ -46,12 +48,26 @@ def _latin_tokens(text: str) -> list[str]:
     return re.findall(r"[A-Za-z][A-Za-z\-]{1,}", text)
 
 
-def correct(text: str, terms: list[str]) -> tuple[str, list[tuple[str, str]]]:
-    fixes: list[tuple[str, str]] = []
+def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
+    """确定性改写（三状态，宁漏勿误——2026-10-11 外部裁决 v1）。
+
+    返回 (改写后文本, records)。record = {src, dst, status, reason}：
+      accepted        证据充分，文本已替换；
+      review_required 证据不足/触发守卫，文本保持原文，候选入待审队列
+                      （撤销/确认时恢复原文片段，不得反向再跑纠错器）。
+
+    分级判据（B 组 7457 处误改的对策）：
+      中文：等长近音（首尾音节锚定+重合≥0.5）→ accepted；长度差 ±1 → review；
+      拉丁：ratio ≥0.75 且原词非常用词 → accepted；0.6–0.75 或原词常用 → review。
+    """
+    records: list[dict] = []
     out = text
     pinyin = _get_pinyin()
     if pinyin is None or not terms:
-        return out, fixes  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
+        return out, records  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
+
+    def _rec(src: str, dst: str, status: str, reason: str) -> None:
+        records.append({"src": src, "dst": dst, "status": status, "reason": reason})
 
     # a) 中文术语：汉字滑窗 + 首尾音节锚定 + 字符重合
     #    （difflib 分块匹配算不出 0.84 的编辑相似度，改用可解释判定：
@@ -75,8 +91,11 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[tuple[str, str]]]:
                         continue
                     overlap = difflib.SequenceMatcher(None, seg, term).ratio()
                     if overlap >= 0.5 and seg != term:
-                        out = out.replace(seg, term)
-                        fixes.append((seg, term))
+                        if L == len(term):
+                            out = out.replace(seg, term)
+                            _rec(seg, term, "accepted", "中文等长近音（锚定+重合）")
+                        else:
+                            _rec(seg, term, "review_required", "中文近音但长度差 ±1，宁漏勿误")
                         break
 
     # b) 拉丁术语：去数字 difflib + 尾随汉字数字转阿拉伯
@@ -90,14 +109,22 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[tuple[str, str]]]:
             continue
         for tok in sorted(set(_latin_tokens(out)), key=len, reverse=True):
             tok_core = re.sub(r"[0-9]+", "", tok).lower()
-            if difflib.SequenceMatcher(None, tok_core, term_core).ratio() >= 0.6 and abs(len(tok_core) - len(term_core)) <= 3:
-                tail_num = ""
-                m = re.search(re.escape(tok) + r"([零一二两三四五六七八九]+)", out)
-                if m and re.search(r"[0-9]", term):
-                    tail_num = "".join(_CN_NUM.get(ch, "") for ch in m.group(1))
-                replacement = term if not re.search(r"[0-9]", term) else re.sub(r"[0-9]+$", "", term) + tail_num
-                out = re.sub(re.escape(tok) + r"[零一二两三四五六七八九]*", replacement, out, count=1)
-                fixes.append((tok, replacement))
+            ratio = difflib.SequenceMatcher(None, tok_core, term_core).ratio()
+            if ratio < 0.6 or abs(len(tok_core) - len(term_core)) > 3:
+                continue
+            if tok_core in EN_COMMON:
+                _rec(tok, term, "review_required", "原词为常用英文词（常见词互换是 B 组改写链根源）")
                 break
+            if ratio < 0.75:
+                _rec(tok, term, "review_required", f"拉丁相似度 {ratio:.2f} 处于灰区（0.6–0.75）")
+                break
+            tail_num = ""
+            m = re.search(re.escape(tok) + r"([零一二两三四五六七八九]+)", out)
+            if m and re.search(r"[0-9]", term):
+                tail_num = "".join(_CN_NUM.get(ch, "") for ch in m.group(1))
+            replacement = term if not re.search(r"[0-9]", term) else re.sub(r"[0-9]+$", "", term) + tail_num
+            out = re.sub(re.escape(tok) + r"[零一二两三四五六七八九]*", replacement, out, count=1)
+            _rec(tok, replacement, "accepted", f"拉丁高相似 {ratio:.2f}")
+            break
 
-    return out, fixes
+    return out, records

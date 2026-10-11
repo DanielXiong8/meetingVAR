@@ -30,9 +30,13 @@ class Session:
         device: str = "cuda",
         screen_capture=None,
         echo: bool = True,
+        correction_terms: list[str] | None = None,
     ):
         self.session_id = session_id
-        self.terms = terms
+        self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
+        # 纠错词表（严进：改写转写文本的资格）。缺省回落监听表——手动 --terms 场景
+        # 用户给的就是要纠错的词；漏斗自动词必须经 govern 治理后单独传入。
+        self.correction_terms = correction_terms if correction_terms is not None else list(terms)
         self.pool = Pool(session_id)
         self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
@@ -114,7 +118,7 @@ class Session:
                 # 该过滤同时影响触发判断与证据/报告——边界语义固化在
                 # tests/test_short_sentence_filter.py
                 continue
-            fixed, fixes = correct(seg["text"], self.terms)
+            fixed, fixes = correct(seg["text"], self.correction_terms)
             self.corrections.extend(fixes)
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
             new_lines.append(line)

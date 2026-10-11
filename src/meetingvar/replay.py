@@ -38,6 +38,7 @@ def replay(
     focus_docs: list[str] | None,
     device: str = "cuda",
     transcript_out: Path | None = None,
+    correction_terms: list[str] | None = None,
 ) -> dict:
     """回放 wav 走全管线。
 
@@ -50,7 +51,8 @@ def replay(
     print(f"[replay] {wav_path} | {duration:.0f}s @16k mono")
 
     base_ts = time.time() - duration  # 让"命中回溯"语义成立
-    session = Session(session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True)
+    session = Session(session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True,
+                      correction_terms=correction_terms)
 
     step = 5.0  # 5 秒一喂，喂完立即尝试增量转写
     offset = 0.0

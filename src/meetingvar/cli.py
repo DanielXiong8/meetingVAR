@@ -59,8 +59,14 @@ def cmd_replay(args) -> None:
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
     session_id = f"replay_{int(time.time())}"
-    replay(Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device)
+    replay(Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device,
+           correction_terms=_correction_terms_arg(args))
     print(f"[next] meetingvar digest --session {session_id}")
+
+
+def _correction_terms_arg(args) -> list[str] | None:
+    """--correction-terms：严进纠错表（治理后的子集）。缺省 None → 回落监听表。"""
+    return load_terms(Path(args.correction_terms)) if getattr(args, "correction_terms", None) else None
 
 
 def cmd_transcribe(args) -> None:
@@ -74,7 +80,8 @@ def cmd_transcribe(args) -> None:
     if out is None:
         raise SystemExit("[transcribe] 必须给 --out <转写txt路径>（这是转写模式与 replay 的唯一区别）")
     summary = replay(
-        Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out
+        Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
+        correction_terms=_correction_terms_arg(args),
     )
     print(f"[done] 转写 {summary['lines']} 句 / 纠错 {len(summary['corrections'])} 处 -> {out}")
     if summary["clips"]:
@@ -192,6 +199,22 @@ def cmd_terms(args) -> None:
             print("[terms] LLM 未配置或解析失败，已回落 jieba 层")
     n = write_terms_file(terms, Path(args.out))
     print(f"[terms] {n} 个监听词（jieba 自动抽取 + 手动 {len(extra)} + LLM{' ON' if args.llm else ' OFF'}）-> {args.out}")
+    if getattr(args, "govern", False):
+        import json as _json
+
+        from .memory.govern import govern_terms
+
+        g = govern_terms(terms, manual=set(extra))
+        out_p = Path(args.out)
+        correction_path = out_p.parent / f"{out_p.stem}.correction.txt"
+        report_path = out_p.parent / f"{out_p.stem}.govern.json"
+        correction_path.write_text("\n".join(g.correction) + "\n", encoding="utf-8")
+        report_path.write_text(
+            _json.dumps([r.__dict__ for r in g.records], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        st = g.stats()
+        print(f"[terms] 治理完成：监听 {len(g.watch)} / 可纠错 {len(g.correction)} / 状态分布 {st}")
+        print(f"[terms] 纠错表 -> {correction_path}；治理报告 -> {report_path}")
     for w, src in terms.items():
         print(f"  {w}  {'/'.join(src)}")
     for p in persons:
@@ -206,14 +229,16 @@ def main() -> None:
 
     rp = sub.add_parser("replay", help="wav 回放走全管线")
     rp.add_argument("--wav", required=True)
-    rp.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
+    rp.add_argument("--terms", default=None, help="监听词表文件；缺省时从 --memory 自动抽取")
+    rp.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     rp.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     rp.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 
     tr = sub.add_parser("transcribe", help="转写模式：跑全管线并把全场转写显式存为 txt（--out 必填）")
     tr.add_argument("--wav", required=True)
     tr.add_argument("--out", required=True, help="全场转写输出 txt（[时:分:秒] 说话人: 文本 每行一句）")
-    tr.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
+    tr.add_argument("--terms", default=None, help="监听词表文件；缺省时从 --memory 自动抽取")
+    tr.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     tr.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     tr.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 
@@ -237,6 +262,7 @@ def main() -> None:
     tm.add_argument("--extra", default=None, help="手动热词文件（用户主动输入，永远保留）")
     tm.add_argument("--llm", action="store_true", help="文档语义层：本地小模型抽人名/角色/焦点（需 MEETINGVAR_LLM_*）")
     tm.add_argument("--repo", default=None, help="代码仓库路径（L0 工具层：符号抽取，零 LLM）")
+    tm.add_argument("--govern", action="store_true", help="治理：监听表/纠错表分离（词形+常用词守卫），另写 <out>.correction.txt 与 <out>.govern.json")
     tm.add_argument("--api", action="store_true", help="仓库语义层：API 大模型只读关键文件候选摘要（需 MEETINGVAR_LLM_* 指向 API）")
 
     rs = sub.add_parser("rescan", help="把项目内全部归档纪要+文档重扫一遍，更新该项目热词库")
