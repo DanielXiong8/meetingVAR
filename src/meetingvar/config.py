@@ -21,7 +21,12 @@ PUNC_KEYWORD = "punc_ct-transformer"
 ASR_RATE = 16000          # ASR 统一 16k 单声道
 CHUNK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_CHUNK", "8"))   # 增量转写块长（流式化：8s 步长）
 CHUNK_OVERLAP_SECONDS = 3   # 块间重叠，避免句子被截断
-RING_SECONDS = 600        # 音频环形缓冲保留时长（≈10min，命中回溯用）
+RING_SECONDS = 600        # 音频环形缓冲保留时长（≈10min，1s/格）
+                          # 不变量：RING_SECONDS ≥ LOOKBACK_SECONDS（否则回溯被静默截短）
+
+# 转写句最短长度：低于该长度的片段不入转写/监听/证据流。
+# 默认 2 剔除单字噪声碎片；调成 1 可保留"是/好/停"类单字应答（代价是噪声也进来）。
+MIN_TEXT_CHARS = int(__import__("os").environ.get("MEETINGVAR_MIN_TEXT_CHARS", "2"))
 
 # ---- 录屏 ----
 SCREEN_FPS = 2.0

@@ -1,9 +1,15 @@
-"""待审片段池：按 pool_schema 落盘 Clip（JSON + 音频/截图媒体文件）。"""
+"""待审片段池：按 pool_schema 落盘 Clip（JSON + 音频/截图媒体文件）。
+
+零落盘纪律：目录只在真正有片段时创建（__init__ 不建目录）——
+未命中的会话（审计 G1a/G1b）不得留下任何文件或目录痕迹。
+"""
 from __future__ import annotations
 
+import io
 import json
 import time
 import uuid
+import wave
 from pathlib import Path
 
 from .. import config
@@ -12,11 +18,24 @@ from .schema import AudioRef, Clip, ScreenRef, TranscriptLine, Trigger
 REVIEW_STATUSES = {"pending", "useful", "useless"}
 
 
+def pcm_to_wav_bytes(pcm: bytes, rate: int = config.ASR_RATE) -> bytes:
+    """16bit 单声道 PCM → wav 字节（片段音频封装）。
+
+    放在 pool 层而非 capture 层：Agent/测试路径不需要音频设备依赖（pyaudiowpatch）。
+    """
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 class Pool:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.dir = config.POOL_DIR / session_id
-        self.dir.mkdir(parents=True, exist_ok=True)
 
     def add_clip(
         self,
@@ -33,6 +52,7 @@ class Pool:
         clip_id = str(uuid.uuid4())
         clip_media = config.CLIPS_DIR / clip_id
         clip_media.mkdir(parents=True, exist_ok=True)
+        self.dir.mkdir(parents=True, exist_ok=True)  # 只在有片段时才建会话目录
 
         wav_path = clip_media / f"{clip_id}.wav"
         wav_path.write_bytes(audio_wav)

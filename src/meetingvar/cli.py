@@ -25,7 +25,9 @@ def load_terms(path: Path) -> list[str]:
         if not l:
             continue
         if l.startswith("#!keep"):
-            out.append(l.split(maxsplit=1)[1].strip())  # 手动词（rescan 永久保留）
+            parts = l.split(maxsplit=1)
+            if len(parts) > 1 and parts[1].strip():
+                out.append(parts[1].strip())
             continue
         if l.startswith("#"):
             continue
@@ -63,7 +65,7 @@ def cmd_replay(args) -> None:
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
-    session_id = f"replay_{int(time.time())}"
+    session_id = f"replay_{time.time_ns()}"
     threshold = load_threshold(Path(args.memory)) if args.memory else None
     if threshold is not None:
         print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
@@ -75,78 +77,34 @@ def cmd_replay(args) -> None:
 
 
 def cmd_record(args) -> None:
-    from .capture.audio import AudioCapture
-    from .capture.screen import ScreenCapture
-    from .pipeline import Session
+    from .live import record_session
     from .memory.calibration import load_threshold
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
-    session_id = f"live_{int(time.time())}"
-
-    print("[rec] 打开系统音频环回…")
-    audio = AudioCapture()
-    print(f"[rec] 采集源: {audio.name}")
-    screen = None
-    if not args.no_screen:
-        screen = ScreenCapture()
-        print(f"[rec] 录屏缓冲: {screen.backend} @ {config.SCREEN_FPS}fps")
-
-    hd = None
-    if args.hd:
-        from .capture.hd import HDCapture
-
-        hd = HDCapture()
+    session_id = f"live_{time.time_ns()}"
     threshold = load_threshold(Path(args.memory)) if args.memory else None
     if threshold is not None:
         print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
-    session = Session(
-        session_id, terms=terms, focus_docs=focus, device=args.device,
-        screen_capture=screen, echo=True, l2_threshold=threshold,
-    )
-    session.hd = hd
-    print("[rec] 开始。Ctrl+C 结束；**按回车 = 手动 VAR**")
-    stop = threading.Event()
-
-    def _wait_enter():
-        try:
-            while not stop.is_set():
-                input()
-                session.manual.fire()
-        except EOFError:
-            pass
-
-    threading.Thread(target=_wait_enter, daemon=True).start()
-
-    last_ts = time.time()
-    t0 = time.time()
-    try:
-        while not stop.is_set() and (args.duration <= 0 or time.time() - t0 < args.duration):
-            pcm, since = audio.ingest_since(last_ts)
-            if pcm:
-                session.ingest_pcm(pcm, since)
-                last_ts = since + len(pcm) / 2 / config.ASR_RATE
-            stop.wait(0.5)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop.set()
-        try:
-            summary = session.finish()
-        finally:
-            try:
-                audio.stop()
-            finally:
-                if screen:
-                    screen.stop()
-    print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
-    print(f"[next] meetingvar digest --session {session_id}")
+    summary = record_session(args, session_id, terms, focus, threshold)
+    print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
+    if summary.get("transcript_json"):
+        print(f"[next] meetingvar digest --session {session_id}")
+    else:
+        print("[rec] 本场零命中：草稿转写已丢弃，未保存会议记录")
 
 
 def cmd_digest(args) -> None:
     from .report.generate import digest
 
     digest(args.session, use_llm=args.llm)
+
+
+def cmd_archive(args) -> None:
+    from .memory.project_store import archive_report
+
+    path = archive_report(Path(args.project), args.session)
+    print(f"[archive] {path}")
 
 
 def _review_time(ts: float) -> str:
@@ -274,9 +232,11 @@ def cmd_devices(args) -> None:
 
     import pyaudiowpatch as pyaudio
 
-    p = pyaudio.PyAudio()
-    for info in p.get_loopback_device_info_generator():
-        print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz)")
+    with pyaudio.PyAudio() as p:
+        default = p.get_default_wasapi_loopback()["index"]
+        for info in p.get_loopback_device_info_generator():
+            marker = " [系统默认]" if info["index"] == default else ""
+            print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz){marker}")
 
 
 def cmd_terms(args) -> None:
@@ -336,6 +296,7 @@ def main() -> None:
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
+    rc.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
     rc.add_argument("--hd", action="store_true", help="命中后 30fps 高清补录 90s")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
@@ -343,6 +304,10 @@ def main() -> None:
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
+
+    ar = sub.add_parser("archive", help="把已生成的纪要复制或更新到项目目录")
+    ar.add_argument("--session", required=True)
+    ar.add_argument("--project", required=True)
 
     rv = sub.add_parser("review", help="会后评审片段并写回评价反馈")
     rv.add_argument("--session", required=True)
@@ -372,7 +337,7 @@ def main() -> None:
     args = ap.parse_args()
     {"replay": cmd_replay, "record": cmd_record, "digest": cmd_digest,
      "review": cmd_review, "devices": cmd_devices, "terms": cmd_terms,
-     "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
+     "go": cmd_go, "rescan": cmd_rescan, "archive": cmd_archive}[args.cmd](args)
 
 
 def cmd_rescan(args) -> None:

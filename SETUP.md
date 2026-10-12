@@ -3,6 +3,27 @@
 约定：**谁踩坑谁写**，格式固定为「现象 → 原因 → 解法」，附上最终生效的命令或链接。
 两个人别在同一个坑里各摔一次。
 
+## 本轮本机验证（2026-10-12）
+
+本机实际目录为 `C:\Users\QYC\Documents\ChatGPT\with_xiong\meetingVAR-b-feedback-loop`。
+`.venv` 使用 Python 3.10.22，系统 `python` 是 3.14；下方 D 盘 conda/RTX 5060 记录来自协作者机器。
+本机当前只具备轻量仿真环境，真实采集所需依赖和模型需另行准备，见 [使用清单](docs/USAGE_CHECKLIST.md)。
+
+| 现象 | 原因 | 本轮解法 |
+|---|---|---|
+| 验收改动没出现在原工作分支 | 协作者修复在 `origin/pr-a`，没有并入 main | fetch 后整合 `57ed2c1`，保留双方历史并跑全部回归 |
+| 未命中仍留下记录 | Pool 提前 mkdir，finish 以“没有转写”为条件 | 有片段才创建会话产物，digest/go 对无内容返回提示 |
+| HD 打印成功但视频损坏 | raw RGB 当作 PNG，未检查退出码就删除源帧 | 正确解码输入，编码及完整解码验证成功才删除源帧 |
+| 录屏失败后再次开录设备被占用 | 初始化不在既有收尾保护范围内 | record/go 共用 ExitStack 管理资源，初始化异常也释放 |
+| 启动期间和结束前的声音缺失 | 轮询游标从初始化后的墙钟开始，未排空尾块 | 从采集起点处理已有缓冲，退出时停采并取完尾块 |
+| 静音期间回车不及时保存 | 手动标记只在 ASR flush 消费 | 主循环也处理手动标记；已有缓冲可直接转正 |
+| 手动词反复 rescan 后消失 | 重写文件未保留旧 `#!keep` 标记 | 每次重扫重新写入全部手动标记 |
+| 更新纪要后项目副本仍旧 | digest 只覆盖 reports，不更新 archive | 新增 `meetingvar archive --session ... --project ...` |
+| 测试临时目录 PermissionError | 受限环境的系统临时目录 ACL 不可写 | `scripts/run_local_checks.py` 使用 data 下独立临时目录 |
+
+实时采集不再逐端点开探测线程，默认使用系统播放端点；需要另一端点时用 `--audio-device`。
+历史“自动探测最响端点”记录已由此策略替代。完整证据见 [本机报告](docs/test_report_local_20261012.md)。
+
 ## 环境基线
 
 - Python 3.10（conda 独立环境 `meetingvar`；FunASR 生态对 3.11+ 兼容性不稳）
@@ -82,9 +103,10 @@
 
 ## 高清补录层（2026-10-05/06 · 用户提案落地）
 
-- **分层捕获定案**：常驻 2fps JPEG 环形（命中前 ~120s）+ 命中后 30fps×90s 高清补录（HDCapture，mss 高频抓帧→临时 PNG 序列→ffmpeg 合成 mp4，用完可删）
-- **坑 6 回收**：ffmpeg 一直就在机器上（yt-dlp 附带版，`WinGet/Packages/yt-dlp.FFmpeg/...`）——hd.py 内置该路径探测，PATH 没配也能用；mp4 合成验证通过（Duration/Video 流正常）
-- 用法：`meetingvar go/record --hd`；命中时自动开录 90s，重复命中忽略（一次一场）；无 ffmpeg 时降级保留 PNG 序列
+- **分层捕获定案**：常驻 2fps JPEG 环形（命中前 ~120s）+ 命中后 30fps✕90s 高清补录（HDCapture，mss 高频抓帧→**原始 RGB 帧序列（不做逐帧编码，不阻塞采集线程）**→ffmpeg rawvideo 合成 mp4，用完可删）
+- **坑 6 回收**：ffmpeg 一直就在机器上（yt-dlp 附带版，`WinGet/Packages/yt-dlp.FFmpeg/...`）——hd.py 内置该路径探测，PATH 没配也能用。
+- 用法：`meetingvar go/record --hd`；命中时自动开录 90s，重复命中忽略（一次一场）；无 ffmpeg 时降级保留帧序列 + `meta.json`（尺寸/帧率/帧数，可事后补合成）
+- **坑 26（2026-10-10 修）**：raw 帧曾被写成 `*.png`（内容不是 PNG）→ ffmpeg 实际解码失败，而代码不查返回码**谎报成功并删除唯一证据**。现为 rawvideo 输入 + 返回码/产物校验 + 失败保留帧；mp4 按**实测帧率**合成（抓屏跟不上标称 30fps 时视频时长仍等于真实时长）。代价：raw 帧 1440p 约 12.3MB/帧，90s 标称 30fps 需 ~33GB 临时空间（合成成功后删除）——降分辨率/降帧率/逐帧 JPEG 等缓解方案待产品决策。
 - 回放叙事：低帧率铺垫 + 高帧率现场（同体育转播"战术机位常开、超慢动机位按需开"）
 
 ## 收尾记录（2026-10-04 晚 · "全部修好"轮）

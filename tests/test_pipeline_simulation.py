@@ -135,7 +135,7 @@ class PipelineSimulationTests(unittest.TestCase):
             np.testing.assert_allclose(waveform, [-1.0, 0.0, 32767 / 32768])
             self.assertEqual(waveform.dtype, np.float32)
 
-    def test_no_trigger_writes_text_but_no_media(self):
+    def test_no_trigger_keeps_draft_text_only_in_memory(self):
         from meetingvar.pipeline import Session
 
         session = Session("no_hit_text", terms=[], device="cpu", echo=False)
@@ -145,7 +145,9 @@ class PipelineSimulationTests(unittest.TestCase):
             session.ingest_pcm(bytes(8 * 32000), 1000.0)
             summary = session.finish()
         self.assertEqual(summary["clips"], 0)
-        self.assertTrue(Path(summary["transcript_json"]).exists())
+        self.assertEqual(summary["lines"], 1)
+        self.assertIsNone(summary["transcript_json"])
+        self.assertFalse((self.root / "pool").exists())
         self.assertFalse((self.root / "clips").exists())
 
     def test_silent_session_creates_no_files_and_stops_hd(self):

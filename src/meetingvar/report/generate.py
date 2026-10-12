@@ -130,7 +130,11 @@ def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
     return "\n".join(lines)
 
 
-def digest(session_id: str, use_llm: bool = False) -> Path:
+def digest(session_id: str, use_llm: bool = False) -> Path | None:
+    """未命中会话（按零落盘策略无任何产物）→ 优雅提示并返回 None，不崩栈。"""
+    if not (config.POOL_DIR / session_id / "transcript.json").exists():
+        print(f"[digest] 会话 {session_id} 未命中任何兴趣点——按零落盘策略未保存内容，无纪要可出")
+        return None
     transcript, clips = _load_session(session_id)
     terms_hit: dict[str, int] = {}
     # transcript.json 的 clips 条目是 {clip_id, layer, evidence, at}（无 trigger 键）；

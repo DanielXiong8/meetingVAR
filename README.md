@@ -10,6 +10,10 @@
 
 参赛：SDG Open Hack 2026 · Hack16 ·「AI 办公任务助手」赛道。
 
+**使用入口（2026-10-12）**：[完整使用与真实会议验收清单](docs/USAGE_CHECKLIST.md)，
+[本机复现与修复报告](docs/test_report_local_20261012.md)。当前修复分支为 `codex/local-acceptance-fixes`。
+Windows 本机可直接运行 `.\.venv\Scripts\python.exe scripts/run_local_checks.py`，自动保留回归日志和可检查的仿真产物。
+
 ## 定位三声明（设计红线）
 
 1. **系统级、平台无关**：依附"项目"，不依附任何会议软件——腾讯会议、飞书、微信视频、线下会议室都只是声音来源。
@@ -54,7 +58,7 @@ models/          模型权重本地固化（不入库）
 data/            会议音频/录屏素材（不入库——含他人声音与屏幕）
 ```
 
-## 当前状态：MVP 命令行骨架（截至 2026-10-07）
+## 当前状态：MVP 命令行（截至 2026-10-12）
 
 | 模块 | 验证目标 | 状态 |
 |---|---|---|
@@ -65,6 +69,8 @@ data/            会议音频/录屏素材（不入库——含他人声音与�
 | c5 | 术语增强 | FunASR `hotword` 参数实测无效；现用转写后术语纠错，效果见 SETUP |
 
 当前可运行入口是 CLI，不包含托盘/悬浮条/会后图形界面。真实音频、屏幕、模型权重均不入库；无声卡、模型或真实会议素材的功能只按其实际测试边界标注，不视为端到端验收。
+表中早期设备/模型验证来自协作者机器；本轮 Windows 本机完成工程仿真与实际视频编码验证，真实模型与采集依赖仍需按使用清单准备。
+音频来源目前仅为系统播放混音，不额外采集本机麦克风；自己的发言只有经系统输出播放时才会被录到。
 
 ## 快速开始（MVP 骨架，2026-10-04 起可用）
 
@@ -78,6 +84,7 @@ meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
                  --memory spikes/b1_rag/sample_project        # 离线回放走全管线
 meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
 meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
+meetingvar archive --session <id> --project <项目目录>        # 将当前纪要复制/更新到项目归档
 meetingvar review --session <id> --summary                   # 会后片段列表与反馈摘要
 meetingvar review --session <id> --clip <id> --status useful --project <项目目录>  # 评价并校准该项目 L2
 python scripts/demo_feedback_loop.py                         # 无模型的两场反馈演示
@@ -108,6 +115,10 @@ python -m meetingvar.simulation --output data/simulation
 L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（默认回溯 300s，可由 `MEETINGVAR_LOOKBACK` 调整）→ 片段池 →
 digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
 
+零命中时不保存该会话的文件或目录；有命中时保存选择的媒体片段，以及薄纪要所需的全场转写文本。
+实时采集跟随系统默认输出；设备不一致时先运行 `devices`，再用 `go/record --audio-device <编号>` 指定。
+`--no-screen` 关闭录屏，不能与 `--hd` 同用；高清 MP4 不带音轨，raw 临时帧可能占数十 GB，先做短演练。
+
 LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
 未配置时输出结构化模板版并如实标注〔模板版〕。
 
@@ -123,6 +134,8 @@ L2 反馈校准（显式 opt-in）：会后评审时加 `--project <项目目录
 
 ## 文档
 
+- [docs/USAGE_CHECKLIST.md](docs/USAGE_CHECKLIST.md) —— 环境准备、仿真、短音频、真实会议、反馈与故障清单
+- [docs/test_report_local_20261012.md](docs/test_report_local_20261012.md) —— 本轮修复前后证据、测试边界和日志位置
 - [docs/plan.md](docs/plan.md) —— 完整计划书：定位 / 功能规格 / 竞品差异 / 赛程里程碑 / 两人分工
 - [docs/daily_plan.md](docs/daily_plan.md) —— 逐日计划（你每天干什么看这个）
 - [docs/pool_schema.md](docs/pool_schema.md) —— 待审片段池接口契约，**字段变更须两人确认**
