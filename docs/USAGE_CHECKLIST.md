@@ -17,6 +17,7 @@ git switch codex/local-acceptance-fixes
 git pull --ff-only
 $Python = (Resolve-Path '.\.venv\Scripts\python.exe').Path
 $env:PYTHONUTF8='1'
+$env:PYTHONIOENCODING='utf-8'
 & $Python --version
 & $Python -m meetingvar --help
 ```
@@ -24,6 +25,8 @@ $env:PYTHONUTF8='1'
 - [ ] 当前分支正确，更新完成。若 Git 提示本地文件有改动，先保留自己的工作，不使用 `reset --hard`。
 - [ ] Python 是 **3.10.x**。本机 `.venv` 是 **3.10.22**；系统 `python` 是 3.14，直接敲 `python` 会用错环境。
 - [ ] 所有命令从仓库根目录执行。`.env` 和 `data/` 相对于当前目录，不会自动搜索父目录。
+- [ ] PowerShell 会话设置上述两个 UTF-8 变量；它们也适用于新建的真实采集环境。
+  英文 Windows 或重定向日志时，默认 `cp1252` 无法输出中文，可能导致 `UnicodeEncodeError`。
 
 ## 2. 先跑本机仿真
 
@@ -48,6 +51,9 @@ $Python = (Resolve-Path '.\.venv\Scripts\python.exe').Path
 - [ ] 确认理解测试边界：仿真使用编码信号和可控模型输出，验证真实工程管线；它不能证明真实语音识别率、声卡、显示器、GPU 或会议触发质量。
 
 脚本只在测试子进程中清空云端 LLM 设置，使用独立可写临时目录，不修改 `.env`。
+GitHub Actions 使用同一脚本和 UTF-8 配置；在对应 smoke 运行页下载
+`model-free-verification`、`simulation-verification-ubuntu-latest` 或
+`simulation-verification-windows-latest`，可查看 JSON 结果、跳过项与完整日志。
 默认测试包含本机 `127.0.0.1` HTTP 桩服务；受限执行环境可能禁止该访问，需要允许本机回环通信后重跑。
 `--with-model-audits` 另外执行真实模型审计；缺少模型或指定 WAV 时会显示 **skipped**，不得算作通过。
 

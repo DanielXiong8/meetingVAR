@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Windows runners can default redirected Python output to cp1252. Chinese
+# diagnostics must use the same UTF-8 encoding as the local verification logs.
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
 jobs:
   model-free:
     runs-on: ubuntu-latest
@@ -21,10 +27,16 @@ jobs:
         run: python -m pip install -e . --no-deps
 
       - name: Run model-free regression tests
-        run: python -m unittest discover -s tests -v
+        run: python scripts/run_local_checks.py --skip-simulation --isolated-cwd
 
-      - name: Compile source
-        run: python -m compileall -q src tests
+      - name: Preserve verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-free-verification
+          path: |
+            data/verification/run_*/result.json
+            data/verification/run_*/*.log
 
   simulation:
     runs-on: ${{ matrix.os }}
@@ -39,6 +51,14 @@ jobs:
       - name: Install isolated simulation dependencies
         run: python -m pip install -e . -r requirements-simulation.txt -r requirements-secrets.txt
       - name: Run all regressions, including actual CLI workflow
-        run: python -m unittest discover -s tests -v
-      - name: Run inspectable simulation
-        run: python -m meetingvar.simulation --output data/simulation
+        run: python scripts/run_local_checks.py
+      - name: Preserve verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-verification-${{ matrix.os }}
+          path: |
+            data/verification/run_*/result.json
+            data/verification/run_*/*.log
+            data/verification/run_*/simulation/run_*/result.json
+            data/verification/run_*/simulation/run_*/simulation.log

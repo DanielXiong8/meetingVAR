@@ -81,6 +81,33 @@ Set-Location 'C:\Users\QYC\Documents\ChatGPT\with_xiong\meetingVAR-b-feedback-lo
 详细安装、真实 WAV、系统声音演练、会议操作、回听、评价与反馈步骤见
 [使用与验收清单](USAGE_CHECKLIST.md)。
 
+## PR smoke 的 Windows 编码故障与修复
+
+原提交 `068e06a` 的 [smoke 运行](https://github.com/DanielXiong8/meetingVAR/actions/runs/38271803184)
+中，`model-free` 与 Ubuntu 仿真通过，Windows 仿真发现 107 项测试，报告 11 个错误、1 项跳过。
+11 个错误均为 `UnicodeEncodeError`：英文 Windows runner 的重定向输出默认使用 `cp1252`，
+无法打印中文诊断，导致 HD 降级、LLM 回退、零命中 digest、go 清理等测试在提示输出处失败。
+原本机测试脚本启用了 UTF-8，但旧 CI 直接调用 unittest，没有同步该配置。
+
+修复后，工作流显式设置 `PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`，两个作业都调用
+`scripts/run_local_checks.py`，统一回归、编译、仿真和配置隔离。脚本同时覆盖继承的
+`PYTHONIOENCODING`，避免它优先于 `PYTHONUTF8` 生效而重新引入非 UTF-8 输出。
+CI 无论检查成功或失败都上传 JSON 结果与日志；没有移除或跳过失败测试。
+
+本机复核证据：
+
+- 选择 HD 缺编码器、LLM 不可用回退、零命中 digest 三项原失败测试，
+  `PYTHONUTF8=0` / `PYTHONIOENCODING=cp1252` 下复现 3 个编码错误；
+  改用上述 UTF-8 配置后 3 项全过。日志在 `data/verification/encoding_1791820349319385500/`。
+- 完整轻量环境：**107 项通过，0 失败、0 跳过**，44.31 秒；编译与独立仿真通过。
+  结果在 `data/verification/run_1791820369217068100/`。
+- 最小环境：发现 107 项，89 项通过、18 项按缺可选依赖跳过，0 失败，35.61 秒；编译通过。
+  故意继承 `PYTHONIOENCODING=cp1252` 运行脚本，确认子进程仍使用 UTF-8。
+  结果在 `data/verification/run_1791820368700686900/`。
+
+远端状态以 [PR #28 最新检查](https://github.com/DanielXiong8/meetingVAR/pull/28/checks) 为准；
+CI 缺少 ffmpeg 等可选依赖时的跳过项应与本机完整通过结果区分。
+
 ## 尚未完成的真实验收
 
 - 本机轻量环境没有 FunASR/torch/PyAudioWPatch/dxcam/mss，也没有已验证的本地模型权重。

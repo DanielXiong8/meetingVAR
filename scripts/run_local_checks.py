@@ -26,7 +26,8 @@ def run():
     temporary = output / "tmp"
     temporary.mkdir()
     env = os.environ.copy()
-    env.update({"PYTHONUTF8": "1", "TEMP": str(temporary), "TMP": str(temporary),
+    env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                "TEMP": str(temporary), "TMP": str(temporary),
                 "PYTHONPATH": str(ROOT / "src"), "MEETINGVAR_LLM_BASE_URL": "",
                 "MEETINGVAR_LLM_MODEL": "", "MEETINGVAR_LLM_API_KEY": "",
                 "MEETINGVAR_LLM_THINKING": "", "MEETINGVAR_LLM_MAX_TOKENS": "2048",
