@@ -5,9 +5,13 @@
 
 ## 本轮本机验证（2026-10-12）
 
+2026-10-13 已新增真实 CPU 部署：`.venv-live` + 仓库 `models/`。
+四模型真实识别及 WASAPI/屏幕/CLI go/纪要归档自检通过，入口为 `Start-MeetingVAR.cmd`，
+详见 [本机实测](docs/LOCAL_TRIAL.md)。本机显卡为 RTX 5070 Ti Laptop 12GB；GPU 加速尚未部署。
+
 本机实际目录为 `C:\Users\QYC\Documents\ChatGPT\with_xiong\meetingVAR-b-feedback-loop`。
 `.venv` 使用 Python 3.10.22，系统 `python` 是 3.14；下方 D 盘 conda/RTX 5060 记录来自协作者机器。
-本机当前只具备轻量仿真环境，真实采集所需依赖和模型需另行准备，见 [使用清单](docs/USAGE_CHECKLIST.md)。
+下表记录 2026-10-12 轻量仿真验证；真实采集环境已于 2026-10-13 单独补齐，见上方实测入口。
 
 | 现象 | 原因 | 本轮解法 |
 |---|---|---|

@@ -1,0 +1,15 @@
+# First install the official CPU wheels as described in docs/LOCAL_TRIAL.md.
+-r requirements.txt
+-r requirements-secrets.txt
+torch==2.7.1+cpu
+torchaudio==2.7.1+cpu
+funasr==1.4.16
+modelscope==1.35.4
+numpy==2.2.6
+scikit-learn==1.7.2
+transformers==5.19.0
+PyAudioWPatch==0.2.12.9
+dxcam==0.3.0 ; platform_system == "Windows"
+mss==10.2.0
+pillow==12.3.0
+setuptools<81

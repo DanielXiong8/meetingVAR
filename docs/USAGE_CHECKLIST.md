@@ -2,6 +2,10 @@
 
 更新：2026-10-12；对应分支 `codex/local-acceptance-fixes`。本清单适用于当前 CLI 版本。
 
+**2026-10-13 本机部署更新**：真实 CPU 环境 `.venv-live` 与四套本地模型现已部署，
+真实语音识别、系统环回、录屏、触发、纪要与归档已跑通。双击根目录 `Start-MeetingVAR.cmd` 开始，
+详细步骤及自检证据见 [本机实测入口](LOCAL_TRIAL.md)。仿真继续使用 `.venv`。
+
 ## 1. 找对仓库和 Python
 
 本机实际 Git 仓库是 `C:\Users\QYC\Documents\ChatGPT\with_xiong\meetingVAR-b-feedback-loop`。
@@ -59,8 +63,8 @@ GitHub Actions 使用同一脚本和 UTF-8 配置；在对应 smoke 运行页下
 
 ## 3. 真实采集前的环境准备
 
-**本机当前 `.venv` 可跑仿真，但未安装 FunASR、torch、PyAudioWPatch、dxcam、mss，且没有已验证的本地模型栈。**
-请先准备独立的真实采集环境，避免把轻量测试环境当作完整会议环境：
+**本机 `.venv` 用于仿真；真实采集使用已部署的 `.venv-live`（CPU），权重在仓库 `models/`。**
+本机直接用启动菜单即可。新机器可参考以下步骤；本次已验证 CPU 版本见 `requirements-live-cpu.txt`：
 
 ```powershell
 py -3.10 -m venv .venv-live
@@ -69,9 +73,10 @@ $LivePython = (Resolve-Path '.\.venv-live\Scripts\python.exe').Path
 & $LivePython -m pip check
 ```
 
-这是仓库的安装入口，**这次没有在本机下载安装 GB 级依赖/权重，也没有验证全套依赖解析**。
-GPU 安装需按实际显卡选择匹配的 torch/torchaudio；[SETUP.md](../SETUP.md) 中 RTX 5060、D 盘 conda 路径属于协作者历史机器记录，不能直接当成本机配置。
-首次验收可先使用 `--device cpu`，跑通后再切换 GPU。
+上述通用依赖没有完整锁版本；推荐采用 [本机实测入口](LOCAL_TRIAL.md) 的 CPU 安装步骤。
+本次完整环境依赖检查已通过，真实模型与采集链路也已运行；GPU 加速未部署或验证。
+[SETUP.md](../SETUP.md) 中 RTX 5060、D 盘 conda 路径属于协作者历史机器记录，不能直接当成本机配置。
+本机实测使用 `--device cpu`，模型路径通过启动菜单设置。
 
 - [ ] 环境含 `torch`、`torchaudio`、`funasr`、`modelscope`、`PyAudioWPatch`；需要录屏时还要 `Pillow`、`mss`，Windows 优先后端 `dxcam` 还需 `opencv-python-headless`。
 - [ ] 用 `MEETINGVAR_MODELS` 指向实际权重目录，不能凭目录存在就认定模型下载完整。
