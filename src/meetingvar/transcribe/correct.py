@@ -153,6 +153,12 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
             if tok_core in EN_COMMON:
                 _rec(tok, term, "review_required", "原词为常用英文词（常见词互换是 B 组改写链根源）", "latin_common_source")
                 break
+            # 子串关系歧义（test2 重跑实测：缩写归并出的 "VCF" 被模糊匹配改写成 "gVCF"，
+            # 相似度 0.857 过线）——原词是目标词的子串时，究竟是"漏了个前缀字母"还是"另一个词"
+            # 无法从文本分辨，按宁漏勿误进待审。
+            if tok_core in term_core:
+                _rec(tok, term, "review_required", "原词是目标词的子串（前缀缺失歧义），宁漏勿误", "latin_substring")
+                break
             if ratio < 0.75:
                 _rec(tok, term, "review_required", f"拉丁相似度 {ratio:.2f} 处于灰区（0.6–0.75）", "latin_gray_zone")
                 break
