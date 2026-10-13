@@ -115,6 +115,25 @@ class CorrectGuardTests(unittest.TestCase):
         self.assertEqual(recs[0]["status"], "review_required")
         self.assertIn("常用", recs[0]["reason"])
 
+    def test_acronym_spaced_form_joined(self) -> None:
+        """test2 实测缺陷：ASR 把 VCF 拆成 "v c f" → 归并回词表形态（指向性，只认词表缩写）。"""
+        out, recs = self.correct("首先我是转成了 v c f 之后", ["VCF"])
+        self.assertIn("VCF", out)
+        self.assertNotIn("v c f", out)
+        self.assertEqual(recs[0]["rule_id"], "acronym_join")
+        self.assertEqual(recs[0]["status"], "accepted")
+
+    def test_acronym_join_only_for_listed_terms(self) -> None:
+        """归并是定向替换：词表里没有 XYZ 时，"x y z" 不得被动。"""
+        out, recs = self.correct("写成了 x y z 形态", ["VCF"])
+        self.assertEqual(out, "写成了 x y z 形态")
+        self.assertEqual(recs, [])
+
+    def test_acronym_already_joined_untouched(self) -> None:
+        out, recs = self.correct("the VCF file is ready", ["VCF"])
+        self.assertEqual(out, "the VCF file is ready")
+        self.assertEqual(recs, [])
+
     def test_record_shape(self) -> None:
         """记录七字段：会话层补 ts/termset_id 之前，这两个显式为 None（不伪造）。"""
         _, recs = self.correct("基因学习很重要", ["机器学习"])
