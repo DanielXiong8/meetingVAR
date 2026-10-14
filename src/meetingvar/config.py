@@ -29,6 +29,13 @@ MIN_TEXT_CHARS = int(__import__("os").environ.get("MEETINGVAR_MIN_TEXT_CHARS", "
 SCREEN_FPS = 2.0
 SCREEN_BUFFER_FRAMES = 240  # 2fps × 120s 回溯
 
+# ---- 高清补录（命中后 30fps 段）资源约束 ----
+# 帧先双线性缩到 HD_WIDTH 宽再落盘：临时空间与合成耗时降 ~4 倍（1440p→1280 宽）
+HD_WIDTH = int(__import__("os").environ.get("MEETINGVAR_HD_WIDTH", "1280"))
+# 每场会议（一个进程）高清补录**临时帧序列**的总预算上限，所有命中共享；
+# 预算折算帧率 = 预算/帧尺寸/补录时长（标称 30fps 只是上限，不承诺）
+HD_TEMP_BUDGET_BYTES = int(float(__import__("os").environ.get("MEETINGVAR_HD_TEMP_GB", "5")) * 1024**3)
+
 # ---- 触发 ----
 LOOKBACK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_LOOKBACK", "300"))  # 命中回溯窗（秒），可 env 调
 

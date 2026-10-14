@@ -150,7 +150,7 @@ class Session:
 
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
         if self.hd is not None and not self.hd.is_recording():
-            self.hd.start()  # 高清层：命中后 90s 的 30fps 补录
+            self.hd.start()  # 高清层：命中后 ≤90s 预算内高帧率补录（帧缩至 1280 宽）
         start_ts = trigger_ts - LOOKBACK_SECONDS
         chunks = [(t, b) for t, b in self._ring if start_ts <= t <= trigger_ts]
         # 环里不足 1s 的尾巴（carry）也要进片段：否则命中前最后一秒的音频可能整体丢失

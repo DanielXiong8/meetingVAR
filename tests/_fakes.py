@@ -98,11 +98,11 @@ def assert_contiguous_levels(case, halves: list[int], first: int, last: int) -> 
 # ---- 屏幕替身（HD 补录状态机测试用，不接触真实显示器） ----
 
 class FakeShot:
-    """mss ScreenShot 的最小替身：rgb 为纯色渐变原始 RGB 缓冲。"""
+    """mss ScreenShot 的最小替身：rgb 为按行重复的 3 字节/像素缓冲。"""
 
     def __init__(self, width: int, height: int):
         self.size = (width, height)
-        row = bytes(range(0, 256, max(1, 256 // (width * 3))))[: width * 3]
+        row = bytes([16, 128, 240]) * width
         self.rgb = (row * height)[: width * height * 3]
 
 
