@@ -52,6 +52,10 @@ L2_SIM_THRESHOLD = 0.25         # TF-IDF 兴趣相似度触发阈值（v0 拍脑
 # 真实会议数据积累后再调。env 可覆盖。
 SPEAKER_SIM_THRESHOLD = float(__import__("os").environ.get("MEETINGVAR_SPEAKER_SIM", "0.50"))
 
+# 声纹名册（跨会话）自动识别阈值：比场内聚类阈值更严——错认人名比多问一次代价大，
+# 认不出就把"他是谁"问出来，绝不硬套名字。env 可覆盖。
+SPEAKER_BOOK_SIM = float(__import__("os").environ.get("MEETINGVAR_SPEAKER_BOOK_SIM", "0.60"))
+
 # ---- 路径 ----
 DATA_DIR = Path("data")
 POOL_DIR = DATA_DIR / "pool"

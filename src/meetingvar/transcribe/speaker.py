@@ -48,6 +48,10 @@ class OnlineSpeakerCluster:
     def n_speakers(self) -> int:
         return len(self._centroids)
 
+    def centroid_of(self, idx: int) -> list[float]:
+        """某说话人的当前质心（拷贝）——供声纹名册登记/匹配用。"""
+        return list(self._centroids[idx])
+
     def assign(self, emb, duration_s: float) -> str:
         """返回该句的全局说话人编号；emb 无效时返回 spk?。"""
         if emb is None:

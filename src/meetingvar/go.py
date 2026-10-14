@@ -78,7 +78,17 @@ def cmd_go(args) -> None:
 
         threading.Thread(target=slow_extract, daemon=True).start()
 
-    summary = record_session(args, session_id, wordlist, focus, l2_threshold, on_session)
+    # 声纹名册：按项目存放（<项目>/meetingvar/speakers.json）——同一个项目里的常用人
+    # 第一次点过名，下次开会自动识别。
+    from .memory.project_store import project_dir as _project_dir
+    from .memory.speaker_book import SpeakerBook
+
+    book = SpeakerBook.load(_project_dir(memory_dir) / "speakers.json")
+    if book.entries:
+        print(f"[spk] 声纹名册：{len(book.entries)} 人（{'、'.join(e['name'] for e in book.entries)}），新说话人将先比对名册")
+
+    summary = record_session(args, session_id, wordlist, focus, l2_threshold, on_session,
+                             speaker_book=book)
     print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
 
     # 项目归档：纪要自动进 <项目>/meetingvar/minutes/，供跨会话热词库演化
@@ -106,5 +116,6 @@ def register(sub) -> None:
     g.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
     g.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算）")
     g.add_argument("--llm", action="store_true", help="后台叠加本地/云端小模型语义抽取并热更新")
+    g.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     g.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
