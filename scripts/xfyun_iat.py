@@ -27,7 +27,7 @@ from email.utils import formatdate
 from pathlib import Path
 
 CRED_FILE = Path(os.environ.get("XFYUN_CRED_FILE",
-    r"D:\项目\联想未来办公AI创新挑战\讯飞\Websocket服务接口认证信息.env"))
+    r"D:\项目\联想未来办公AI创新挑战\讯飞\语音听写\Websocket服务接口认证信息.env"))
 HOST = "iat-api.xfyun.cn"
 PATH = "/v2/iat"
 FRAME_BYTES = 1280          # 40ms @16k mono s16
@@ -79,10 +79,20 @@ def _extract(msg: str) -> tuple[str, bool]:
     return txt, done
 
 
-async def transcribe_long(creds: dict, pcm: bytes, log_prefix: str = "") -> list[tuple[float, str]]:
-    """会话链转写：返回 [(起始秒, 该会话文本)]，按时间顺序。"""
+def _ws_connect(url: str, **kw):
+    """websockets 13 的 connect 不收 proxy 参数（且 legacy 不读系统代理）；
+    14+ 新实现默认从环境变量取代理，需要显式 proxy=None 才直连。"""
+    import inspect
+
     import websockets
 
+    if "proxy" in inspect.signature(websockets.connect).parameters:
+        kw["proxy"] = None
+    return websockets.connect(url, **kw)
+
+
+async def transcribe_long(creds: dict, pcm: bytes, log_prefix: str = "") -> list[tuple[float, str]]:
+    """会话链转写：返回 [(起始秒, 该会话文本)]，按时间顺序。"""
     n_frames = (len(pcm) + FRAME_BYTES - 1) // FRAME_BYTES
     out: list[tuple[float, str]] = []
     pos = 0
@@ -96,7 +106,7 @@ async def transcribe_long(creds: dict, pcm: bytes, log_prefix: str = "") -> list
         end_frame = min(pos + int(SESSION_MAX_S * 1000 / FRAME_MS), n_frames)
 
         try:
-            ws_ctx = websockets.connect(ws_url(creds), max_size=2**22, proxy=None, open_timeout=10)
+            ws_ctx = _ws_connect(ws_url(creds), max_size=2**22, open_timeout=10)
             async with ws_ctx as ws:
                 print(f"    {log_prefix}会话{session_no} 已连接 @音频{pos*FRAME_MS/1000:.0f}s", flush=True)
                 async def receiver() -> None:
