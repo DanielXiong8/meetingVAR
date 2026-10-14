@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 import tempfile
@@ -200,6 +201,51 @@ class PersistencePolicyTests(unittest.TestCase):
                 r"clips/[0-9a-f-]{36}/[0-9a-f-]{36}\.wav",
             ],
         )
+
+    def test_same_window_hotwords_merge_into_one_clip(self) -> None:
+        """同一转写块命中多个词 → 一次回看一个片段（evidence 含全部命中词）。"""
+        fake = FakeASR(default=[(9.0, 11.0, "spk0", "机器学习和figure都要再看一下")])
+        s = self._session("g1c_multi", terms=["机器学习", "figure", "随机森林"], fake=fake)
+        summary = s.finish()
+        self.assertEqual(summary["clips"], 1, "同窗多词不得各存一份片段")
+        clip_files = [
+            p for p in (self.tmp / "pool" / "g1c_multi").glob("*.json")
+            if p.name not in {"transcript.json", "summary.json"}
+        ]
+        clip = json.loads(clip_files[0].read_text(encoding="utf-8"))
+        ev = clip["trigger"]["evidence"]
+        self.assertIn("机器学习", ev, f"evidence 应含全部命中词: {ev}")
+        self.assertIn("figure", ev, f"evidence 应含全部命中词: {ev}")
+        self.assertTrue(ev.startswith("热词:"))
+
+    def test_transcribe_mode_is_explicit_opt_in(self) -> None:
+        """transcribe 显式导出：用户点名要转写才有这一份 txt；产物目录纪律不受影响。"""
+        import wave as wavemod
+
+        from _fakes import install_fake_asr, marker_pcm
+        from meetingvar.replay import replay
+
+        install_fake_asr(pipeline_mod, FakeASR(default=SENT_PLAIN))
+        wav = self.tmp / "in.wav"
+        with wavemod.open(str(wav), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(marker_pcm(20))
+        out = self.tmp / "out" / "transcript.txt"
+        fake = FakeASR(default=SENT_PLAIN)
+        replay(wav, "tx_explicit", terms=["量子纠缠"], focus_docs=None, device="cpu",
+               transcript_out=out)
+        self.assertTrue(out.exists() and out.stat().st_size > 0, "显式导出必须写出转写 txt")
+        body = out.read_text(encoding="utf-8")
+        self.assertIn("我们先过一遍昨天的实验数据", body)
+        self.assertLessEqual(snapshot_data(self.tmp / "pool"), set() | snapshot_data(self.tmp / "pool"))
+        # 产物目录仍然零新增（无命中 → 只有显式导出这份 txt，pool/clips 不出现）
+        created = {c for c in snapshot_data(self.tmp) if c.startswith(("pool", "clips"))}
+        self.assertEqual(created, set(), f"transcribe 模式不得顺手产生池产物: {created}")
+
+        # 默认（不传 transcript_out）依旧零落盘
+        out2 = self.tmp / "should_not_exist.txt"
+        replay(wav, "tx_default", terms=["量子纠缠"], focus_docs=None, device="cpu")
+        self.assertFalse(out2.exists())
 
     def test_no_hit_session_digest_is_noop_not_crash(self) -> None:
         """未命中会话（零产物）上跑 digest：应优雅提示"无内容可出"，不得崩栈。"""

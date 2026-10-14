@@ -6,6 +6,7 @@ live（AudioCapture 喂流）与 replay（wav 回放喂流）共用同一套逻�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections import deque
@@ -30,9 +31,13 @@ class Session:
         device: str = "cuda",
         screen_capture=None,
         echo: bool = True,
+        correction_terms: list[str] | None = None,
     ):
         self.session_id = session_id
-        self.terms = terms
+        self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
+        # 纠错词表（严进：改写转写文本的资格）。缺省回落监听表——手动 --terms 场景
+        # 用户给的就是要纠错的词；漏斗自动词必须经 govern 治理后单独传入。
+        self.correction_terms = correction_terms if correction_terms is not None else list(terms)
         self.pool = Pool(session_id)
         self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
@@ -51,7 +56,16 @@ class Session:
         self._timeline_start_ts: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
-        self.corrections: list[tuple[str, str]] = []
+        # 每条纠错记录 = {src,dst,status,reason,rule_id,ts,termset_id}（correct() 产出、此处补 ts/termset_id）
+        self.corrections: list[dict] = []
+        # 整行原文快照（F1 恢复机制）：纠错发生过的行，逐行记录改写前后全文，
+        # 恢复 = 把 text 换回 orig_text（精确），不依赖片段逆替换。局限：行级粒度、随会话内存态。
+        self.rewrite_log: list[dict] = []
+        # 纠错词表版本标识 = 纠错词表排序去重后的 sha256 前 12 位（内容寻址，可复算）
+        joined_terms = "\n".join(sorted(set(self.correction_terms)))
+        self.termset_id = (
+            hashlib.sha256(joined_terms.encode("utf-8")).hexdigest()[:12] if self.correction_terms else ""
+        )
 
     # ---- 音频进 ----
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
@@ -114,8 +128,18 @@ class Session:
                 # 该过滤同时影响触发判断与证据/报告——边界语义固化在
                 # tests/test_short_sentence_filter.py
                 continue
-            fixed, fixes = correct(seg["text"], self.terms)
-            self.corrections.extend(fixes)
+            orig_text = seg["text"]
+            fixed, fixes = correct(orig_text, self.correction_terms)
+            if fixes:
+                line_ts = start_ts + seg["start"]
+                for r in fixes:
+                    r["ts"] = line_ts
+                    r["termset_id"] = self.termset_id
+                self.corrections.extend(fixes)
+                self.rewrite_log.append({
+                    "ts": line_ts, "orig_text": orig_text, "text": fixed,
+                    "termset_id": self.termset_id, "records": fixes,
+                })
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
             new_lines.append(line)
             self.transcript.append(line)
@@ -127,8 +151,11 @@ class Session:
         # 触发时刻用会议时间轴（最后进音频的绝对时间戳），不用墙钟——
         # replay 模式下墙钟与模拟时间轴漂移，会造成 clip.at 失真（见 PR #13 review）
         trigger_ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
-        for term in self.monitor.check(joined, trigger_ts):
-            self._make_clip("L1", f"热词:{term}", trigger_ts)
+        # 同一转写块内命中的多个词合并为一次回看（evidence 记录全部命中词）：
+        # 各存一份会把同一个 300s 窗口重复保存 N 次——大词表下直接撑爆磁盘（test1 实测 752 片段）
+        fired = self.monitor.check(joined, trigger_ts)
+        if fired:
+            self._make_clip("L1", "热词:" + "+".join(fired), trigger_ts)
         if self.scorer:
             hit, score = self.scorer.check(joined)
             if hit:
@@ -147,6 +174,10 @@ class Session:
         """把内部绝对时间戳转换为会议内相对秒数。"""
         base = self._timeline_start_ts if self._timeline_start_ts is not None else ts
         return max(0.0, ts - base)
+
+    def relative_transcript(self) -> list[dict]:
+        """全场转写的会议相对秒视图（内存态，供 transcribe 显式导出；默认模式不落盘）。"""
+        return [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
 
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
         if self.hd is not None and not self.hd.is_recording():
@@ -204,7 +235,11 @@ class Session:
         out.parent.mkdir(parents=True, exist_ok=True)
         transcript = [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
         out.write_text(
-            json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {"session_id": self.session_id, "transcript": transcript, "clips": self.clips,
+                 "rewrites": self.rewrite_log},
+                ensure_ascii=False, indent=2,
+            ),
             encoding="utf-8",
         )
         if self.hd is not None:
@@ -215,6 +250,7 @@ class Session:
             "lines": len(transcript),
             "clips": len(self.clips),
             "corrections": self.corrections,
+            "rewrite_count": len(self.rewrite_log),
             "transcript_json": str(out),
             "hd_dir": hd_dir,
         }
