@@ -3,6 +3,8 @@
 live（AudioCapture 喂流）与 replay（wav 回放喂流）共用同一套逻辑。
 时间轴：内部统一用绝对时间戳（live=真实时钟；replay=模拟基点+偏移），
 写入片段池和 transcript.json 时转换为会议内相对秒数，遵守 pool_schema 契约。
+说话人：句级 CAM++ 声纹经会话级在线聚类（transcribe/speaker.py）映射为
+全场稳定的 spk0/spk1/…；无声纹时退回块内编号（FunASR 局部聚类，仅兜底）。
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from .monitor.hotwords import HotwordMonitor, InterestScorer, ManualVAR
 from .pool.store import Pool
 from .transcribe.asr import ASR
 from .transcribe.correct import correct
+from .transcribe.speaker import OnlineSpeakerCluster
 
 LOOKBACK_SECONDS = config.LOOKBACK_SECONDS  # 命中回溯窗（config 可调，env MEETINGVAR_LOOKBACK）
 _PCM_BYTES_PER_SECOND = config.ASR_RATE * 2  # 接口约定：16bit 单声道 PCM，1 秒 = 32000 字节
@@ -44,6 +47,8 @@ class Session:
         self.monitor = HotwordMonitor(terms)
         self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
         self.manual = ManualVAR()
+        # 会话级说话人聚类：跨块维持声纹质心 → 全场稳定的 spk0/spk1/…
+        self.speaker_cluster = OnlineSpeakerCluster(threshold=config.SPEAKER_SIM_THRESHOLD)
         self.screen_capture = screen_capture
         self.echo = echo
         self.hd = None  # 高清补录层（--hd 时由 cli 装配）
@@ -148,16 +153,28 @@ class Session:
                 continue
             orig_text = seg["text"]
             fixed, fixes = correct(orig_text, self.correction_terms)
-            line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
+            line_ts = start_ts + seg["start"]
             # Overlapping ASR windows can repeat a sentence. Do not duplicate
             # that sentence (or its triggers); later occurrences remain valid.
-            if any(abs(old["ts"] - line["ts"]) <= 0.5 and old["text"] == fixed
+            if any(abs(old["ts"] - line_ts) <= 0.5 and old["text"] == fixed
                    for old in reversed(self.transcript)
                    if old["ts"] >= start_ts - 0.5):
                 continue
+            # 说话人：有句级声纹（emb）走会话级聚类——跨块全局编号 spk0/spk1/…；
+            # 声纹模式开启但该句太短（<0.25s 不给声纹下结论）→ 标 spk?（宁标未知，
+            # 不得退回块内局部编号——那正是"全场 spk0"的病根）；
+            # 声纹整体未启用（降级模式）→ 沿用块内编号。
+            # 分配放在去重之后：被去重丢弃的句子不参与声纹质心更新。
+            emb = seg.get("emb")
+            if emb is not None:
+                speaker = self.speaker_cluster.assign(emb, float(seg["end"]) - float(seg["start"]))
+            elif getattr(self.asr, "with_embeddings", False):
+                speaker = "spk?"
+            else:
+                speaker = seg.get("speaker", "spk?")
+            line = {"ts": line_ts, "speaker": speaker, "text": fixed}
             # 改写记录在去重检查之后：被去重丢弃的行不得进纠错清单/改写日志
             if fixes:
-                line_ts = line["ts"]
                 for r in fixes:
                     r["ts"] = line_ts
                     r["termset_id"] = self.termset_id
