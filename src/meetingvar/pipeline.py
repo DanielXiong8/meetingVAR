@@ -32,6 +32,7 @@ class Session:
         screen_capture=None,
         echo: bool = True,
         correction_terms: list[str] | None = None,
+        l2_threshold: float | None = None,
     ):
         self.session_id = session_id
         self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
@@ -41,19 +42,20 @@ class Session:
         self.pool = Pool(session_id)
         self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
-        self.scorer = InterestScorer(focus_docs) if focus_docs else None
+        self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
         self.manual = ManualVAR()
         self.screen_capture = screen_capture
         self.echo = echo
         self.hd = None  # 高清补录层（--hd 时由 cli 装配）
 
-        # 环形缓冲：固定 1 秒一格，保留 RING_SECONDS 秒（≈10min，需 ≥ LOOKBACK_SECONDS）
-        self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS)
+        # 连续音频按 1s 分格；按时间淘汰，断流边界的短格不缩短保留时长。
+        self._ring: deque[tuple[float, bytes]] = deque()
         self._ring_carry = b""  # 不足 1 秒的尾巴：攒够一格再入环，保证格大小恒定
         self._ring_carry_ts: float | None = None
         self._pending: list[tuple[float, bytes]] = []
         self._last_flush_ts: float | None = None
         self._timeline_start_ts: float | None = None
+        self._processed_until: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
         # 每条纠错记录 = {src,dst,status,reason,rule_id,ts,termset_id}（correct() 产出、此处补 ts/termset_id）
@@ -69,10 +71,23 @@ class Session:
 
     # ---- 音频进 ----
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
+        if not pcm:
+            return
+        if len(pcm) % 2:
+            raise ValueError("16-bit PCM 必须包含完整采样点")
         if self._timeline_start_ts is None:
             self._timeline_start_ts = start_ts
         step = len(pcm) / _PCM_BYTES_PER_SECOND
+        if self._last_flush_ts is not None:
+            gap = start_ts - self._last_flush_ts
+            if gap < -0.5 / config.ASR_RATE:
+                raise ValueError("音频时间戳不得重叠或倒退")
+            if gap > 0.5 / config.ASR_RATE:
+                self._flush(force=True)  # 断流两侧不能拼成连续的 ASR 输入
         self._ring_feed(pcm, start_ts)
+        cutoff = start_ts + step - config.RING_SECONDS
+        while self._ring and self._ring[0][0] + len(self._ring[0][1]) / _PCM_BYTES_PER_SECOND <= cutoff:
+            self._ring.popleft()
         self._pending.append((start_ts, pcm))
         self._last_flush_ts = start_ts + step
         span = self._last_flush_ts - self._pending[0][0]
@@ -85,12 +100,17 @@ class Session:
         - 上一调用残留的 carry 与本次数据拼接后再切格，格大小与 ingest 块大小无关；
         - 时间轴出现跳变（采集丢帧）时以本次 start_ts 重新锚定，避免时间戳长期漂移。
         """
-        data = self._ring_carry + pcm
         if self._ring_carry and self._ring_carry_ts is not None:
             expected = self._ring_carry_ts + len(self._ring_carry) / _PCM_BYTES_PER_SECOND
-            ts0 = start_ts if abs(start_ts - expected) > 0.05 else self._ring_carry_ts
+            if abs(start_ts - expected) > 0.5 / config.ASR_RATE:
+                self._ring.append((self._ring_carry_ts, self._ring_carry))
+                self._ring_carry = b""
+                ts0 = start_ts
+            else:
+                ts0 = self._ring_carry_ts
         else:
             ts0 = start_ts
+        data = self._ring_carry + pcm
         n = len(data) // _PCM_BYTES_PER_SECOND
         for i in range(n):
             lo = i * _PCM_BYTES_PER_SECOND
@@ -105,18 +125,16 @@ class Session:
         start_ts = self._pending[0][0]
         pcm = b"".join(b for _, b in self._pending)
         span = len(pcm) / 2 / config.ASR_RATE
+        end_ts = start_ts + span
+        if self._processed_until is not None and end_ts <= self._processed_until:
+            self._pending = []
+            return
         if not force and span < config.CHUNK_SECONDS:
             return
         # 滑窗重叠：保留 CHUNK_OVERLAP_SECONDS 尾巴进下一块，防截句
         if not force:
-            tail = []
-            t_end = self._pending[-1][0] + len(self._pending[-1][1]) / 2 / config.ASR_RATE
-            for item in reversed(self._pending):
-                if t_end - item[0] <= config.CHUNK_OVERLAP_SECONDS:
-                    tail.insert(0, item)
-                else:
-                    break
-            self._pending = tail
+            tail_size = min(len(pcm), int(config.CHUNK_OVERLAP_SECONDS * 2 * config.ASR_RATE))
+            self._pending = [(end_ts - tail_size / 2 / config.ASR_RATE, pcm[-tail_size:])] if tail_size else []
         else:
             self._pending = []
 
@@ -130,8 +148,16 @@ class Session:
                 continue
             orig_text = seg["text"]
             fixed, fixes = correct(orig_text, self.correction_terms)
+            line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
+            # Overlapping ASR windows can repeat a sentence. Do not duplicate
+            # that sentence (or its triggers); later occurrences remain valid.
+            if any(abs(old["ts"] - line["ts"]) <= 0.5 and old["text"] == fixed
+                   for old in reversed(self.transcript)
+                   if old["ts"] >= start_ts - 0.5):
+                continue
+            # 改写记录在去重检查之后：被去重丢弃的行不得进纠错清单/改写日志
             if fixes:
-                line_ts = start_ts + seg["start"]
+                line_ts = line["ts"]
                 for r in fixes:
                     r["ts"] = line_ts
                     r["termset_id"] = self.termset_id
@@ -140,9 +166,10 @@ class Session:
                     "ts": line_ts, "orig_text": orig_text, "text": fixed,
                     "termset_id": self.termset_id, "records": fixes,
                 })
-            line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
             new_lines.append(line)
             self.transcript.append(line)
+        self.transcript.sort(key=lambda line: line["ts"])
+        self._processed_until = end_ts
         if self.echo and new_lines:
             last = new_lines[-1]
             print(f"  [{time.strftime('%H:%M:%S', time.localtime(last['ts']))}] {last['speaker']}: {last['text'][:80]}")
@@ -183,21 +210,32 @@ class Session:
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 ≤90s 预算内高帧率补录（帧缩至 1280 宽）
         start_ts = trigger_ts - LOOKBACK_SECONDS
-        chunks = [(t, b) for t, b in self._ring if start_ts <= t <= trigger_ts]
-        # 环里不足 1s 的尾巴（carry）也要进片段：否则命中前最后一秒的音频可能整体丢失
-        if (
-            self._ring_carry
-            and self._ring_carry_ts is not None
-            and start_ts <= self._ring_carry_ts <= trigger_ts
-        ):
+        pieces = []
+        media_start = None
+        media_end = trigger_ts
+        chunks = list(self._ring)
+        if self._ring_carry and self._ring_carry_ts is not None:
             chunks.append((self._ring_carry_ts, self._ring_carry))
-        pcm = b"".join(b for _, b in chunks)
+        for t, b in chunks:
+            lo = max(0, round((start_ts - t) * config.ASR_RATE))
+            hi = min(len(b) // 2, round((trigger_ts - t) * config.ASR_RATE))
+            if hi > lo:
+                if media_start is None:
+                    media_start = t + lo / config.ASR_RATE
+                elif t + lo / config.ASR_RATE > media_end + 0.5 / config.ASR_RATE:
+                    # Keep real timestamps across a capture gap; silence marks
+                    # missing samples instead of moving later evidence earlier.
+                    pieces.append(bytes(round((t + lo / config.ASR_RATE - media_end) * config.ASR_RATE) * 2))
+                media_end = t + hi / config.ASR_RATE
+                pieces.append(b[lo * 2:hi * 2])
+        pcm = b"".join(pieces)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
         clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
         # 截屏 manifest 与 JSON 时间语义保持一致：一律会议相对秒
         screens = [
             (self._relative_ts(t), jpg)
             for t, jpg in (self.screen_capture.frames_since(start_ts) if self.screen_capture else [])
+            if t <= trigger_ts
         ]
         from .pool.store import pcm_to_wav_bytes
 
@@ -205,6 +243,8 @@ class Session:
             trigger_layer=layer,
             evidence=evidence,
             audio_wav=pcm_to_wav_bytes(pcm),
+            audio_start_ts=self._relative_ts(media_start if media_start is not None else trigger_ts),
+            audio_end_ts=self._relative_ts(media_end),
             transcript_lines=clip_lines,
             screens=screens,
             hd_dir=str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None,
@@ -218,7 +258,11 @@ class Session:
 
     # ---- 收尾 ----
     def finish(self) -> dict:
-        self._flush(force=True)
+        try:
+            self._flush(force=True)
+        finally:
+            if self.hd is not None:
+                self.hd.stop()
         # 零落盘纪律（审计 G1a/G1b）：未命中（无片段）的会话不创建任何文件/目录，
         # 草稿转写随进程内存一起消失——"没事故就什么都不落盘"（README 设计红线 2）。
         # 命中会话（G1c）才落盘：片段 + 全场转写文本（薄纪要所需）+ summary。
@@ -242,8 +286,6 @@ class Session:
             ),
             encoding="utf-8",
         )
-        if self.hd is not None:
-            self.hd.stop()
         hd_dir = str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None
         summary = {
             "session_id": self.session_id,

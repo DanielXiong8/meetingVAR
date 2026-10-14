@@ -9,7 +9,8 @@
 审计范围（**应用层持久化写入审计**，不是"操作系统级绝对零写盘证明**）：
   覆盖：① 产物目录 data/{pool,clips,hd,reports} 的新增文件与**目录**；
         ② 仓库工作树（排除 .git/、data/、__pycache__/）——捕获误写进项目的路径。
-  未覆盖：OS 临时目录（ASR 转写用临时 wav，正常路径会删除）、注册表、页面文件、
+  ASR 适配器使用内存波形，不写草稿临时 WAV。
+  未覆盖：其他依赖的 OS 临时写入、注册表、页面文件、
           崩溃转储、其他进程行为——如需该级别结论需 Procmon 等系统级监控。
 
 方法：目录快照（含目录）→ 跑对应 replay → 比对快照。
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import sys
 import tempfile
 import unittest
@@ -60,13 +62,16 @@ def snapshot() -> set[str]:
 
 def repo_snapshot() -> set[str]:
     out: set[str] = set()
-    for p in ROOT.rglob("*"):
-        rel = p.relative_to(ROOT)
-        if rel.parts and rel.parts[0] in {".git", "data", ".github"}:
-            continue
-        if "__pycache__" in rel.parts or p.suffix == ".pyc":
-            continue
-        out.add(rel.as_posix() + "/") if p.is_dir() else out.add(rel.as_posix())
+    for directory, children, files in os.walk(ROOT):
+        children[:] = [name for name in children if name != "__pycache__"
+                       and not (Path(directory) == ROOT and (name in {
+                           ".git", "data", ".github", ".venv", ".runtimes", ".tools", ".secrets"}
+                           or name.startswith(".venv-")))]
+        for name in children + files:
+            p = Path(directory) / name
+            if p.suffix != ".pyc":
+                rel = p.relative_to(ROOT).as_posix()
+                out.add(rel + "/" if p.is_dir() else rel)
     return out
 
 

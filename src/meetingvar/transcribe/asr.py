@@ -5,9 +5,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
-import wave
-from pathlib import Path
 
 from .. import config
 
@@ -42,18 +39,17 @@ class ASR:
 
     def transcribe_pcm16k(self, pcm: bytes) -> list[dict]:
         """输入 16kHz 单声道 16bit PCM，返回说话人标注句段。"""
+        if not pcm:
+            return []
+        if len(pcm) % 2:
+            raise ValueError("16-bit PCM 必须包含完整采样点")
         self._ensure_loaded()
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            with wave.open(f.name, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(config.ASR_RATE)
-                w.writeframes(pcm)
-            tmp = f.name
-        try:
-            res = self._model.generate(input=tmp, batch_size_s=60)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+        import numpy as np
+
+        # FunASR accepts a normalized waveform directly. Writing and deleting
+        # a temporary WAV is still persistence of unpromoted meeting audio.
+        waveform = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
         out: list[dict] = []
         first = res[0] if res else {}
         if "sentence_info" in first:  # 说话人级

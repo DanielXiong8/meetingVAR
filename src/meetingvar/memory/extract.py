@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
+from .files import project_files
 
 # jieba 懒加载：llm_extract/纯结构化路径不依赖 jieba（CI model-free 环境无此包）；
 # 只有人名/拉丁抽取（_persons/_latin）真正用到，在函数内 import。
@@ -53,7 +54,7 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
         _add(terms, m.group(1), "结构化")
     for m in re.finditer(r"^#{1,4}\s*(.+?)\s*$", doc, re.M):  # 标题
         title = m.group(1)
-        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title or re.fullmatch(r"[一-鿿]{1,4}\d*", title):
+        if re.search(r"\d{4}-\d{2}|（|（）|\(|略|待办", title) or " " in title or re.fullmatch(r"[一二三四五六七八九十百]+[、.．]?\d*", title):
             continue  # 日期标题/带括号/含空格的叙述性标题不是词条
         if not re.fullmatch(r"(?:实验记录|组会纪要|术语表|README|文献笔记|会议纪要)(?:\s*·.*)?", title):
             _add(terms, title, "结构化")
@@ -62,7 +63,12 @@ def _structured(doc: str, terms: dict[str, set]) -> None:
 
 
 def _persons(docs: list[str], terms: dict[str, set]) -> None:
-    _ensure_jieba()
+    # POS-based person extraction is an enhancement; basic structured and
+    # Latin term extraction must still work without optional jieba.
+    try:
+        _ensure_jieba()
+    except ImportError:
+        return
     counts: Counter = Counter()
     for doc in docs:
         for w, flag in pseg.cut(doc):
@@ -94,8 +100,7 @@ def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None) -> dic
     _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
     docs = [
         f.read_text(encoding="utf-8", errors="ignore")
-        for f in sorted(memory_dir.rglob("*"))
-        if f.suffix.lower() in {".md", ".txt"}
+        for f in project_files(memory_dir, {".md", ".txt"})
     ]
     terms: dict[str, set] = {}
     for doc in docs:
@@ -155,14 +160,14 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
 
     from ..llm import chat
 
-    # prompt 预算：小模型上下文有限（llama_cpp 默认 4k，建议 ≥32k 起服务）。
-    # 大仓库不设上限会把 prompt 顶到几万 token 直接 400——单文件留头部、总量封顶。
+    # 剪枝扫描（files.project_files：运行时目录不当作项目记忆）+ prompt 预算：
+    # 小模型上下文有限（llama_cpp 默认 4k，建议 ≥32k 起服务）——单文件留头部、总量封顶。
+    from .files import project_files
+
     per_doc_chars, total_chars = 6000, 40000
     parts: list[str] = []
     total = 0
-    for f in sorted(memory_dir.rglob("*")):
-        if f.suffix.lower() not in {".md", ".txt"}:
-            continue
+    for f in sorted(project_files(memory_dir, {".md", ".txt"})):
         body = f.read_text(encoding="utf-8", errors="ignore")[:per_doc_chars]
         part = f"### {f.relative_to(memory_dir)}\n{body}"
         if total + len(part) > total_chars:
@@ -175,6 +180,7 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
     # 小模型 JSON 输出不稳：/no_think 关思考、剥代码栅栏、失败重试一次
     prompt = _LLM_PROMPT.format(docs=docs) + "\n/no_think"
     raw = None
+    data = None
     for attempt in range(2):
         raw = chat(prompt)
         if raw is None:

@@ -3,6 +3,31 @@
 约定：**谁踩坑谁写**，格式固定为「现象 → 原因 → 解法」，附上最终生效的命令或链接。
 两个人别在同一个坑里各摔一次。
 
+## 本轮本机验证（2026-10-12）
+
+2026-10-13 已新增真实 CPU 部署：`.venv-live` + 仓库 `models/`。
+四模型真实识别及 WASAPI/屏幕/CLI go/纪要归档自检通过，入口为 `Start-MeetingVAR.cmd`，
+详见 [本机实测](docs/LOCAL_TRIAL.md)。本机显卡为 RTX 5070 Ti Laptop 12GB；GPU 加速尚未部署。
+
+本机实际目录为 `C:\Users\QYC\Documents\ChatGPT\with_xiong\meetingVAR-b-feedback-loop`。
+`.venv` 使用 Python 3.10.22，系统 `python` 是 3.14；下方 D 盘 conda/RTX 5060 记录来自协作者机器。
+下表记录 2026-10-12 轻量仿真验证；真实采集环境已于 2026-10-13 单独补齐，见上方实测入口。
+
+| 现象 | 原因 | 本轮解法 |
+|---|---|---|
+| 验收改动没出现在原工作分支 | 协作者修复在 `origin/pr-a`，没有并入 main | fetch 后整合 `57ed2c1`，保留双方历史并跑全部回归 |
+| 未命中仍留下记录 | Pool 提前 mkdir，finish 以“没有转写”为条件 | 有片段才创建会话产物，digest/go 对无内容返回提示 |
+| HD 打印成功但视频损坏 | raw RGB 当作 PNG，未检查退出码就删除源帧 | 正确解码输入，编码及完整解码验证成功才删除源帧 |
+| 录屏失败后再次开录设备被占用 | 初始化不在既有收尾保护范围内 | record/go 共用 ExitStack 管理资源，初始化异常也释放 |
+| 启动期间和结束前的声音缺失 | 轮询游标从初始化后的墙钟开始，未排空尾块 | 从采集起点处理已有缓冲，退出时停采并取完尾块 |
+| 静音期间回车不及时保存 | 手动标记只在 ASR flush 消费 | 主循环也处理手动标记；已有缓冲可直接转正 |
+| 手动词反复 rescan 后消失 | 重写文件未保留旧 `#!keep` 标记 | 每次重扫重新写入全部手动标记 |
+| 更新纪要后项目副本仍旧 | digest 只覆盖 reports，不更新 archive | 新增 `meetingvar archive --session ... --project ...` |
+| 测试临时目录 PermissionError | 受限环境的系统临时目录 ACL 不可写 | `scripts/run_local_checks.py` 使用 data 下独立临时目录 |
+
+实时采集不再逐端点开探测线程，默认使用系统播放端点；需要另一端点时用 `--audio-device`。
+历史“自动探测最响端点”记录已由此策略替代。完整证据见 [本机报告](docs/test_report_local_20261012.md)。
+
 ## 环境基线
 
 - Python 3.10（conda 独立环境 `meetingvar`；FunASR 生态对 3.11+ 兼容性不稳）

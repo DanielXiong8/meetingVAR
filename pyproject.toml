@@ -9,6 +9,7 @@ description = "record your meeting like VAR referee"
 # FunASR/audioop 运行基线记录在 environment.yml 和 SETUP.md 中：Python 3.10。
 # 先锁定已验证的运行时，避免 Python 3.13+ 在导入 audioop 时才失败。
 requires-python = ">=3.10,<3.11"
+dependencies = ["python-dotenv>=1.0,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

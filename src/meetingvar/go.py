@@ -20,15 +20,14 @@ from .cli import load_memory_docs, load_terms
 def cmd_go(args) -> None:
     from .report.generate import digest as digest_
 
-    from .capture.audio import AudioCapture
-    from .capture.screen import ScreenCapture
+    from .live import record_session
     from .monitor.hotwords import InterestScorer
-    from .pipeline import Session
+    from .memory.calibration import load_threshold
 
     project = Path(args.project)
     memory_dir = project if project.is_dir() else project.parent
     repo_dir = project if (project / ".git").exists() or any(project.glob("*.py")) else None
-    session_id = f"go_{int(time.time())}"
+    session_id = f"go_{time.time_ns()}"
 
     # ---- t+0：快抽取（工具层 + jieba，秒级） ----
     terms: dict[str, list[str]] = {}
@@ -50,87 +49,37 @@ def cmd_go(args) -> None:
         print("[go] 警告：项目里没抽到词，本次只有手动 VAR（回车）兜底")
 
     focus = load_memory_docs(memory_dir)
-    scorer_holder = {"scorer": InterestScorer(focus) if focus else None}
+    l2_threshold = load_threshold(memory_dir)
+    print(f"[calibration] 项目 L2 阈值: {l2_threshold:.2f}")
 
-    # ---- t+5s：录音立即开始 ----
-    print("[rec] 打开系统音频环回…")
-    audio = AudioCapture()
-    print(f"[rec] 采集源: {audio.name}")
-    screen = None
-    if not args.no_screen:
-        screen = ScreenCapture()
-        print(f"[rec] 录屏缓冲: {screen.backend} @ {config.SCREEN_FPS}fps")
+    # 后台增强只在采集资源成功初始化后启动。
+    def on_session(session):
+        if not args.llm:
+            return
 
-    hd = None
-    if args.hd:
-        from .capture.hd import HDCapture
-
-        hd = HDCapture()
-    session = Session(
-        session_id, terms=wordlist, focus_docs=focus,
-        device=args.device, screen_capture=screen, echo=True,
-    )
-    session.hd = hd
-    session.scorer = scorer_holder["scorer"]
-    print(f"[rec] 会议监听开始。回车=手动 VAR，Ctrl+C 结束。语义层后台增强中…")
-
-    # ---- 后台：慢抽取 → 热更新 ----
-    if args.llm:
-        def _slow_extract():
+        def slow_extract():
             from .memory.extract import llm_extract
-
-            r = llm_extract(memory_dir)
-            if not r:
-                print("[go] 语义层不可用（本地模型未启动或未配置），本次以快词表监听")
+            result = llm_extract(memory_dir)
+            if not result:
+                print("[go] 语义层不可用，本次以快词表监听")
                 return
-            llm_terms, persons = r
-            new_words = []
-            for w, srcs in llm_terms.items():
-                if w not in terms:
-                    terms[w] = srcs
-                    new_words.append(w)
-                session.monitor.terms.append(w)
-            if scorer_holder["scorer"]:
-                docs = focus + [w for w in llm_terms]
-                scorer_holder["scorer"] = InterestScorer(docs)
-                session.scorer = scorer_holder["scorer"]
-            for p in persons:
-                print(f"  [go+] 人物: {p.get('name')} — {p.get('role', '?')}")
+            llm_terms, persons = result
+            new_words = [word for word in llm_terms if word not in terms]
+            for word in new_words:
+                terms[word] = llm_terms[word]
+            # 纠错词表和监听词表同步更新；不重复添加已有监听词。
+            session.terms.extend(new_words)
+            session.monitor.terms.extend(word for word in llm_terms if word not in session.monitor.terms)
+            if focus:
+                session.scorer = InterestScorer(focus + list(llm_terms), threshold=l2_threshold)
+            for person in persons:
+                print(f"  [go+] 人物: {person.get('name')} — {person.get('role', '?')}")
             print(f"[go+] 语义层热更新完成: +{len(new_words)} 词，本场即刻生效")
 
-        threading.Thread(target=_slow_extract, daemon=True).start()
+        threading.Thread(target=slow_extract, daemon=True).start()
 
-    # ---- 主循环：与 cmd_record 相同 ----
-    stop = threading.Event()
-
-    def _wait_enter():
-        try:
-            while not stop.is_set():
-                input()
-                session.manual.fire()
-        except EOFError:
-            pass
-
-    threading.Thread(target=_wait_enter, daemon=True).start()
-
-    last_ts = time.time()
-    t0 = time.time()
-    try:
-        while not stop.is_set() and (args.duration <= 0 or time.time() - t0 < args.duration):
-            pcm, since = audio.ingest_since(last_ts)
-            last_ts = time.time()
-            if pcm:
-                session.ingest_pcm(pcm, since)
-            stop.wait(0.5)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop.set()
-        summary = session.finish()
-        audio.stop()
-        if screen:
-            screen.stop()
-    print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
+    summary = record_session(args, session_id, wordlist, focus, l2_threshold, on_session)
+    print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
 
     # 项目归档：纪要自动进 <项目>/meetingvar/minutes/，供跨会话热词库演化
     # 零命中会话（零落盘）没有可归档内容——直接告知，不制造空纪要。
@@ -143,7 +92,8 @@ def cmd_go(args) -> None:
             print(f"[go] 纪要已归档至 {project_dir(project) / 'minutes' / session_id}")
         except Exception as e:  # noqa: BLE001 — 归档失败不阻塞主流程
             print(f"[go] 归档跳过：{e}")
-        print(f"[next] meetingvar digest --session {session_id} --llm  （重出叙述版会覆盖归档）")
+        print(f"[next] meetingvar digest --session {session_id} --llm")
+        print(f'[next] meetingvar archive --session {session_id} --project "{project}"  （更新项目纪要副本）')
     else:
         print("[go] 本场零命中：按零落盘策略，全程内容已随会话结束丢弃（磁盘上没有留下任何会议记录）")
 
@@ -153,6 +103,7 @@ def register(sub) -> None:
     g.add_argument("project", help="项目文件夹（代码+文档混放也行）")
     g.add_argument("--no-repo", action="store_true", help="跳过代码符号抽取")
     g.add_argument("--no-screen", action="store_true")
+    g.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
     g.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算）")
     g.add_argument("--llm", action="store_true", help="后台叠加本地/云端小模型语义抽取并热更新")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")

@@ -10,6 +10,12 @@
 
 参赛：SDG Open Hack 2026 · Hack16 ·「AI 办公任务助手」赛道。
 
+**使用入口（2026-10-12）**：[完整使用与真实会议验收清单](docs/USAGE_CHECKLIST.md)，
+[本机复现与修复报告](docs/test_report_local_20261012.md)。当前修复分支为 `codex/local-acceptance-fixes`。
+**本机实测入口（2026-10-13）**：[部署与首次实测](docs/LOCAL_TRIAL.md)。双击 `Start-MeetingVAR.cmd` 打开终端菜单，
+选择演示项目或自己的资料文件夹开始实测；需要已部署的 `.venv-live` 与四套本地语音模型。
+Windows 本机可直接运行 `.\.venv\Scripts\python.exe scripts/run_local_checks.py`，自动保留回归日志和可检查的仿真产物。
+
 ## 定位三声明（设计红线）
 
 1. **系统级、平台无关**：依附"项目"，不依附任何会议软件——腾讯会议、飞书、微信视频、线下会议室都只是声音来源。
@@ -54,15 +60,21 @@ models/          模型权重本地固化（不入库）
 data/            会议音频/录屏素材（不入库——含他人声音与屏幕）
 ```
 
-## 当前状态：Spike 阶段（2026-09-29 开工）
+## 当前状态：MVP 命令行（截至 2026-10-12）
 
-| spike | 验证目标 | 状态 |
+| 模块 | 验证目标 | 状态 |
 |---|---|---|
-| c1 | torch+FunASR+CAM++ 离线推理（**断网跑通**，权重固化 models/） | 待验证 |
-| c2 | pyaudiowpatch 采到"系统输出"声音 | 待验证 |
-| c3 | 腾讯会议 + 微信视频实测 c2 | 待验证 |
-| c4 | dxcam 低帧率内存环形缓冲（退路 mss） | 待验证 |
-| c5 | 热词增强术语纠错可见 | 待验证 |
+| c1 | FunASR + VAD + CAM++ 本地推理 | CPU/GPU 冒烟通过；正式拔网线验证和多人剧本归因仍待补 |
+| c2 | WASAPI 系统声音环回 | TTS 系统输出采集并成功送入 ASR，已验证 |
+| c3 | 腾讯会议/微信视频真实会议 | 待人工实测；不能由 TTS 环回测试替代 |
+| c4 | dxcam 低帧率录屏环形缓冲 | Windows 上 2fps JPEG 缓冲已验证 |
+| c5 | 术语增强 | FunASR `hotword` 参数实测无效；现用转写后术语纠错，效果见 SETUP |
+
+当前可运行入口是 CLI，不包含托盘/悬浮条/会后图形界面。真实音频、屏幕、模型权重均不入库；无声卡、模型或真实会议素材的功能只按其实际测试边界标注，不视为端到端验收。
+表中早期设备/模型验证来自协作者机器；2026-10-13 本机另已部署真实 CPU 环境与四模型，
+通过官方短语音播放完成真实系统环回、录屏、CLI go、三层触发与纪要归档自检，详见本机实测入口。
+本机默认环回端点为 ToDesk Virtual Audio；换用耳机或其他输出后需重新确认设备。
+音频来源目前仅为系统播放混音，不额外采集本机麦克风；自己的发言只有经系统输出播放时才会被录到。
 
 ## 快速开始（MVP 骨架，2026-10-04 起可用）
 
@@ -76,24 +88,58 @@ meetingvar replay --wav 某段.wav --terms configs/terms_demo.txt \
                  --memory spikes/b1_rag/sample_project        # 离线回放走全管线
 meetingvar record --terms configs/terms_demo.txt              # 实时采集（回车=手动VAR）
 meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪要
+meetingvar archive --session <id> --project <项目目录>        # 将当前纪要复制/更新到项目归档
+meetingvar review --session <id> --summary                   # 会后片段列表与反馈摘要
+meetingvar review --session <id> --clip <id> --status useful --project <项目目录>  # 评价并校准该项目 L2
+python scripts/demo_feedback_loop.py                         # 无模型的两场反馈演示
 
 # 不依赖模型和设备的本地回归测试
 python -m unittest discover -s tests -v
 ```
 
-管线：环回音频 → 10min 环形缓冲（**固定 1s/格，不落盘**）→ 8s 增量转写（说话人+标点）→ 术语纠错 →
-L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（**回溯前 300s** 音频+截屏；未命中则零落盘）→ 片段池 →
+### 无模型、无声卡的全流程仿真
+
+使用 Python 3.10，安装轻量依赖即可验证真实 CLI 与管线，不需 CUDA、模型权重或音频设备：
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate；Linux/macOS: source .venv/bin/activate
+python -m pip install -e . -r requirements-simulation.txt
+python -m unittest discover -s tests -v
+python -m meetingvar.simulation --output data/simulation
+```
+
+仿真依次执行 `terms → replay → digest → review → rescan → 下一场 replay → go`。
+音频转换、ASR 适配器、纠错、TF-IDF、三层触发、片段池、纪要、评价校准和归档均使用项目代码；
+仅替换 FunASR 模型输出、系统音频和屏幕来源。生成的 WAV 是编码测试信号，**不是语音，不能用于证明识别准确率**。
+每次运行在 `data/simulation/run_*/` 保留 `result.json`、日志、有效 WAV/JPEG、薄厚纪要与项目归档。
+测试报告见 [docs/test_report_simulation.md](docs/test_report_simulation.md)。
+
+管线：环回音频 → 10min 环形缓冲（不落盘）→ 8s 增量转写（3s 重叠，说话人+标点）→ 术语纠错 →
+L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（默认回溯 300s，可由 `MEETINGVAR_LOOKBACK` 调整）→ 片段池 →
 digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
 
-审计与验证（2026-10-10 起）：零落盘承诺分级可测（G1a/G1b/G1c，`tests/audit_zero_persistence.py`）、
-回溯缓冲边界（`tests/test_ring_lookback.py`）、HD 补录生命周期（`tests/test_hd_lifecycle.py`）；
-协议全文见 [docs/eval_protocol.md](docs/eval_protocol.md)。
+零命中时不保存该会话的文件或目录；有命中时保存选择的媒体片段，以及薄纪要所需的全场转写文本。
+实时采集跟随系统默认输出；设备不一致时先运行 `devices`，再用 `go/record --audio-device <编号>` 指定。
+`--no-screen` 关闭录屏，不能与 `--hd` 同用；高清 MP4 不带音轨，raw 临时帧可能占数十 GB，先做短演练。
 
 LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
 未配置时输出结构化模板版并如实标注〔模板版〕。
 
+也可以在仓库根目录填写本机 `.env`（空模板见 `.env.example`），启动时自动读取，进程环境变量优先。
+明文 `.env` 与 `.secrets/` 密钥不入库；向协作者分享时使用认证加密密文，操作见
+[加密配置分享说明](docs/encrypted_env.md)。
+
+L2 反馈校准（显式 opt-in）：会后评审时加 `--project <项目目录>`，系统只采纳已评价的 L2 片段，
+把有用样本小幅降低、不相关样本提高该项目的相似度阈值，并将样本与当前阈值保存到
+`<项目目录>/meetingvar/calibration.json`。下一次 `go <项目目录>` 或 `record/replay --memory <项目目录>`
+会读取它。阈值范围限制在 0.05–0.95；L1 热词与 L3 手动 VAR 不参与 L2 校准。此规则是可审计的
+保守启发式，不代表模型训练或统计意义上的准确率保证。
+
 ## 文档
 
+- [docs/USAGE_CHECKLIST.md](docs/USAGE_CHECKLIST.md) —— 环境准备、仿真、短音频、真实会议、反馈与故障清单
+- [docs/test_report_local_20261012.md](docs/test_report_local_20261012.md) —— 本轮修复前后证据、测试边界和日志位置
 - [docs/plan.md](docs/plan.md) —— 完整计划书：定位 / 功能规格 / 竞品差异 / 赛程里程碑 / 两人分工
 - [docs/daily_plan.md](docs/daily_plan.md) —— 逐日计划（你每天干什么看这个）
 - [docs/pool_schema.md](docs/pool_schema.md) —— 待审片段池接口契约，**字段变更须两人确认**

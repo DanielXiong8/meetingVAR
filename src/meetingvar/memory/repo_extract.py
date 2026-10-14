@@ -17,11 +17,11 @@ import re
 import subprocess
 from collections import Counter
 from pathlib import Path
+from .files import project_files
 
 # ---------- L0 工具层：代码仓库符号/词频（零 LLM，任意大小） ----------
 
 _CODE_EXT = {".py", ".js", ".ts", ".java", ".cpp", ".h", ".go", ".rs", ".sh", ".sql", ".yaml", ".yml", ".toml"}
-_SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".zcode"}
 _NAME_RE = {
     "py_def": re.compile(r"^\s*def\s+([a-zA-Z_][\w]{2,40})", re.M),
     "py_class": re.compile(r"^\s*class\s+([A-Z][\w]{1,40})", re.M),
@@ -34,11 +34,10 @@ def repo_terms(repo_dir: Path, max_files: int = 2000) -> tuple[dict[str, list[st
     """返回 (术语, 关键文件候选[(path, 摘要行, 分数)])。"""
     terms: dict[str, set] = {}
     files: list[Path] = []
-    for f in repo_dir.rglob("*"):
-        if f.is_file() and f.suffix.lower() in _CODE_EXT and not any(d in f.parts for d in _SKIP_DIRS):
-            files.append(f)
-            if len(files) >= max_files:
-                break
+    for f in project_files(repo_dir, _CODE_EXT):
+        files.append(f)
+        if len(files) >= max_files:
+            break
     idents: Counter = Counter()
     candidates: list[dict] = []
     for f in files:

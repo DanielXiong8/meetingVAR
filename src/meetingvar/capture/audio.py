@@ -9,80 +9,58 @@ import threading
 import time
 from collections import deque
 
-import pyaudiowpatch as pyaudio
-
 from .. import config
 
 
+def to_pcm16k(raw: bytes, channels: int, rate: int, state=None):
+    """16-bit mono/stereo -> mono 16k, shared by replay and live capture."""
+    if channels == 2:
+        raw = audioop.tomono(raw, 2, 0.5, 0.5)
+    elif channels != 1:
+        raise ValueError(f"仅支持单声道或双声道音频，当前 {channels} 声道")
+    return audioop.ratecv(raw, 2, 1, rate, config.ASR_RATE, state)
+
+
 def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
-    """坑 20 对策：默认环回端点可能静音（播放走另一端点）。
-    并发试采所有环回端点，选 RMS 最大者；全静音则回落默认端点并提示。"""
-    import audioop
-    import threading
+    """跟随系统默认输出，避免逐端点试开流导致驱动互锁。
 
-    devs = list(pa.get_loopback_device_info_generator())
-    if len(devs) <= 1:
-        return devs[0]
-    # 坑 19：环回流并发互锁；坑 23：残留进程持锁会让 pa.open 永不返回。
-    # 对策：每个端点的探测放独立 daemon 线程 + join 超时，卡住即跳过该端点。
-    results: dict[int, float] = {}
-    for dev in devs:
-        idx = dev["index"]
-        result_box: dict = {}
-
-        def _one(box: dict) -> None:
-            try:
-                rate = int(dev["defaultSampleRate"])
-                ch = int(dev["maxInputChannels"]) or 2
-                st = pa.open(
-                    format=pyaudio.paInt16, channels=ch, rate=rate,
-                    frames_per_buffer=int(rate * 0.1), input=True, input_device_index=idx,
-                )
-                chunks = []
-                t_end = time.time() + probe_seconds
-                while time.time() < t_end:
-                    chunks.append(st.read(int(rate * 0.1), exception_on_overflow=False))
-                st.stop_stream(); st.close()
-                box["rms"] = audioop.rms(b"".join(chunks), 2)
-            except Exception:
-                box["rms"] = -1.0
-
-        th = threading.Thread(target=_one, args=(result_box,), daemon=True)
-        th.start()
-        th.join(timeout=probe_seconds + 5)
-        results[idx] = result_box.get("rms", -2.0)  # -2 = 超时跳过
-    live = {i: r for i, r in results.items() if r > 100}
-    if live:
-        best = max(live, key=live.get)
-        chosen = pa.get_device_info_by_index(best)
-        print(f"[audio] 探测到活动端点: {chosen['name']} (RMS={live[best]:.0f})")
-        return chosen
-    print("[audio] 警告：所有环回端点均静音（系统当前没有声音输出？），回落默认端点")
-    return devs[0]
+    播放设备不一致时用 devices 查看编号，再显式 --audio-device 选择。
+    probe_seconds 保留以兼容已有调用；不再创建无法取消的探测线程。
+    """
+    return pa.get_default_wasapi_loopback()
 
 
 class AudioCapture:
     def __init__(self, device_index: int | None = None, ring_seconds: int = config.RING_SECONDS, auto_pick: bool = True):
+        import pyaudiowpatch as pyaudio
+
         self._pa = pyaudio.PyAudio()
-        if device_index is not None:
-            self._dev = self._pa.get_device_info_by_index(device_index)
-        elif auto_pick:
-            self._dev = pick_live_endpoint(self._pa)
-        else:
-            self._dev = self._pa.get_default_wasapi_loopback()
-        self._rate = int(self._dev["defaultSampleRate"])
-        self._channels = int(self._dev["maxInputChannels"]) or 2
-        self._frames_per_read = int(self._rate * 0.1)  # 100ms
-        self._stream = self._pa.open(
-            format=pyaudio.paInt16,
-            channels=self._channels,
-            rate=self._rate,
-            frames_per_buffer=self._frames_per_read,
-            input=True,
-            input_device_index=self._dev["index"],
-        )
+        try:
+            if device_index is not None:
+                self._dev = self._pa.get_device_info_by_index(device_index)
+            elif auto_pick:
+                self._dev = pick_live_endpoint(self._pa)
+            else:
+                self._dev = self._pa.get_default_wasapi_loopback()
+            self._rate = int(self._dev["defaultSampleRate"])
+            self._channels = int(self._dev["maxInputChannels"]) or 2
+            if self._channels not in (1, 2) or self._rate <= 0:
+                raise ValueError("环回端点必须为有效采样率的单声道或双声道设备")
+            self._frames_per_read = int(self._rate * 0.1)  # 100ms
+            self._stream = self._pa.open(
+                format=pyaudio.paInt16,
+                channels=self._channels,
+                rate=self._rate,
+                frames_per_buffer=self._frames_per_read,
+                input=True,
+                input_device_index=self._dev["index"],
+            )
+        except BaseException:
+            self._pa.terminate()
+            raise
         self._ring: deque[tuple[float, bytes]] = deque(maxlen=ring_seconds * 10)
         self._state = None  # audioop.ratecv 状态
+        self._next_audio_ts: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self.session_start = time.time()
@@ -100,16 +78,19 @@ class AudioCapture:
             except OSError:
                 time.sleep(0.1)
                 continue
-            mono, self._state = audioop.ratecv(
-                raw, 2, self._channels, self._rate, config.ASR_RATE, self._state
-            )
+            mono, self._state = to_pcm16k(raw, self._channels, self._rate, self._state)
             with self._lock:
-                self._ring.append((time.time(), mono))
+                duration = len(mono) / 2 / config.ASR_RATE
+                start = self._next_audio_ts
+                if start is None:
+                    start = time.time() - duration
+                self._ring.append((start, mono))
+                self._next_audio_ts = start + duration
 
     def ingest_since(self, since_ts: float) -> tuple[bytes, float]:
         """取出自 since_ts 以来的全部音频，返回 (pcm, 起始绝对时间戳)。"""
         with self._lock:
-            items = [(t, b) for t, b in self._ring if t >= since_ts]
+            items = [(t, b) for t, b in self._ring if t >= since_ts - 0.5 / config.ASR_RATE]
         if not items:
             return b"", time.time()
         return b"".join(b for _, b in items), items[0][0]

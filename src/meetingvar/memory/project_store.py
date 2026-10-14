@@ -54,12 +54,17 @@ def rescan_terms(project_root: Path, extra_terms: list[str] | None = None, use_l
 
     docs_dir = project_root
     terms: dict[str, list[str]] = {}
+    manual_terms = set(extra_terms or [])
     # 旧词表里的手动词永久保留（LLM/工具层词随新扫描刷新）
     old = project_dir(project_root) / "terms.txt"
     if old.exists():
         for line in old.read_text(encoding="utf-8").splitlines():
             if line.startswith("#!keep"):
-                terms.setdefault(line.split(maxsplit=1)[1].strip(), []).append("手动保留")
+                parts = line.split(maxsplit=1)
+                if len(parts) > 1 and parts[1].strip():
+                    manual_terms.add(parts[1].strip())
+    for word in manual_terms:
+        terms.setdefault(word, []).append("手动保留")
     for w, s in extract_terms(docs_dir).items():
         terms.setdefault(w, []).extend(s)
     # 归档纪要单独作为记忆源（minutes.md 里的术语=历史会议沉淀）
@@ -80,8 +85,8 @@ def rescan_terms(project_root: Path, extra_terms: list[str] | None = None, use_l
     out = sorted(terms)
     write = project_dir(project_root) / "terms.txt"
     lines = ["#!", f"# 项目热词库 · {project_root.name} · 更新于 {time.strftime('%Y-%m-%d %H:%M')} · 归档纪要 {n_minutes} 份"]
-    lines += ["#!keep " + t for t in (extra_terms or [])]
-    lines += out
+    lines += ["#!keep " + t for t in sorted(manual_terms)]
+    lines += [word for word in out if word not in manual_terms]
     write.write_text("\n".join(lines) + "\n", encoding="utf-8"
     )
     return out, n_minutes

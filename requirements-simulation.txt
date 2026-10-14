@@ -1,0 +1,5 @@
+# Python 3.10: real text scoring/correction/media, no GPU/models/audio device.
+jieba==0.42.1
+scikit-learn==1.7.2
+pypinyin==0.55.0
+pillow==12.0.0

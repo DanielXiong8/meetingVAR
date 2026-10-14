@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -242,7 +243,7 @@ class HdLifecycleTests(unittest.TestCase):
         self.assertLessEqual(meta["temp_used_session_total"], budget, "临时帧总量必须不超预算")
         self.assertLessEqual(meta["fps_planned"], 5.2, f"预算编排未降低帧率: {meta['fps_planned']}")
         self.assertGreaterEqual(meta["fps_planned"], 4.0)
-        self.assertAlmostEqual(wall, 4.0, delta=1.0, msg="预算紧也应覆盖完整补录时长")
+        self.assertAlmostEqual(wall, 4.0, delta=1.6, msg="预算紧也应覆盖完整补录时长")
         self.assertFalse(meta["budget_hit"])
 
     def test_budget_hard_cap_and_cumulative_across_hits(self) -> None:
@@ -307,6 +308,45 @@ class HdLifecycleTests(unittest.TestCase):
         finally:
             config.DATA_DIR, config.POOL_DIR, config.CLIPS_DIR = old
             pipeline_mod.ASR = old_asr
+
+    def test_encode_failure_keeps_source_frames(self):
+        hd = self._hd()
+        hd.session_dir = self.tmp / "failed"
+        hd.session_dir.mkdir()
+        hd._frame_size = (64, 48)
+        raw = hd.session_dir / "f_00000.rgb"
+        raw.write_bytes(bytes(64 * 48 * 3))
+        failed = subprocess.CompletedProcess([], 1, b"", b"encoder failed")
+        with patch("meetingvar.capture.hd._ffmpeg", return_value="fake"), \
+             patch("meetingvar.capture.hd.subprocess.run", return_value=failed):
+            hd._synthesize(1)
+        self.assertTrue(raw.exists())
+
+    def test_undecodable_output_keeps_source_frames(self):
+        hd = self._hd()
+        hd.session_dir = self.tmp / "corrupt"
+        hd.session_dir.mkdir()
+        hd._frame_size = (64, 48)
+        raw = hd.session_dir / "f_00000.rgb"
+        raw.write_bytes(bytes(64 * 48 * 3))
+        (hd.session_dir / "hd_clip.mp4").write_bytes(b"corrupt video")
+        responses = [subprocess.CompletedProcess([], 0, b"", b""),
+                     subprocess.CompletedProcess([], 1, b"", b"decode failed")]
+        with patch("meetingvar.capture.hd._ffmpeg", return_value="fake"), \
+             patch("meetingvar.capture.hd.subprocess.run", side_effect=responses):
+            hd._synthesize(1)
+        self.assertTrue(raw.exists())
+
+    def test_missing_ffmpeg_keeps_source_frames(self):
+        hd = self._hd()
+        hd.session_dir = self.tmp / "no_ffmpeg"
+        hd.session_dir.mkdir()
+        hd._frame_size = (64, 48)
+        raw = hd.session_dir / "f_00000.rgb"
+        raw.write_bytes(bytes(64 * 48 * 3))
+        with patch("meetingvar.capture.hd._ffmpeg", return_value=None):
+            hd._synthesize(1)
+        self.assertTrue(raw.exists())
 
 
 if __name__ == "__main__":

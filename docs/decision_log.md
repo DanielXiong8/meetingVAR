@@ -238,3 +238,5 @@ B-governed 词表治理实测：1044 词 → 排除 298（指标行/日期/标�
 **v1 残余问题 → v2 候选**：形态学守卫（规则屈折变体一律待审）、LLM 逐候选确认（仅作建议分）、
 人工 review 闭环（`meetingvar review`，records 已含 ts/termset_id/rule_id/原文快照，可精确恢复）。
 
+- 队友支线文档（integration 合并保留）：test_report_local_20261012 / test_report_simulation /
+  test_report_deepseek / test_report_feedback_calibration / USAGE_CHECKLIST（见其分支 docs/）。
