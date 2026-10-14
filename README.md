@@ -81,9 +81,13 @@ meetingvar digest --session <id> [--llm]                      # 会后薄/厚纪
 python -m unittest discover -s tests -v
 ```
 
-管线：环回音频 → 10min 环形缓冲（不落盘）→ 30s 增量转写（说话人+标点）→ 术语纠错 →
-L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（回溯 120s 音频+截屏）→ 片段池 →
+管线：环回音频 → 10min 环形缓冲（**固定 1s/格，不落盘**）→ 8s 增量转写（说话人+标点）→ 术语纠错 →
+L1 热词 / L2 兴趣相似度 / L3 手动热键 → 命中转正（**回溯前 300s** 音频+截屏；未命中则零落盘）→ 片段池 →
 digest 出 `data/reports/<session>/{minutes.md,var_reports.md}`。
+
+审计与验证（2026-10-10 起）：零落盘承诺分级可测（G1a/G1b/G1c，`tests/audit_zero_persistence.py`）、
+回溯缓冲边界（`tests/test_ring_lookback.py`）、HD 补录生命周期（`tests/test_hd_lifecycle.py`）；
+协议全文见 [docs/eval_protocol.md](docs/eval_protocol.md)。
 
 LLM 接入（可选）：设 `MEETINGVAR_LLM_BASE_URL / _API_KEY / _MODEL`，`digest --llm` 出叙述版；
 未配置时输出结构化模板版并如实标注〔模板版〕。

@@ -18,6 +18,7 @@ from .transcribe.asr import ASR
 from .transcribe.correct import correct
 
 LOOKBACK_SECONDS = config.LOOKBACK_SECONDS  # 命中回溯窗（config 可调，env MEETINGVAR_LOOKBACK）
+_PCM_BYTES_PER_SECOND = config.ASR_RATE * 2  # 接口约定：16bit 单声道 PCM，1 秒 = 32000 字节
 
 
 class Session:
@@ -41,7 +42,10 @@ class Session:
         self.echo = echo
         self.hd = None  # 高清补录层（--hd 时由 cli 装配）
 
-        self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS * 10)
+        # 环形缓冲：固定 1 秒一格，保留 RING_SECONDS 秒（≈10min，需 ≥ LOOKBACK_SECONDS）
+        self._ring: deque[tuple[float, bytes]] = deque(maxlen=config.RING_SECONDS)
+        self._ring_carry = b""  # 不足 1 秒的尾巴：攒够一格再入环，保证格大小恒定
+        self._ring_carry_ts: float | None = None
         self._pending: list[tuple[float, bytes]] = []
         self._last_flush_ts: float | None = None
         self._timeline_start_ts: float | None = None
@@ -53,14 +57,32 @@ class Session:
     def ingest_pcm(self, pcm: bytes, start_ts: float) -> None:
         if self._timeline_start_ts is None:
             self._timeline_start_ts = start_ts
-        step = len(pcm) / 2 / config.ASR_RATE
-        for i in range(0, len(pcm), config.ASR_RATE):  # 1s 一格，ring 粒度
-            self._ring.append((start_ts + i / config.ASR_RATE, pcm[i : i + config.ASR_RATE]))
+        step = len(pcm) / _PCM_BYTES_PER_SECOND
+        self._ring_feed(pcm, start_ts)
         self._pending.append((start_ts, pcm))
         self._last_flush_ts = start_ts + step
         span = self._last_flush_ts - self._pending[0][0]
         if span >= config.CHUNK_SECONDS:
             self._flush()
+
+    def _ring_feed(self, pcm: bytes, start_ts: float) -> None:
+        """按固定 1 秒一格进环形缓冲：格时间戳间隔 1.0s ⇔ 格内音频 32000 字节。
+
+        - 上一调用残留的 carry 与本次数据拼接后再切格，格大小与 ingest 块大小无关；
+        - 时间轴出现跳变（采集丢帧）时以本次 start_ts 重新锚定，避免时间戳长期漂移。
+        """
+        data = self._ring_carry + pcm
+        if self._ring_carry and self._ring_carry_ts is not None:
+            expected = self._ring_carry_ts + len(self._ring_carry) / _PCM_BYTES_PER_SECOND
+            ts0 = start_ts if abs(start_ts - expected) > 0.05 else self._ring_carry_ts
+        else:
+            ts0 = start_ts
+        n = len(data) // _PCM_BYTES_PER_SECOND
+        for i in range(n):
+            lo = i * _PCM_BYTES_PER_SECOND
+            self._ring.append((ts0 + i, data[lo : lo + _PCM_BYTES_PER_SECOND]))
+        self._ring_carry = data[n * _PCM_BYTES_PER_SECOND :]
+        self._ring_carry_ts = ts0 + n if self._ring_carry else None
 
     # ---- 转写 + 监听 ----
     def _flush(self, force: bool = False) -> None:
@@ -87,8 +109,11 @@ class Session:
         segs = self.asr.transcribe_pcm16k(pcm)
         new_lines = []
         for seg in segs:
-            if len(seg["text"].strip()) < 2:
-                continue  # 噪声碎片（单字/空转写）不进证据流水
+            if len(seg["text"].strip()) < config.MIN_TEXT_CHARS:
+                # 噪声碎片过滤（阈值可调，见 config.MIN_TEXT_CHARS）：
+                # 该过滤同时影响触发判断与证据/报告——边界语义固化在
+                # tests/test_short_sentence_filter.py
+                continue
             fixed, fixes = correct(seg["text"], self.terms)
             self.corrections.extend(fixes)
             line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
@@ -127,7 +152,15 @@ class Session:
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 90s 的 30fps 补录
         start_ts = trigger_ts - LOOKBACK_SECONDS
-        pcm = b"".join(b for t, b in list(self._ring) if start_ts <= t <= trigger_ts)
+        chunks = [(t, b) for t, b in self._ring if start_ts <= t <= trigger_ts]
+        # 环里不足 1s 的尾巴（carry）也要进片段：否则命中前最后一秒的音频可能整体丢失
+        if (
+            self._ring_carry
+            and self._ring_carry_ts is not None
+            and start_ts <= self._ring_carry_ts <= trigger_ts
+        ):
+            chunks.append((self._ring_carry_ts, self._ring_carry))
+        pcm = b"".join(b for _, b in chunks)
         lines = [l for l in self.transcript if start_ts <= l["ts"] <= trigger_ts]
         clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
         # 截屏 manifest 与 JSON 时间语义保持一致：一律会议相对秒
@@ -135,7 +168,7 @@ class Session:
             (self._relative_ts(t), jpg)
             for t, jpg in (self.screen_capture.frames_since(start_ts) if self.screen_capture else [])
         ]
-        from .capture.audio import pcm_to_wav_bytes
+        from .pool.store import pcm_to_wav_bytes
 
         clip_id = self.pool.add_clip(
             trigger_layer=layer,
@@ -155,14 +188,20 @@ class Session:
     # ---- 收尾 ----
     def finish(self) -> dict:
         self._flush(force=True)
+        # 零落盘纪律（审计 G1a/G1b）：未命中（无片段）的会话不创建任何文件/目录，
+        # 草稿转写随进程内存一起消失——"没事故就什么都不落盘"（README 设计红线 2）。
+        # 命中会话（G1c）才落盘：片段 + 全场转写文本（薄纪要所需）+ summary。
+        if not self.clips:
+            return {
+                "session_id": self.session_id,
+                "lines": len(self.transcript),
+                "clips": 0,
+                "corrections": self.corrections,
+                "transcript_json": None,
+                "hd_dir": None,
+            }
         out = config.POOL_DIR / self.session_id / "transcript.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        # 零落盘纪律（审计 G1）：没有任何转写与片段时不创建任何文件
-        if not self.transcript and not self.clips:
-            return {
-                "session_id": self.session_id, "lines": 0, "clips": 0,
-                "corrections": [], "transcript_json": None,
-            }
         transcript = [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
         out.write_text(
             json.dumps({"session_id": self.session_id, "transcript": transcript, "clips": self.clips}, ensure_ascii=False, indent=2),

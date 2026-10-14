@@ -21,6 +21,12 @@ import json
 from pathlib import Path
 
 
+def _validate_interval(iv: tuple[float, float], name: str) -> None:
+    s, e = float(iv[0]), float(iv[1])
+    if s < 0 or e < s:
+        raise ValueError(f"{name} 区间非法（要求 0 ≤ start ≤ end）: {(s, e)}")
+
+
 def load_predictions(pool_dir: Path) -> list[tuple[float, float]]:
     """片段池 → [(start, end)]，相对秒。"""
     out = []
@@ -33,9 +39,17 @@ def load_predictions(pool_dir: Path) -> list[tuple[float, float]]:
 
 
 def merge_predictions(preds: list[tuple[float, float]], merge_gap: float = 90.0) -> list[tuple[float, float]]:
-    """相邻命中合并为事件：间隙 ≤ merge_gap 视为同一事件。"""
+    """相邻命中合并为事件：间隙 ≤ merge_gap 视为同一事件。
+
+    输入无需有序（内部排序，保证合并结果与输入顺序无关）。
+    merge_gap 是设计参数（默认 90s），不是真实数据校准出的最优值——
+    它会把间隔小于该值的两个真实事件并入同一预测事件（见 test_matching_edges.py）。
+    """
+    for p in preds:
+        _validate_interval(p, "预测")
     if not preds:
         return []
+    preds = sorted(preds)
     merged = [list(preds[0])]
     for a, b in preds[1:]:
         if a - merged[-1][1] <= merge_gap:
@@ -46,7 +60,18 @@ def merge_predictions(preds: list[tuple[float, float]], merge_gap: float = 90.0)
 
 
 def match(gold: list[tuple[float, float]], preds: list[tuple[float, float]], tol: float = 45.0) -> tuple[int, int, int, list]:
-    """贪心一对一匹配。返回 (TP, FP, FN, 明细)。"""
+    """贪心一对一匹配。返回 (TP, FP, FN, 明细)。
+
+    - 候选对：时间重叠 > 0 或中心点偏差 ≤ tol（tol 为设计参数）；
+    - 归属：按重叠时长降序贪心（等值时按索引大者优先，确定性；不保证全局最优，
+      这是评测协议预先定义的规则，不是最优匹配的近似替代证明）；
+    - 一个真值最多匹配一个预测，反之亦然（防重复计数）；
+    - 非法区间（负时间戳 / start > end）直接 ValueError，不静默容错。
+    """
+    for g in gold:
+        _validate_interval(g, "真值")
+    for p in preds:
+        _validate_interval(p, "预测")
     gold_left = [True] * len(gold)
     pred_left = [True] * len(preds)
     tp = 0
@@ -72,10 +97,23 @@ def match(gold: list[tuple[float, float]], preds: list[tuple[float, float]], tol
 
 def evaluate(session_pool_dir: Path, labels_file: Path, merge_gap: float = 90.0, tol: float = 45.0,
              meeting_hours: float | None = None) -> dict:
-    gold = [(float(e["start"]), float(e["end"])) for e in json.loads(labels_file.read_text(encoding="utf-8"))]
+    """真值文件须为 [{"start": s, "end": e, "desc": ...}]；meeting_hours 必须 > 0（给定时）。
+
+    约定：P/R/F1 的分母为 0 时取 0.0（不抛除零，不虚报 1.0）。
+    """
+    if meeting_hours is not None and meeting_hours <= 0:
+        raise ValueError(f"meeting_hours 必须 > 0（误触发率分母），当前 {meeting_hours}")
+    raw_labels = json.loads(labels_file.read_text(encoding="utf-8"))
+    gold = []
+    for i, e in enumerate(raw_labels):
+        if "start" not in e or "end" not in e:
+            raise ValueError(f"真值第 {i} 条缺少 start/end 字段: {e}")
+        iv = (float(e["start"]), float(e["end"]))
+        _validate_interval(iv, f"真值第 {i} 条")
+        gold.append(iv)
     raw_preds = load_predictions(session_pool_dir)
     preds = merge_predictions(raw_preds, merge_gap)
-    tp, fp, fn, details = match(gold, preds)
+    tp, fp, fn, details = match(gold, preds, tol)
     p = tp / (tp + fp) if tp + fp else 0.0
     r = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * p * r / (p + r) if p + r else 0.0
@@ -85,7 +123,7 @@ def evaluate(session_pool_dir: Path, labels_file: Path, merge_gap: float = 90.0,
         "precision": round(p, 3), "recall": round(r, 3), "f1": round(f1, 3),
         "details": details,
     }
-    if meeting_hours:
+    if meeting_hours is not None and meeting_hours > 0:
         out["false_triggers_per_hour"] = round(fp / meeting_hours, 2)
     return out
 

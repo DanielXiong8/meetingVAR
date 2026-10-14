@@ -82,9 +82,10 @@
 
 ## 高清补录层（2026-10-05/06 · 用户提案落地）
 
-- **分层捕获定案**：常驻 2fps JPEG 环形（命中前 ~120s）+ 命中后 30fps×90s 高清补录（HDCapture，mss 高频抓帧→临时 PNG 序列→ffmpeg 合成 mp4，用完可删）
-- **坑 6 回收**：ffmpeg 一直就在机器上（yt-dlp 附带版，`WinGet/Packages/yt-dlp.FFmpeg/...`）——hd.py 内置该路径探测，PATH 没配也能用；mp4 合成验证通过（Duration/Video 流正常）
-- 用法：`meetingvar go/record --hd`；命中时自动开录 90s，重复命中忽略（一次一场）；无 ffmpeg 时降级保留 PNG 序列
+- **分层捕获定案**：常驻 2fps JPEG 环形（命中前 ~120s）+ 命中后 30fps✕90s 高清补录（HDCapture，mss 高频抓帧→**原始 RGB 帧序列（不做逐帧编码，不阻塞采集线程）**→ffmpeg rawvideo 合成 mp4，用完可删）
+- **坑 6 回收**：ffmpeg 一直就在机器上（yt-dlp 附带版，`WinGet/Packages/yt-dlp.FFmpeg/...`）——hd.py 内置该路径探测，PATH 没配也能用。
+- 用法：`meetingvar go/record --hd`；命中时自动开录 90s，重复命中忽略（一次一场）；无 ffmpeg 时降级保留帧序列 + `meta.json`（尺寸/帧率/帧数，可事后补合成）
+- **坑 26（2026-10-10 修）**：raw 帧曾被写成 `*.png`（内容不是 PNG）→ ffmpeg 实际解码失败，而代码不查返回码**谎报成功并删除唯一证据**。现为 rawvideo 输入 + 返回码/产物校验 + 失败保留帧；mp4 按**实测帧率**合成（抓屏跟不上标称 30fps 时视频时长仍等于真实时长）。代价：raw 帧 1440p 约 12.3MB/帧，90s 标称 30fps 需 ~33GB 临时空间（合成成功后删除）——降分辨率/降帧率/逐帧 JPEG 等缓解方案待产品决策。
 - 回放叙事：低帧率铺垫 + 高帧率现场（同体育转播"战术机位常开、超慢动机位按需开"）
 
 ## 收尾记录（2026-10-04 晚 · "全部修好"轮）
