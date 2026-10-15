@@ -1,0 +1,556 @@
+"""meetingVAR 桌面壳（oCam 风格 v0.1）：pywebview 窗口 + CLI 子进程桥。
+
+架构（调研报告 §4）：UI 只做壳——
+- 开会 = 启动引擎子进程 `python -m meetingvar go/record …`（cwd=仓库根）；
+- 事件 = 引擎 stdout 按行解析成结构化事件，前端轮询 poll_events()；
+- 输入 = 手动 VAR 写一个空行、点名应答写名字——正好对接引擎现有的 input() 线程；
+- 结束 = CTRL_BREAK_EVENT → 引擎走键盘中断的优雅收尾（尾块转写/零落盘纪律不变）。
+UI 不 import 引擎核心、不碰保存链路。
+
+命令行（供构建/自检）：
+    python app.py              正常启动
+    python app.py --selftest   开窗 8 秒自动关闭并打印 SELFTEST-OK（CI/打包冒烟）
+    python app.py --smoke-engine  不开窗口，直接演练"起会→手动VAR→停止"全链路
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import traceback
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import webview
+
+APP_NAME = "meetingVAR"
+APP_VERSION = "0.1.0"
+
+# 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
+_BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+WEB_DIR = _BASE / "web"
+BRIDGE_PY = _BASE / "engine_bridge.py"
+
+CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
+CONFIG_FILE = CONFIG_DIR / "ui_config.json"
+LOG_FILE = CONFIG_DIR / "ui.log"
+
+ENGINE_PY_CANDIDATES = [
+    r"D:\miniconda3\envs\meetingvar\python.exe",
+]
+REPO_CANDIDATES = [
+    r"C:\Users\Lenovo\projects\meetingVAR",
+]
+
+CONFIG_DEFAULTS = {
+    "engine_python": "",
+    "repo_dir": "",
+    "device": "cuda",
+    "last_project": "",
+}
+
+_LOG_LOCK = threading.Lock()
+
+
+def log(msg: str) -> None:
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    print(line, flush=True)
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with _LOG_LOCK, open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _first_existing(paths: list[str]) -> str:
+    for p in paths:
+        if p and Path(p).exists():
+            return p
+    return ""
+
+
+def load_config() -> dict:
+    cfg = dict(CONFIG_DEFAULTS)
+    try:
+        if CONFIG_FILE.exists():
+            cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+def save_config(cfg: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class Backend:
+    def __init__(self) -> None:
+        self._cfg = load_config()
+        self._window: webview.Window | None = None
+        self._proc: subprocess.Popen | None = None
+        self._reader_thread: threading.Thread | None = None
+        self._events: list[dict] = []
+        self._events_lock = threading.Lock()
+        self._event_seq = 0
+        self._meeting_started_at: float | None = None
+        self._server: ThreadingHTTPServer | None = None
+        self._server_port = 0
+        self._page_ready = False
+        self._autodetect()
+
+    # ---------------- 基础 ----------------
+    def _autodetect(self) -> None:
+        if not self._cfg.get("engine_python") or not Path(self._cfg["engine_python"]).exists():
+            self._cfg["engine_python"] = _first_existing(ENGINE_PY_CANDIDATES)
+        if not self._cfg.get("repo_dir") or not Path(self._cfg["repo_dir"]).exists():
+            self._cfg["repo_dir"] = _first_existing(REPO_CANDIDATES)
+
+    def _push(self, etype: str, **fields) -> None:
+        with self._events_lock:
+            self._event_seq += 1
+            ev = {"i": self._event_seq, "t": time.time(), "type": etype}
+            ev.update(fields)
+            self._events.append(ev)
+            if len(self._events) > 4000:
+                del self._events[:1000]
+
+    # ---------------- 本地只读文件服务（data/ 供音频/视频播放） ----------------
+    def _ensure_server(self) -> None:
+        if self._server is not None:
+            return
+        data_dir = Path(self._cfg["repo_dir"] or ".") / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        class _Quiet(SimpleHTTPRequestHandler):
+            def log_message(self, *args):  # noqa: A003
+                pass
+
+        handler = partial(_Quiet, directory=str(data_dir))
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self._server_port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        log(f"[ui] 媒体服务 http://127.0.0.1:{self._server_port} → {data_dir}")
+
+    def _media_url(self, abs_path: str | None) -> str | None:
+        if not abs_path:
+            return None
+        try:
+            data_dir = (Path(self._cfg["repo_dir"]) / "data").resolve()
+            p = Path(abs_path)
+            if not p.is_absolute():
+                p = (Path(self._cfg["repo_dir"]) / p).resolve()
+            rel = p.resolve().relative_to(data_dir)
+            return f"http://127.0.0.1:{self._server_port}/" + rel.as_posix()
+        except (ValueError, OSError):
+            return None
+
+    # ---------------- 引擎子进程 ----------------
+    def _engine_env(self) -> dict:
+        env = os.environ.copy()
+        env.update({"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+        return env
+
+    _VAR_RE = re.compile(r">>> VAR!")
+    _LINE_RE = re.compile(r"^\s*\[(\d{1,2}:\d{2}:\d{2})\]\s*(\S+):\s*(.+)$")
+    _ASK_RE = re.compile(r"\[spk\] 检测到新说话人\s*(spk\w+?)\s*[（(]")
+    _SAMPLE_RE = re.compile(r"刚才说：「([^」]*)」")
+
+    def _handle_line(self, raw: str) -> None:
+        line = raw.rstrip("\r\n")
+        if not line.strip():
+            return
+        # funasr/模型库噪声不进入事件流（空 VAD 每 5s 打一行 decoding…，会淹掉真正的事件）
+        if re.search(r"\[INFO\]|scope_map|trust_remote_code|decoding, utt:", line):
+            return
+        self._push("log", text=line)
+        if self._VAR_RE.search(line):
+            self._push("hit", text=line.strip())
+            return
+        m = self._ASK_RE.search(line)
+        if m:
+            sm = self._SAMPLE_RE.search(line)
+            self._push("ask", spk=m.group(1), sample=sm.group(1) if sm else "")
+            return
+        m = self._LINE_RE.match(line)
+        if m:
+            self._push("line", clock=m.group(1), spk=m.group(2), text=m.group(3))
+            return
+        if "[done]" in line or "本场点名" in line or "零命中" in line:
+            self._push("status", text=line.strip())
+
+    def _reader(self, proc: subprocess.Popen) -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self._handle_line(line)
+        except Exception as exc:  # noqa: BLE001
+            self._push("log", text=f"[ui] 读流异常: {type(exc).__name__}")
+        finally:
+            code = proc.wait()
+            self._push("exit", code=code)
+            self._meeting_started_at = None
+
+    # ---------------- JS API ----------------
+    def bootstrap(self) -> dict:
+        self._ensure_server()
+        return {
+            "app": APP_NAME,
+            "version": APP_VERSION,
+            "config": self._cfg,
+            "meeting_running": self.is_running(),
+            "media_base": f"http://127.0.0.1:{self._server_port}",
+        }
+
+    def page_ready(self, info: dict | None = None) -> dict:
+        """前端引导完成回执（JS→Python 桥的活体证明；自检据此判定成败）。"""
+        info = info or {}
+        self._page_ready = True
+        log(f"[ui] 前端就绪（JS 桥验证） page={info.get('page')} ver={info.get('version')}")
+        return {"ok": True}
+
+    def is_running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def pick_folder(self):
+        if self._window is None:
+            return None
+        try:
+            result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception as exc:  # noqa: BLE001
+            log(f"[ui] 文件夹对话框失败: {exc}")
+            return None
+        if not result:
+            return None
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        self._cfg["last_project"] = str(path)
+        save_config(self._cfg)
+        return str(path)
+
+    def scan_project(self, folder: str) -> dict:
+        """只读预览：用引擎 Python 跑 engine_bridge（不写任何文件）。"""
+        py = self._cfg.get("engine_python") or ""
+        repo = self._cfg.get("repo_dir") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未找到引擎 Python（设置页可手动指定）"}
+        try:
+            r = subprocess.run(
+                [py, str(BRIDGE_PY), "preview", folder],
+                cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=180, env=self._engine_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "预览超时（>180s）"}
+        out = (r.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）: {(r.stderr or '')[-200:]}"}
+        try:
+            data = json.loads(out[-1])
+            data["ok"] = True
+            return data
+        except ValueError:
+            return {"ok": False, "error": f"引擎输出无法解析: {out[-1][:200]}"}
+
+    def start_meeting(self, folder: str = "", mode: str = "go") -> dict:
+        if self.is_running():
+            return {"ok": False, "error": "会议已在运行"}
+        py = self._cfg.get("engine_python") or ""
+        repo = self._cfg.get("repo_dir") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python（设置页指定）"}
+        if mode == "go" and (not folder or not Path(folder).is_dir()):
+            return {"ok": False, "error": "项目文件夹无效"}
+        cmd = [py, "-m", "meetingvar", "go" if mode == "go" else "record"]
+        if mode == "go":
+            cmd.append(folder)
+            self._cfg["last_project"] = folder
+            save_config(self._cfg)
+        cmd += ["--device", self._cfg.get("device", "cuda")]
+        flags = 0
+        if os.name == "nt":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            self._proc = subprocess.Popen(
+                cmd, cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                bufsize=1, env=self._engine_env(), creationflags=flags,
+            )
+        except OSError as exc:
+            self._proc = None
+            return {"ok": False, "error": f"启动失败: {exc}"}
+        self._meeting_started_at = time.time()
+        self._push("started", cmd=" ".join(cmd), pid=self._proc.pid)
+        self._reader_thread = threading.Thread(target=self._reader, args=(self._proc,), daemon=True)
+        self._reader_thread.start()
+        log(f"[ui] 引擎已启动 pid={self._proc.pid}: {' '.join(cmd)}")
+        return {"ok": True, "pid": self._proc.pid, "started_at": self._meeting_started_at}
+
+    def stop_meeting(self) -> dict:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return {"ok": False, "error": "没有正在运行的会议"}
+        # 优雅路径：stdin 发 ":stop"。实测 CTRL_BREAK 会被引擎进程内 MKL 的
+        # Fortran 运行库劫持成 forrtl abort（绕过全部收尾），信号只作兜底。
+        try:
+            if proc.stdin:
+                proc.stdin.write(":stop\n")
+                proc.stdin.flush()
+                log(f"[ui] 已发送优雅停止指令（stdin :stop） pid={proc.pid}")
+                return {"ok": True, "mode": "stdin"}
+        except OSError as exc:
+            log(f"[ui] stdin 停止失败({exc})，回退信号")
+        try:
+            os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+            log(f"[ui] 已发送停止信号 pid={proc.pid}")
+            return {"ok": True, "mode": "signal"}
+        except (OSError, ValueError):
+            try:
+                proc.terminate()
+                return {"ok": True, "mode": "terminate"}
+            except OSError as exc2:
+                return {"ok": False, "error": str(exc2)}
+
+    def manual_var(self) -> dict:
+        return self._write_stdin("\n")  # 空行 = 引擎的手动 VAR
+
+    def answer_prompt(self, text: str) -> dict:
+        return self._write_stdin((text or "").strip() + "\n")  # 名字（空=跳过）
+
+    def _write_stdin(self, line: str) -> dict:
+        proc = self._proc
+        if proc is None or proc.poll() is not None or proc.stdin is None:
+            return {"ok": False, "error": "会议未在运行"}
+        try:
+            proc.stdin.write(line)
+            proc.stdin.flush()
+            return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def poll_events(self, since: int = 0) -> dict:
+        with self._events_lock:
+            evs = [e for e in self._events if e["i"] > since]
+            nxt = self._event_seq
+        return {"events": evs, "next": nxt, "running": self.is_running(),
+                "started_at": self._meeting_started_at}
+
+    # ---- 会议库 ----
+    def list_sessions(self) -> list[dict]:
+        data = Path(self._cfg["repo_dir"] or ".") / "data"
+        out = []
+        pool = data / "pool"
+        if pool.exists():
+            for d in pool.iterdir():
+                if not d.is_dir():
+                    continue
+                sid = d.name
+                lines = clips = None
+                sp = d / "summary.json"
+                tj = d / "transcript.json"
+                try:
+                    if sp.exists():
+                        s = json.loads(sp.read_text(encoding="utf-8"))
+                        lines, clips = s.get("lines"), s.get("clips")
+                    elif tj.exists():
+                        t = json.loads(tj.read_text(encoding="utf-8"))
+                        lines, clips = len(t.get("transcript", [])), len(t.get("clips", []))
+                except (OSError, ValueError):
+                    pass
+                minutes = (data / "reports" / sid / "minutes.md").exists()
+                try:
+                    mtime = d.stat().st_mtime
+                except OSError:
+                    mtime = 0
+                out.append({"sid": sid, "lines": lines, "clips": clips, "minutes": minutes, "mtime": mtime})
+        out.sort(key=lambda x: -x["mtime"])
+        return out[:100]
+
+    def session_detail(self, sid: str) -> dict:
+        data = Path(self._cfg["repo_dir"] or ".") / "data"
+        detail = {"sid": sid, "minutes": "", "reports": "", "clips": []}
+        for key, fname in (("minutes", "minutes.md"), ("reports", "var_reports.md")):
+            f = data / "reports" / sid / fname
+            if f.exists():
+                try:
+                    detail[key] = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pass
+        pool = data / "pool" / sid
+        if pool.exists():
+            for f in sorted(pool.glob("*.json")):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if "trigger" not in d:
+                    continue
+                hd_url = None
+                hd_dir = (d.get("screen") or {}).get("hd_clip_dir")
+                if hd_dir:
+                    hd_mp4 = Path(hd_dir) / "hd_clip.mp4"
+                    if hd_mp4.exists():
+                        hd_url = self._media_url(str(hd_mp4))
+                detail["clips"].append({
+                    "clip_id": d.get("clip_id", "")[:8],
+                    "layer": (d.get("trigger") or {}).get("layer", ""),
+                    "evidence": (d.get("trigger") or {}).get("evidence", ""),
+                    "at": (d.get("audio") or {}).get("end_ts", 0),
+                    "lines": len(d.get("transcript", [])),
+                    "audio_url": self._media_url((d.get("audio") or {}).get("path")),
+                    "hd_url": hd_url,
+                })
+        return detail
+
+    # ---- 系统动作 / 配置 ----
+    def open_path(self, path: str) -> dict:
+        p = path or self._cfg.get("repo_dir") or ""
+        try:
+            if p and Path(p).exists():
+                os.startfile(p)  # type: ignore[attr-defined]
+                return {"ok": True}
+            return {"ok": False, "error": "路径不存在"}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_config(self) -> dict:
+        return self._cfg
+
+    def set_config(self, updates: dict) -> dict:
+        for k in CONFIG_DEFAULTS:
+            if k in updates and isinstance(updates[k], str):
+                self._cfg[k] = updates[k]
+        save_config(self._cfg)
+        return self._cfg
+
+    def test_engine(self) -> dict:
+        py = self._cfg.get("engine_python") or ""
+        repo = self._cfg.get("repo_dir") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "引擎 Python 路径不存在"}
+        try:
+            r = subprocess.run([py, str(BRIDGE_PY), "check"], cwd=repo,
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=90, env=self._engine_env())
+            out = (r.stdout or "").strip().splitlines()
+            if out:
+                data = json.loads(out[-1])
+                if data.get("ok"):
+                    data["bridge"] = str(BRIDGE_PY)
+                return data
+            return {"ok": False, "error": f"无输出 rc={r.returncode}: {(r.stderr or '')[-200:]}"}
+        except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def main() -> None:
+    selftest = "--selftest" in sys.argv
+    smoke = "--smoke-engine" in sys.argv
+    log(f"[ui] {APP_NAME} {APP_VERSION} 启动（selftest={selftest} smoke={smoke}）")
+    backend = Backend()
+
+    if smoke:
+        _smoke_engine(backend)
+        return
+
+    window = webview.create_window(
+        f"{APP_NAME} {APP_VERSION}",
+        url=str(WEB_DIR / "index.html"),
+        js_api=backend,
+        width=900, height=640, min_size=(760, 520),
+    )
+    backend._window = window
+    if selftest:
+        # 计时线程放 main()（早于 webview.start）：实测放在 _on_start 回调里的线程
+        # 不会被执行到；放这里与官方 auto-close 示例一致。
+        _selftest_close(window, backend, 10.0)
+
+    def _on_start() -> None:
+        backend._ensure_server()
+        log("[ui] 窗口就绪")
+
+    webview.start(_on_start, debug=selftest)  # 自检开 debug：JS 控制台错误可见
+    if selftest:
+        # 正常路径：start 返回 = 窗口已关闭
+        print("SELFTEST-OK", flush=True)
+
+
+def _selftest_close(window: webview.Window, backend: "Backend", delay: float = 10.0) -> None:
+    """自检专用终止器：pywebview 的 destroy() 从后台线程调用会在 WinForms 上死锁
+    （实测），因此自检到点直接硬退出——自检的目标是"开窗+后端引导+前端JS桥"，
+    正常关闭路径由用户点 X（原生行为）负责。"""
+    def _close():
+        time.sleep(delay)
+        ok = backend._page_ready
+        log(f"[ui] selftest 到点：窗口+后端+前端JS桥 验证={'通过' if ok else '失败'}，硬退出")
+        print("SELFTEST-OK" if ok else "SELFTEST-FAIL: 前端未就绪（JS 桥未回报）", flush=True)
+        os._exit(0 if ok else 4)
+    threading.Thread(target=_close, daemon=True).start()
+
+
+def _smoke_engine(backend: Backend) -> None:
+    """无窗口演练：起会→等状态→手动 VAR→停止，打印事件摘要（验证子进程桥全链路）。"""
+    tmp_project = Path(os.environ.get("TEMP", ".")) / "mv_ui_smoke_project"
+    tmp_project.mkdir(exist_ok=True)
+    (tmp_project / "说明.md").write_text("# 冒烟测试项目\n这是一个用于 UI 冒烟测试的临时项目。\n", encoding="utf-8")
+
+    r = backend.start_meeting(str(tmp_project), mode="go")
+    print("start:", r, flush=True)
+    if not r.get("ok"):
+        sys.exit(2)
+
+    deadline = time.time() + 240
+    seen_rec = False
+    while time.time() < deadline:
+        ev = backend.poll_events(0)
+        for e in ev["events"]:
+            if e["type"] in ("ask", "hit", "exit"):
+                print("ev:", {k: v for k, v in e.items() if k in ("type", "text", "spk", "code")}, flush=True)
+            if "会议监听开始" in e.get("text", ""):
+                seen_rec = True
+        if seen_rec:
+            print("监听已开始（检测到 [rec] 行）", flush=True)
+            break
+        if any(e["type"] == "exit" for e in ev["events"]):
+            print("engine exited prematurely", flush=True)
+            sys.exit(3)
+        time.sleep(2)
+
+    print("监听已开始，等待 15s 后发手动 VAR…", flush=True)
+    time.sleep(15)
+    print("manual_var:", backend.manual_var(), flush=True)
+    time.sleep(10)
+    print("stop:", backend.stop_meeting(), flush=True)
+
+    deadline = time.time() + 150
+    nxt = 0
+    while time.time() < deadline:
+        ev = backend.poll_events(nxt)
+        nxt = ev["next"]
+        for e in ev["events"]:
+            if e["type"] in ("exit", "hit", "status"):
+                print("ev:", {k: v for k, v in e.items() if k in ("type", "text", "code")}, flush=True)
+        if any(e["type"] == "exit" for e in ev["events"]):
+            break
+        time.sleep(2)
+    # 引擎原始日志尾巴（含 [done]/归档/异常），便于核对退出码 0/1 的真实原因
+    all_ev = backend.poll_events(0)["events"]
+    tail = [e for e in all_ev if e["type"] == "log"][-25:]
+    print("---- engine raw tail ----", flush=True)
+    for e in tail:
+        print("  |", e.get("text", ""), flush=True)
+    print("SMOKE-DONE", flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+        sys.exit(1)

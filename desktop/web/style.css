@@ -1,0 +1,141 @@
+/* meetingVAR 桌面壳样式 —— oCam 气质：紧凑、克制、一个主角（录制键） */
+:root {
+  --bg: #eef0f3;
+  --top: #2b3440;
+  --top-fg: #e8ecf1;
+  --card: #ffffff;
+  --fg: #1f2733;
+  --muted: #6b7684;
+  --line: #dde2e8;
+  --accent: #e0432f;
+  --accent-dark: #c23723;
+  --ok: #2f9e63;
+  --blue: #2f6fed;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px; color: var(--fg); background: var(--bg);
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+/* ---------- 顶栏 ---------- */
+.topbar {
+  height: 44px; flex: 0 0 44px; background: var(--top); color: var(--top-fg);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 14px;
+  user-select: none;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .3px; }
+.logodot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.ver { font-weight: 400; color: #93a0af; font-size: 12px; }
+.status-pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,.12); color: #c8d2dc;
+}
+.status-pill.live { background: rgba(224,67,47,.25); color: #ffb8ad; }
+/* ---------- 布局 ---------- */
+.app { flex: 1 1 auto; display: flex; min-height: 0; }
+.side { width: 148px; flex: 0 0 148px; padding: 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.navbtn {
+  text-align: left; padding: 9px 12px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--fg); font: inherit; cursor: pointer;
+}
+.navbtn:hover { background: rgba(0,0,0,.05); }
+.navbtn.active { background: var(--card); box-shadow: 0 1px 2px rgba(20,30,40,.08); font-weight: 600; }
+main { flex: 1 1 auto; min-width: 0; padding: 12px 16px 16px 4px; overflow-y: auto; }
+.page { display: none; }
+.page.active { display: block; }
+/* ---------- 通用 ---------- */
+.card { background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(20,30,40,.08); padding: 14px; }
+.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.muted { color: var(--muted); font-size: 12px; }
+.input {
+  font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--fg); min-width: 0; flex: 1 1 220px;
+}
+.btn {
+  font: inherit; padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--fg); cursor: pointer;
+}
+.btn:hover { background: #f7f8fa; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--top); color: #fff; border-color: var(--top); }
+.btn-primary:hover { background: #37424f; }
+/* ---------- 主页 ---------- */
+.projectcard { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.pc-label { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.pc-path { font-weight: 600; word-break: break-all; }
+.recrow { display: flex; align-items: center; gap: 22px; padding: 6px 2px 10px; }
+.recbtn {
+  width: 104px; height: 104px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 700;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  box-shadow: 0 6px 18px rgba(224,67,47,.35);
+}
+.recbtn:hover { background: var(--accent-dark); }
+.recbtn .recdot { width: 22px; height: 22px; border-radius: 50%; background: #fff; }
+.recbtn.live { background: #333c47; box-shadow: 0 6px 18px rgba(30,40,50,.35); }
+.recbtn.live .recdot { border-radius: 4px; width: 18px; height: 18px; animation: pulse 1.6s infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.recside { display: flex; flex-direction: column; gap: 8px; }
+.statusline {
+  display: flex; gap: 22px; padding: 8px 2px 12px; color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.statusline span { background: var(--card); border-radius: 8px; padding: 6px 12px; box-shadow: 0 1px 2px rgba(20,30,40,.06); }
+.ticker-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.ticker-body { height: 168px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.tk { font-size: 13px; line-height: 1.45; }
+.tk .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.tk .s { font-weight: 600; margin-right: 6px; }
+.tk.hit { background: #fdeceA; border-radius: 6px; padding: 2px 6px; }
+/* ---------- 项目页 ---------- */
+.path { color: var(--muted); word-break: break-all; }
+.scan { margin: 10px 0; }
+.scan h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 10px; font-size: 12.5px;
+}
+.chip b { color: var(--blue); font-weight: 600; }
+/* ---------- 会议库 ---------- */
+.sessions { display: flex; flex-direction: column; gap: 6px; }
+.sess {
+  background: var(--card); border-radius: 10px; padding: 10px 14px; cursor: pointer;
+  display: flex; gap: 14px; align-items: center; box-shadow: 0 1px 2px rgba(20,30,40,.06);
+}
+.sess:hover { outline: 2px solid #cfd7e0; }
+.sess .sid { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sess .meta { color: var(--muted); font-size: 12px; }
+.sess .badge { margin-left: auto; font-size: 12px; color: var(--muted); }
+.detail { margin-top: 12px; }
+.detail h2 { font-size: 15px; margin: 4px 0 8px; }
+.detail pre { white-space: pre-wrap; word-break: break-all; font-family: inherit; margin: 6px 0; }
+.clip {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.clip .head { display: flex; gap: 10px; align-items: center; }
+.clip .layer { font-weight: 700; color: var(--accent); }
+.clip audio { width: 100%; }
+.clip video { width: 100%; max-height: 240px; border-radius: 8px; }
+.md h1, .md h2, .md h3 { font-size: 14.5px; margin: 10px 0 4px; }
+.md ul { margin: 4px 0; padding-left: 20px; }
+.md blockquote { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+/* ---------- 弹窗/Toast ---------- */
+.modal {
+  position: fixed; inset: 0; background: rgba(20,28,38,.45);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-card { width: 360px; display: flex; flex-direction: column; gap: 10px; }
+.modal-title { font-weight: 700; font-size: 15px; }
+.modal-sub { color: var(--muted); font-size: 12.5px; word-break: break-all; }
+.toast {
+  position: fixed; right: 18px; bottom: 18px; max-width: 380px; z-index: 60;
+  background: #22303d; color: #fff; border-radius: 10px; padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(10,20,30,.35); font-size: 13px;
+}
+.field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.field > span { font-size: 12px; color: var(--muted); }

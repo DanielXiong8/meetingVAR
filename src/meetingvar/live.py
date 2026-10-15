@@ -51,11 +51,16 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
         stop = threading.Event()
 
         def wait_enter():
-            # 输入行归属：有点名待答 → 名字（空行=跳过）；否则回车=手动 VAR
+            # 输入行归属：":stop"/":quit" = 优雅停止（桌面壳用）；有点名待答 → 名字
+            # （空行=跳过）；否则回车=手动 VAR
             try:
                 while not stop.is_set():
                     line = input()
                     if stop.is_set():
+                        break
+                    if line.strip() in (":stop", ":quit"):
+                        print("[rec] 收到停止指令，正在收尾…", flush=True)
+                        stop.set()
                         break
                     msg = session.submit_answer(line)
                     if msg is None:
@@ -72,7 +77,7 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
         normal_shutdown = False
         summary = None
         try:
-            while args.duration <= 0 or time.monotonic() - t0 < args.duration:
+            while (args.duration <= 0 or time.monotonic() - t0 < args.duration) and not stop.is_set():
                 pcm, since = audio.ingest_since(last_ts)
                 if pcm:
                     session.ingest_pcm(pcm, since)

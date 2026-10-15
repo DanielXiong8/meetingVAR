@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meetingVAR</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logodot"></span> meetingVAR <span class="ver" id="ver"></span></div>
+  <div class="status-pill" id="statusPill">● 待机</div>
+</header>
+
+<div class="app">
+  <nav class="side">
+    <button class="navbtn active" data-page="home">● 主页</button>
+    <button class="navbtn" data-page="project">▤ 项目</button>
+    <button class="navbtn" data-page="library">▦ 会议库</button>
+    <button class="navbtn" data-page="settings">⚙ 设置</button>
+  </nav>
+
+  <main>
+    <!-- 主页 -->
+    <section id="page-home" class="page active">
+      <div class="card projectcard">
+        <div class="pc-label">当前项目</div>
+        <div class="pc-path" id="homeProject">（未选择——去「项目」页选一个文件夹）</div>
+      </div>
+      <div class="recrow">
+        <button id="btnRec" class="recbtn"><span class="recdot"></span><span id="recLabel">开始会议</span></button>
+        <div class="recside">
+          <button id="btnVar" class="btn">手动 VAR（回车等价）</button>
+          <button id="btnOpenOut" class="btn">打开产物文件夹</button>
+        </div>
+      </div>
+      <div class="statusline">
+        <span id="statTime">--</span>
+        <span id="statHits">命中 0</span>
+        <span id="statSpeakers">说话人 —</span>
+      </div>
+      <div class="card ticker">
+        <div class="ticker-title">最近听到 <span class="muted">（转写实时流，仅本机）</span></div>
+        <div id="ticker" class="ticker-body"></div>
+      </div>
+    </section>
+
+    <!-- 项目页（读取文件夹） -->
+    <section id="page-project" class="page">
+      <div class="row">
+        <button id="btnPick" class="btn btn-primary">选择项目文件夹…</button>
+        <div class="path" id="projPath">未选择</div>
+      </div>
+      <div class="row">
+        <label class="muted">或手动输入路径</label>
+        <input id="projManual" class="input" placeholder="如：D:\项目\AI for ALS\数据处理与筛选">
+        <button id="btnScanInput" class="btn">读取</button>
+      </div>
+      <div id="scanResult" class="scan"></div>
+      <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
+    </section>
+
+    <!-- 会议库 -->
+    <section id="page-library" class="page">
+      <div class="row"><button class="btn" onclick="refreshLibrary()">刷新</button></div>
+      <div id="sessionList" class="sessions"></div>
+      <div id="sessionDetail" class="detail card" hidden></div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="page-settings" class="page">
+      <label class="field"><span>引擎 Python（meetingvar 所在环境）</span>
+        <input id="cfgPy" class="input" placeholder="D:\miniconda3\envs\meetingvar\python.exe"></label>
+      <label class="field"><span>仓库目录（引擎代码所在位置）</span>
+        <input id="cfgRepo" class="input" placeholder="C:\Users\Lenovo\projects\meetingVAR"></label>
+      <label class="field"><span>设备</span>
+        <select id="cfgDevice" class="input">
+          <option value="cuda">cuda（GPU，推荐）</option>
+          <option value="cpu">cpu（无 GPU 时）</option>
+        </select></label>
+      <div class="row">
+        <button id="btnTestEngine" class="btn">测试引擎</button>
+        <button id="btnSaveCfg" class="btn btn-primary">保存</button>
+        <button id="btnOpenCfg" class="btn">打开配置目录</button>
+      </div>
+      <div id="testResult" class="muted"></div>
+    </section>
+  </main>
+</div>
+
+<!-- 说话人点名弹窗 -->
+<div id="askModal" class="modal" hidden>
+  <div class="modal-card card">
+    <div class="modal-title">这位说话人是谁？</div>
+    <div class="modal-sub" id="askSub"></div>
+    <input id="askInput" class="input" placeholder="输入名字并回车（直接回车＝跳过；会记入声纹名册）">
+    <div class="row end">
+      <button id="btnAskSkip" class="btn">跳过</button>
+      <button id="btnAskOk" class="btn btn-primary">确认</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
