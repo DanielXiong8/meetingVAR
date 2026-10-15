@@ -158,7 +158,7 @@ setInterval(() => {
       state.silenceHinted = true;
       const src = (state.cfg && state.cfg.audio_source) || "both";
       const hint = src === "loopback"
-        ? "已 90 秒未听到语音：当前是【仅系统声音】模式——请确认电脑在播放声音（或到设置页改为"系统声音+麦克风"）。"
+        ? "已 90 秒未听到语音：当前是【仅系统声音】模式——请确认电脑在播放声音（或到设置页改为「系统声音+麦克风」）。"
         : "已 90 秒未听到可识别语音：请确认电脑在播放声音、且麦克风未被系统静音/被其他软件独占。";
       pushTicker("", "系统", hint, "sys");
     }
