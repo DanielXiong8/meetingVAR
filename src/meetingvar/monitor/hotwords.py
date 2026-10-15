@@ -46,7 +46,13 @@ class InterestScorer:
         self._tokenize = lambda text: " ".join(jieba.cut(text))
         corpus = [self._tokenize(d) for d in focus_docs if d and d.strip()]
         self._vec = TfidfVectorizer()
-        self._mat = self._vec.fit_transform(corpus) if corpus and any(corpus) else None
+        self._mat = None
+        if corpus and any(corpus):
+            try:
+                self._mat = self._vec.fit_transform(corpus)
+            except ValueError as exc:
+                if "empty vocabulary" not in str(exc):
+                    raise
 
     def score(self, text: str) -> float:
         if not text.strip() or self._mat is None:

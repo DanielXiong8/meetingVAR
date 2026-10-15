@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import audioop
 import json
 import time
 import wave
@@ -12,6 +11,7 @@ from pathlib import Path
 
 from . import config
 from .pipeline import Session
+from .capture.audio import to_pcm16k
 
 
 def wav_to_pcm16k(path: Path) -> bytes:
@@ -19,9 +19,10 @@ def wav_to_pcm16k(path: Path) -> bytes:
         rate = w.getframerate()
         channels = w.getnchannels()
         sampwidth = w.getsampwidth()
-        assert sampwidth == 2, f"仅支持 16bit wav，当前 {sampwidth*8}bit"
+        if sampwidth != 2:
+            raise ValueError(f"仅支持 16bit wav，当前 {sampwidth*8}bit")
         raw = w.readframes(w.getnframes())
-    mono, _ = audioop.ratecv(raw, 2, channels, rate, config.ASR_RATE, None)
+    mono, _ = to_pcm16k(raw, channels, rate)
     return mono
 
 
@@ -40,6 +41,7 @@ def replay(
     device: str = "cuda",
     transcript_out: Path | None = None,
     correction_terms: list[str] | None = None,
+    l2_threshold: float | None = None,
 ) -> dict:
     """回放 wav 走全管线。
 
@@ -53,7 +55,7 @@ def replay(
 
     base_ts = time.time() - duration  # 让"命中回溯"语义成立
     session = Session(session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True,
-                      correction_terms=correction_terms)
+                      correction_terms=correction_terms, l2_threshold=l2_threshold)
 
     step = 5.0  # 5 秒一喂，喂完立即尝试增量转写
     offset = 0.0

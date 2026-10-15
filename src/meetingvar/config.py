@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from .env import load_local_env
+
+load_local_env()
 
 # ---- 模型 ----
 MODELS_ROOT = Path(os.environ.get("MEETINGVAR_MODELS", "D:/env/models"))
@@ -52,6 +55,9 @@ TERMS_FILE = DATA_DIR / "terms.txt"  # 运行期术语表（可由项目记忆�
 LLM_BASE_URL = os.environ.get("MEETINGVAR_LLM_BASE_URL", "")
 LLM_API_KEY = os.environ.get("MEETINGVAR_LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("MEETINGVAR_LLM_MODEL", "")
+LLM_MAX_TOKENS = os.environ.get("MEETINGVAR_LLM_MAX_TOKENS", "2048")
+# Provider-specific extension: leave empty for generic/local compatible servers.
+LLM_THINKING = os.environ.get("MEETINGVAR_LLM_THINKING", "").strip().lower()
 
 
 def find_model_dir(keyword: str) -> str:

@@ -3,6 +3,7 @@
     meetingvar replay  --wav <file> [--terms data/terms.txt] [--memory <folder>] [--device cuda]
     meetingvar record  [--terms data/terms.txt] [--memory <folder>] [--no-screen] [--duration 600]
     meetingvar digest  --session <id> [--llm]
+    meetingvar review  --session <id> [--clip <id>] [--status useful|useless]
     meetingvar devices
 """
 from __future__ import annotations
@@ -22,20 +23,25 @@ def load_terms(path: Path) -> list[str]:
     out = []
     for l in path.read_text(encoding="utf-8").splitlines():
         l = l.strip()
-        if not l or l.startswith("#"):
+        if not l:
             continue
         if l.startswith("#!keep"):
-            out.append(l.split(maxsplit=1)[1].strip())  # 手动词（rescan 永久保留）
+            parts = l.split(maxsplit=1)
+            if len(parts) > 1 and parts[1].strip():
+                out.append(parts[1].strip())
+            continue
+        if l.startswith("#"):
             continue
         out.append(l)
     return out
 
 
 def load_memory_docs(folder: Path) -> list[str]:
+    from .memory.files import project_files
+
     docs = []
-    for f in folder.rglob("*") if folder.exists() else []:
-        if f.suffix.lower() in {".md", ".txt"}:
-            docs.append(f.read_text(encoding="utf-8"))
+    for f in project_files(folder, {".md", ".txt"}):
+        docs.append(f.read_text(encoding="utf-8"))
     return docs
 
 
@@ -56,12 +62,16 @@ def resolve_terms(args) -> list[str]:
 
 def cmd_replay(args) -> None:
     from .replay import replay
+    from .memory.calibration import load_threshold
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
-    session_id = f"replay_{int(time.time())}"
+    threshold = load_threshold(Path(args.memory)) if args.memory else None
+    if threshold is not None:
+        print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
+    session_id = f"replay_{time.time_ns()}"
     replay(Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device,
-           correction_terms=_correction_terms_arg(args))
+           correction_terms=_correction_terms_arg(args), l2_threshold=threshold)
     print(f"[next] meetingvar digest --session {session_id}")
 
 
@@ -90,63 +100,21 @@ def cmd_transcribe(args) -> None:
 
 
 def cmd_record(args) -> None:
-    from .capture.audio import AudioCapture
-    from .capture.screen import ScreenCapture
-    from .pipeline import Session
+    from .live import record_session
+    from .memory.calibration import load_threshold
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
-    session_id = f"live_{int(time.time())}"
-
-    print("[rec] 打开系统音频环回…")
-    audio = AudioCapture()
-    print(f"[rec] 采集源: {audio.name}")
-    screen = None
-    if not args.no_screen:
-        screen = ScreenCapture()
-        print(f"[rec] 录屏缓冲: {screen.backend} @ {config.SCREEN_FPS}fps")
-
-    hd = None
-    if args.hd:
-        from .capture.hd import HDCapture
-
-        hd = HDCapture()
-    session = Session(
-        session_id, terms=terms, focus_docs=focus, device=args.device, screen_capture=screen, echo=True
-    )
-    session.hd = hd
-    print("[rec] 开始。Ctrl+C 结束；**按回车 = 手动 VAR**")
-    stop = threading.Event()
-
-    def _wait_enter():
-        try:
-            while not stop.is_set():
-                input()
-                session.manual.fire()
-        except EOFError:
-            pass
-
-    threading.Thread(target=_wait_enter, daemon=True).start()
-
-    last_ts = time.time()
-    t0 = time.time()
-    try:
-        while not stop.is_set() and (args.duration <= 0 or time.time() - t0 < args.duration):
-            pcm, since = audio.ingest_since(last_ts)
-            last_ts = time.time()
-            if pcm:
-                session.ingest_pcm(pcm, since)
-            stop.wait(0.5)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop.set()
-        summary = session.finish()
-        audio.stop()
-        if screen:
-            screen.stop()
-    print(f"[done] {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
-    print(f"[next] meetingvar digest --session {session_id}")
+    session_id = f"live_{time.time_ns()}"
+    threshold = load_threshold(Path(args.memory)) if args.memory else None
+    if threshold is not None:
+        print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
+    summary = record_session(args, session_id, terms, focus, threshold)
+    print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
+    if summary.get("transcript_json"):
+        print(f"[next] meetingvar digest --session {session_id}")
+    else:
+        print("[rec] 本场零命中：草稿转写已丢弃，未保存会议记录")
 
 
 def cmd_digest(args) -> None:
@@ -155,14 +123,143 @@ def cmd_digest(args) -> None:
     digest(args.session, use_llm=args.llm)
 
 
+def cmd_archive(args) -> None:
+    from .memory.project_store import archive_report
+
+    path = archive_report(Path(args.project), args.session)
+    print(f"[archive] {path}")
+
+
+def _review_time(ts: float) -> str:
+    total = max(0, int(float(ts)))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _print_review_clip(clip: dict, index: int | None = None) -> None:
+    prefix = f"[{index}] " if index is not None else ""
+    review = clip.get("review", {})
+    audio = clip.get("audio", {})
+    trigger = clip.get("trigger", {})
+    screen = clip.get("screen", {})
+    print(
+        f"{prefix}{clip['clip_id'][:8]}  "
+        f"[{_review_time(audio.get('start_ts', 0))}–{_review_time(audio.get('end_ts', 0))}]  "
+        f"{trigger.get('layer', '?')} / {trigger.get('evidence', '')}  "
+        f"评价={review.get('status', 'pending')}"
+    )
+    lines = clip.get("transcript", [])
+    if lines:
+        excerpt = " / ".join(f"{x.get('speaker', '?')}: {x.get('text', '')}" for x in lines[:3])
+        print(f"    {excerpt[:240]}")
+    media = len(screen.get("keyframes", []))
+    if media:
+        print(f"    屏幕关键帧: {media} 张；音频: {audio.get('path', '')}")
+    if review.get("note"):
+        print(f"    备注: {review['note']}")
+
+
+def _review_summary(pool) -> None:
+    summary = pool.feedback_summary()
+    counts = summary["by_status"]
+    print(
+        f"[feedback] {summary['session_id']}: 总计 {summary['total']} 片段；"
+        f"待评 {counts['pending']} / 有用 {counts['useful']} / 没用 {counts['useless']}"
+    )
+    for layer, values in sorted(summary["by_layer"].items()):
+        print(f"  {layer}: 待评 {values['pending']} / 有用 {values['useful']} / 没用 {values['useless']}")
+
+
+def _calibrate_project(pool, project: str | None) -> None:
+    if not project:
+        return
+    from .memory.calibration import apply_reviews
+
+    result = apply_reviews(Path(project), pool.list_clips())
+    print(
+        f"[calibration] 项目 L2 阈值 {result['base_threshold']:.2f} → "
+        f"{result['l2_threshold']:.2f}（显式 L2 评价样本 {result['sample_count']} 条；"
+        f"本次新增/更新 {result['new_samples']} 条）"
+    )
+    print(f"[calibration] 已保存: {result['path']}")
+
+
+def cmd_review(args) -> None:
+    """会后评审 CLI mock：查看片段、写回 review、生成反馈摘要。"""
+    from .pool.store import Pool
+
+    pool = Pool(args.session)
+    clips = pool.list_clips()
+    if not clips:
+        print(f"[review] 会话 {args.session} 没有可评审片段")
+        return
+
+    if args.summary:
+        for i, clip in enumerate(clips, 1):
+            _print_review_clip(clip, i)
+        path = pool.write_feedback_summary()
+        _review_summary(pool)
+        print(f"[feedback] 摘要: {path}")
+        _calibrate_project(pool, args.project)
+        return
+
+    if args.clip and args.status:
+        updated = pool.update_review(args.clip, args.status, args.note)
+        path = pool.write_feedback_summary()
+        print(f"[review] 已更新 {updated['clip_id'][:8]} -> {updated['review']['status']}")
+        if updated["review"]["note"]:
+            print(f"[review] 备注: {updated['review']['note']}")
+        _review_summary(pool)
+        print(f"[feedback] 摘要: {path}")
+        _calibrate_project(pool, args.project)
+        return
+
+    if args.clip and not args.status:
+        matches = [c for c in clips if c["clip_id"] == args.clip or c["clip_id"].startswith(args.clip)]
+        if len(matches) != 1:
+            raise SystemExit(f"[review] --clip 必须匹配唯一片段: {args.clip}")
+        _print_review_clip(matches[0])
+        raise SystemExit("[review] 还需同时提供 --status useful|useless 和可选 --note")
+
+    print(f"[review] 会后片段评审（{args.session}）；输入编号，q 退出")
+    for i, clip in enumerate(clips, 1):
+        _print_review_clip(clip, i)
+    while True:
+        choice = input("\n评审片段编号（q 退出）> ").strip()
+        if choice.lower() == "q":
+            break
+        if not choice.isdigit() or not 1 <= int(choice) <= len(clips):
+            print("请输入列表中的编号")
+            continue
+        clip = clips[int(choice) - 1]
+        status = input("评价 [u=有用 / n=没用 / s=跳过] > ").strip().lower()
+        if status == "s":
+            continue
+        status = {"u": "useful", "n": "useless"}.get(status)
+        if not status:
+            print("请输入 u、n 或 s")
+            continue
+        note = input("备注（可空）> ")
+        pool.update_review(clip["clip_id"], status, note)
+        clips = pool.list_clips()
+        print(f"[review] 已写回 {clip['clip_id'][:8]} -> {status}")
+    path = pool.write_feedback_summary()
+    _review_summary(pool)
+    print(f"[feedback] 摘要: {path}")
+    _calibrate_project(pool, args.project)
+
+
 def cmd_devices(args) -> None:
     from .capture.audio import AudioCapture
 
     import pyaudiowpatch as pyaudio
 
-    p = pyaudio.PyAudio()
-    for info in p.get_loopback_device_info_generator():
-        print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz)")
+    with pyaudio.PyAudio() as p:
+        default = p.get_default_wasapi_loopback()["index"]
+        for info in p.get_loopback_device_info_generator():
+            marker = " [系统默认]" if info["index"] == default else ""
+            print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz){marker}")
 
 
 def cmd_terms(args) -> None:
@@ -269,6 +366,7 @@ def main() -> None:
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
+    rc.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
     rc.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算，实测约 13-20fps）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
@@ -276,6 +374,18 @@ def main() -> None:
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
+
+    ar = sub.add_parser("archive", help="把已生成的纪要复制或更新到项目目录")
+    ar.add_argument("--session", required=True)
+    ar.add_argument("--project", required=True)
+
+    rv = sub.add_parser("review", help="会后评审片段并写回评价反馈")
+    rv.add_argument("--session", required=True)
+    rv.add_argument("--clip", default=None, help="片段完整 id 或唯一前缀")
+    rv.add_argument("--status", choices=["useful", "useless"], default=None)
+    rv.add_argument("--note", default=None, help="评价备注")
+    rv.add_argument("--summary", action="store_true", help="只查看并生成反馈摘要")
+    rv.add_argument("--project", default=None, help="项目文件夹；把本会话 L2 评价纳入项目阈值校准")
 
     sub.add_parser("devices", help="列出环回设备")
 
@@ -298,11 +408,8 @@ def main() -> None:
 
     args = ap.parse_args()
     {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
-     "devices": cmd_devices, "terms": cmd_terms, "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
-
-
-if __name__ == "__main__":
-    main()
+     "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
+     "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
 
 
 def cmd_rescan(args) -> None:
@@ -312,3 +419,7 @@ def cmd_rescan(args) -> None:
     words, n_minutes = rescan_terms(Path(args.project), extra_terms=extra, use_llm=args.llm)
     print(f"[rescan] 扫描归档纪要 {n_minutes} 份 + 项目文档 -> 热词库 {len(words)} 词")
     print(f"[rescan] 位置: {Path(args.project) / 'meetingvar' / 'terms.txt'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -308,3 +308,6 @@ L1 粗筛与周期滑窗**双通道**；重复触发按事件区间+身份去重
 - ✅ eval_protocol.md 新增 D 层（事件重要性 v0 冻结定义，与本文档互引）；
 - ⏳ 待用户：Phase 0 的人工标注（双标注者整场）与 focus_list_v0 确认；此后才进 Phase 1 离线实验；
 - ⛔ **禁止**：在评测通过前改动真实保存链路的触发行为（验收原则③）。
+
+- 队友支线文档（integration 合并保留）：test_report_local_20261012 / test_report_simulation /
+  test_report_deepseek / test_report_feedback_calibration / USAGE_CHECKLIST（见其分支 docs/）。

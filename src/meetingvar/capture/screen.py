@@ -18,8 +18,13 @@ class ScreenCapture:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self.backend = ""
         self._start_ok = threading.Event()
+        self._startup_error = None
         self._thread.start()
-        self._start_ok.wait(timeout=5)
+        if not self._start_ok.wait(timeout=5):
+            self.stop()
+            raise RuntimeError("录屏初始化超时；可用 --no-screen 仅采集音频")
+        if self._startup_error is not None:
+            raise RuntimeError("录屏初始化失败；可用 --no-screen 仅采集音频") from self._startup_error
 
     def _make_grabber(self):
         try:
@@ -50,7 +55,12 @@ class ScreenCapture:
             return grab, sct.close
 
     def _loop(self) -> None:
-        grab, release = self._make_grabber()
+        try:
+            grab, release = self._make_grabber()
+        except Exception as exc:
+            self._startup_error = exc
+            self._start_ok.set()
+            return
         self._start_ok.set()
         interval = 1.0 / self._fps
         while not self._stop.is_set():

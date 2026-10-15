@@ -17,9 +17,16 @@ data/
 # ===== Python =====
 __pycache__/
 *.pyc
+*.egg-info/
 venv/
 .venv/
+.venv-*/
+.tools/
+.runtimes/
 .env
+.env.*
+!.env.example
+.secrets/
 .pytest_cache/
 
 # ===== IDE / 系统 =====

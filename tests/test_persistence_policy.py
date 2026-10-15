@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import sys
 import tempfile
 import unittest
@@ -42,14 +43,16 @@ SENT_PLAIN = [
 def snapshot_tree(root: Path, skip: set[str]) -> set[str]:
     """工作树内所有文件+目录的相对路径（排除 skip 命名的顶层目录与 __pycache__）。"""
     out: set[str] = set()
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        parts = rel.parts
-        if parts and parts[0] in skip:
-            continue
-        if "__pycache__" in parts or p.suffix == ".pyc":
-            continue
-        out.add(rel.as_posix() + "/") if p.is_dir() else out.add(rel.as_posix())
+    for directory, children, files in os.walk(root):
+        children[:] = [name for name in children if name != "__pycache__"
+                       and not (Path(directory) == root and (name in skip
+                           or name in {".venv", ".runtimes", ".tools", ".secrets"}
+                           or name.startswith(".venv-")))]
+        for name in children + files:
+            p = Path(directory) / name
+            if p.suffix != ".pyc":
+                rel = p.relative_to(root).as_posix()
+                out.add(rel + "/" if p.is_dir() else rel)
     return out
 
 

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import json
+import sys
+import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from meetingvar import config  # noqa: E402
 from meetingvar.memory.extract import llm_extract  # noqa: E402
@@ -47,18 +51,37 @@ class _StubHandler(BaseHTTPRequestHandler):
 
 
 class LlmExtractTests(unittest.TestCase):
+    def test_invalid_model_text_falls_back(self) -> None:
+        with patch("meetingvar.llm.chat", return_value="不是 JSON"):
+            self.assertIsNone(llm_extract(SAMPLE))
+
+    def test_unavailable_endpoint_falls_back(self) -> None:
+        from urllib.error import URLError
+        from meetingvar.llm import chat
+
+        with patch.multiple(config, LLM_BASE_URL="http://127.0.0.1:1/v1", LLM_MODEL="stub"), \
+             patch("urllib.request.urlopen", side_effect=URLError("unavailable")):
+            self.assertIsNone(chat("test", timeout=1))
+
     def test_llm_extract_via_stub(self) -> None:
         srv = HTTPServer(("127.0.0.1", 0), _StubHandler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
         old = config.LLM_BASE_URL, config.LLM_MODEL, config.LLM_API_KEY
         config.LLM_BASE_URL = f"http://127.0.0.1:{srv.server_port}/v1"
         config.LLM_MODEL = "stub"
         config.LLM_API_KEY = "stub"
-        try:
-            r = llm_extract(SAMPLE)
-        finally:
-            config.LLM_BASE_URL, config.LLM_MODEL, config.LLM_API_KEY = old
-            srv.shutdown()
+        with tempfile.TemporaryDirectory() as sandbox:
+            old_data = config.DATA_DIR
+            config.DATA_DIR = Path(sandbox)
+            try:
+                r = llm_extract(SAMPLE)
+            finally:
+                config.DATA_DIR = old_data
+                config.LLM_BASE_URL, config.LLM_MODEL, config.LLM_API_KEY = old
+                srv.shutdown()
+                srv.server_close()
+                thread.join(timeout=2)
         self.assertIsNotNone(r, "桩端点存在时不应回落 None")
         terms, persons = r
         self.assertIn("测序污染", terms)
