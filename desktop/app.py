@@ -27,7 +27,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import webview
+# 注意：webview 延迟导入（仅 pick_folder/main 需要）——让本模块在无 pywebview 的
+# 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
 APP_VERSION = "0.1.0"
@@ -53,7 +54,14 @@ CONFIG_DEFAULTS = {
     "repo_dir": "",
     "device": "cuda",
     "last_project": "",
+    "projects": [],          # 已知项目（会议归档分组用；start_meeting 时维护）
+    "llm_gguf": "",          # 本地 4B GGUF 路径（LLM 服务启动用；自动探测）
+    "use_llm": False,        # 开会时是否叠加 LLM 语义层（需服务在线）
 }
+
+SESSMAP_FILE = CONFIG_DIR / "sessions_map.json"
+LLM_LOG_FILE = CONFIG_DIR / "llm_server.log"
+LLM_PORT = 11439
 
 _LOG_LOCK = threading.Lock()
 
@@ -104,7 +112,28 @@ class Backend:
         self._server: ThreadingHTTPServer | None = None
         self._server_port = 0
         self._page_ready = False
+        self._current_project = ""
+        self._last_log = ""
+        self._llm_proc: subprocess.Popen | None = None
+        # 会话→项目 映射（会议库按项目分组；go 结束行 "[done] session=go_x" 时登记）
+        self._session_projects: dict[str, str] = {}
+        try:
+            if SESSMAP_FILE.exists():
+                data = json.loads(SESSMAP_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._session_projects = {str(k): str(v) for k, v in data.items()}
+        except (OSError, ValueError):
+            pass
         self._autodetect()
+
+    def _save_session_map(self) -> None:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            SESSMAP_FILE.write_text(
+                json.dumps(self._session_projects, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     # ---------------- 基础 ----------------
     def _autodetect(self) -> None:
@@ -112,6 +141,12 @@ class Backend:
             self._cfg["engine_python"] = _first_existing(ENGINE_PY_CANDIDATES)
         if not self._cfg.get("repo_dir") or not Path(self._cfg["repo_dir"]).exists():
             self._cfg["repo_dir"] = _first_existing(REPO_CANDIDATES)
+        if not self._cfg.get("llm_gguf") or not Path(self._cfg["llm_gguf"]).exists():
+            try:
+                hits = sorted(Path("D:/env/models/models").glob("Qwen--Qwen3-*GGUF*/**/*.gguf"))
+                self._cfg["llm_gguf"] = str(hits[0]) if hits else ""
+            except OSError:
+                self._cfg["llm_gguf"] = ""
 
     def _push(self, etype: str, **fields) -> None:
         with self._events_lock:
@@ -162,6 +197,7 @@ class Backend:
     _LINE_RE = re.compile(r"^\s*\[(\d{1,2}:\d{2}:\d{2})\]\s*(\S+):\s*(.+)$")
     _ASK_RE = re.compile(r"\[spk\] 检测到新说话人\s*(spk\w+?)\s*[（(]")
     _SAMPLE_RE = re.compile(r"刚才说：「([^」]*)」")
+    _DONE_RE = re.compile(r"\[done\] session=(\S+)")
 
     def _handle_line(self, raw: str) -> None:
         line = raw.rstrip("\r\n")
@@ -170,7 +206,12 @@ class Backend:
         # funasr/模型库噪声不进入事件流（空 VAD 每 5s 打一行 decoding…，会淹掉真正的事件）
         if re.search(r"\[INFO\]|scope_map|trust_remote_code|decoding, utt:", line):
             return
+        self._last_log = line  # 退出时随 exit 事件带回（异常时界面上能看到最后一句话）
         self._push("log", text=line)
+        m = self._DONE_RE.search(line)
+        if m and self._current_project:
+            self._session_projects[m.group(1)] = self._current_project
+            self._save_session_map()
         if self._VAR_RE.search(line):
             self._push("hit", text=line.strip())
             return
@@ -195,7 +236,7 @@ class Backend:
             self._push("log", text=f"[ui] 读流异常: {type(exc).__name__}")
         finally:
             code = proc.wait()
-            self._push("exit", code=code)
+            self._push("exit", code=code, last_log=self._last_log[-200:])
             self._meeting_started_at = None
 
     # ---------------- JS API ----------------
@@ -207,6 +248,7 @@ class Backend:
             "config": self._cfg,
             "meeting_running": self.is_running(),
             "media_base": f"http://127.0.0.1:{self._server_port}",
+            "llm": self.llm_status(),
         }
 
     def page_ready(self, info: dict | None = None) -> dict:
@@ -220,6 +262,8 @@ class Backend:
         return self._proc is not None and self._proc.poll() is None
 
     def pick_folder(self):
+        import webview
+
         if self._window is None:
             return None
         try:
@@ -271,8 +315,15 @@ class Backend:
         if mode == "go":
             cmd.append(folder)
             self._cfg["last_project"] = folder
+            self._current_project = folder
+            projects = list(self._cfg.get("projects") or [])
+            if folder not in projects:
+                projects.insert(0, folder)
+            self._cfg["projects"] = projects[:30]
             save_config(self._cfg)
         cmd += ["--device", self._cfg.get("device", "cuda")]
+        if self._cfg.get("use_llm") and self.llm_status().get("up"):
+            cmd.append("--llm")  # 服务在线才叠加，避免白等
         flags = 0
         if os.name == "nt":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -408,6 +459,90 @@ class Backend:
                 })
         return detail
 
+    # ---- 本地 LLM 服务管理（llama.cpp，127.0.0.1:LLM_PORT）----
+    def llm_status(self) -> dict:
+        import urllib.request
+
+        managed = self._llm_proc is not None and self._llm_proc.poll() is None
+        try:
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 本机服务不走代理
+            with op.open(f"http://127.0.0.1:{LLM_PORT}/v1/models", timeout=2) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            mid = (data.get("data") or [{}])[0].get("id", "")
+            return {"up": True, "model": Path(str(mid)).name, "managed": managed,
+                    "gguf": self._cfg.get("llm_gguf", "")}
+        except Exception:  # noqa: BLE001
+            return {"up": False, "model": "", "managed": managed, "gguf": self._cfg.get("llm_gguf", "")}
+
+    def llm_start(self) -> dict:
+        st = self.llm_status()
+        if st["up"]:
+            return {"ok": True, "already": True, "model": st["model"]}
+        py = self._cfg.get("engine_python") or ""
+        gguf = self._cfg.get("llm_gguf") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        if not gguf or not Path(gguf).exists():
+            return {"ok": False, "error": "未找到 GGUF 模型（设置页可手动填路径）"}
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            logf = open(LLM_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115 — 进程存活期持有
+        except OSError:
+            logf = subprocess.DEVNULL
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        try:
+            self._llm_proc = subprocess.Popen(
+                [py, "-m", "llama_cpp.server", "--model", gguf, "--n_ctx", "32768", "--port", str(LLM_PORT)],
+                cwd=self._cfg.get("repo_dir") or None, stdout=logf, stderr=subprocess.STDOUT,
+                env=self._engine_env(), creationflags=flags,
+            )
+        except OSError as exc:
+            return {"ok": False, "error": f"启动失败: {exc}"}
+        log(f"[ui] LLM 服务启动中 pid={self._llm_proc.pid}（模型 {Path(gguf).name}）")
+        return {"ok": True, "starting": True}
+
+    def llm_stop(self) -> dict:
+        st = self.llm_status()
+        if not st["up"] and not st["managed"]:
+            return {"ok": False, "error": "服务未在运行"}
+        if not st["managed"]:
+            return {"ok": False, "error": "该服务不是本应用启动的（可能在别的终端里），未终止它"}
+        try:
+            self._llm_proc.terminate()
+            log("[ui] LLM 服务已终止")
+            return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    # ---- 会议库（按项目分组；ZCode 侧栏同款信息结构） ----
+    def list_library(self) -> list[dict]:
+        sessions = {s["sid"]: s for s in self.list_sessions()}
+        mapping = dict(self._session_projects)
+        # 归档扫描补历史映射：<项目>/meetingvar/minutes/<session_id>/
+        for proj in self._cfg.get("projects") or []:
+            md = Path(proj) / "meetingvar" / "minutes"
+            try:
+                if md.is_dir():
+                    for d in md.iterdir():
+                        if d.is_dir():
+                            mapping.setdefault(d.name, proj)
+            except OSError:
+                continue
+        groups: dict[str, list] = {}
+        for sid, s in sessions.items():
+            groups.setdefault(mapping.get(sid, ""), []).append(s)
+        out = []
+        for proj, ss in groups.items():
+            ss.sort(key=lambda x: -x["mtime"])
+            out.append({
+                "project": proj,
+                "name": Path(proj).name if proj else "（未归属会话）",
+                "sessions": ss,
+                "latest": ss[0]["mtime"] if ss else 0,
+            })
+        out.sort(key=lambda g: -g["latest"])
+        return out
+
     # ---- 系统动作 / 配置 ----
     def open_path(self, path: str) -> dict:
         p = path or self._cfg.get("repo_dir") or ""
@@ -423,9 +558,17 @@ class Backend:
         return self._cfg
 
     def set_config(self, updates: dict) -> dict:
-        for k in CONFIG_DEFAULTS:
-            if k in updates and isinstance(updates[k], str):
-                self._cfg[k] = updates[k]
+        for k, default in CONFIG_DEFAULTS.items():
+            if k not in updates:
+                continue
+            val = updates[k]
+            if isinstance(default, bool):
+                self._cfg[k] = bool(val)
+            elif isinstance(default, list):
+                if isinstance(val, list):
+                    self._cfg[k] = [str(x) for x in val]
+            elif isinstance(val, str):
+                self._cfg[k] = val
         save_config(self._cfg)
         return self._cfg
 
@@ -450,6 +593,8 @@ class Backend:
 
 
 def main() -> None:
+    import webview
+
     selftest = "--selftest" in sys.argv
     smoke = "--smoke-engine" in sys.argv
     log(f"[ui] {APP_NAME} {APP_VERSION} 启动（selftest={selftest} smoke={smoke}）")

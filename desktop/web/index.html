@@ -9,7 +9,10 @@
 <body>
 <header class="topbar">
   <div class="brand"><span class="logodot"></span> meetingVAR <span class="ver" id="ver"></span></div>
-  <div class="status-pill" id="statusPill">● 待机</div>
+  <div class="topbar-right">
+    <span class="llm-pill" id="llmPill" title="本地 LLM 服务（选词人/语义层）">LLM ○</span>
+    <span class="status-pill" id="statusPill">● 待机</span>
+  </div>
 </header>
 
 <div class="app">
@@ -56,23 +59,18 @@
         <input id="projManual" class="input" placeholder="如：D:\项目\AI for ALS\数据处理与筛选">
         <button id="btnScanInput" class="btn">读取</button>
       </div>
-      <div class="proj-split">
-        <div class="tree-panel card">
-          <div class="tree-title">项目文件 <span id="treeStat" class="muted"></span></div>
-          <div id="projTree" class="tree-body"><div class="muted" style="padding:4px 8px">（读取后显示）</div></div>
-        </div>
-        <div class="proj-side">
-          <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）</div>
-          <div id="scanTerms" class="scan"></div>
-          <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
-        </div>
-      </div>
+      <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）；文件树在右侧</div>
+      <div id="scanTerms" class="scan"></div>
+      <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
     </section>
 
-    <!-- 会议库 -->
+    <!-- 会议库（按项目分组；参照 ZCode 侧栏信息结构：项目 → 场次 → 详情） -->
     <section id="page-library" class="page">
-      <div class="row"><button class="btn" onclick="refreshLibrary()">刷新</button></div>
-      <div id="sessionList" class="sessions"></div>
+      <div class="row">
+        <button class="btn" onclick="refreshLibrary()">刷新</button>
+        <span class="muted">按项目分组 · 点项目展开场次</span>
+      </div>
+      <div id="libGroups" class="lib-groups"></div>
       <div id="sessionDetail" class="detail card" hidden></div>
     </section>
 
@@ -87,6 +85,17 @@
           <option value="cuda">cuda（GPU，推荐）</option>
           <option value="cpu">cpu（无 GPU 时）</option>
         </select></label>
+
+      <h3 class="set-h">本地 LLM 服务（选词人 / 语义层，端口 11439）</h3>
+      <div class="row">
+        <span id="llmStatus" class="muted">检测中…</span>
+        <button id="btnLlmStart" class="btn">启动服务</button>
+        <button id="btnLlmStop" class="btn">停止服务</button>
+      </div>
+      <label class="field"><span>模型 GGUF 路径（自动探测，可改）</span>
+        <input id="cfgGguf" class="input" placeholder="D:\env\models\models\Qwen--Qwen3-4B-GGUF\...\Qwen3-4B-Q4_K_M.gguf"></label>
+      <label class="checkrow"><input type="checkbox" id="cfgUseLlm"> 开会时启用 LLM 语义层（需服务在线）</label>
+
       <div class="row">
         <button id="btnTestEngine" class="btn">测试引擎</button>
         <button id="btnSaveCfg" class="btn btn-primary">保存</button>
@@ -95,6 +104,17 @@
       <div id="testResult" class="muted"></div>
     </section>
   </main>
+
+  <!-- 右栏：项目文件树（工作区在中间；参照 ZCode 的侧栏信息结构） -->
+  <aside class="rightpanel" id="rightPanel">
+    <div class="rp-head">
+      <span class="rp-title">项目文件</span>
+      <span class="muted" id="treeStat"></span>
+      <button class="btn rp-refresh" id="btnTreeRefresh" title="重新读取">↻</button>
+    </div>
+    <div class="rp-proj muted" id="rpProjName">（未选择项目）</div>
+    <div class="tree-body" id="sideTree"><div class="muted" style="padding:4px 8px">在「项目」页选择文件夹后显示</div></div>
+  </aside>
 </div>
 
 <!-- 说话人点名弹窗 -->

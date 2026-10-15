@@ -18,6 +18,15 @@ function fmtClock(sec) {
   const m = Math.floor(sec / 60), s = sec % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
+/* 相对时间（参照 ZCode 侧栏：刚刚 / N分 / N小时 / N天） */
+function relTime(tsSec) {
+  if (!tsSec) return "";
+  const d = Math.max(0, Date.now() / 1000 - tsSec);
+  if (d < 60) return "刚刚";
+  if (d < 3600) return Math.floor(d / 60) + "分";
+  if (d < 86400) return Math.floor(d / 3600) + "小时";
+  return Math.floor(d / 86400) + "天";
+}
 function toast(msg, ms = 5000) {
   const t = $("toast");
   t.textContent = msg;
@@ -84,16 +93,21 @@ async function poll() {
   if (res.running !== state.running) setRunning(res.running, res.started_at);
 }
 
+const SYS_LINE_RE = /\[rec\]|\[go\]|\[done\]|\[spk\]|\[calibration\]|归档|停止指令|就绪|Traceback|Error|error/i;
+
 function handleEvent(ev) {
   if (ev.type === "line") {
     state.speakers.add(ev.spk);
     $("statSpeakers").textContent = "说话人 " + [...state.speakers].join(" / ");
-    pushTicker(`${ev.clock}`, ev.spk, ev.text, false);
+    pushTicker(`${ev.clock}`, ev.spk, ev.text, "");
+  } else if (ev.type === "log") {
+    // 关键进程行进实时流（让"正在听"可见）：开始监听/归档/错误等
+    if (SYS_LINE_RE.test(ev.text)) pushTicker("", "系统", ev.text.trim(), "sys");
   } else if (ev.type === "hit") {
     state.hits += 1;
     $("statHits").textContent = "命中 " + state.hits;
     toast("VAR! " + ev.text.replace(/^.*VAR!\s*/, ""));
-    pushTicker("", "★", ev.text, true);
+    pushTicker("", "★", ev.text, "hit");
   } else if (ev.type === "ask") {
     state.askQueue.push(ev);
     maybeShowAsk();
@@ -101,19 +115,23 @@ function handleEvent(ev) {
     setRunning(true, Date.now() / 1000);
   } else if (ev.type === "exit") {
     setRunning(false, null);
-    toast("会议已结束（引擎退出码 " + ev.code + (ev.code === 0 ? "，正常收尾" : "，异常") + "）");
+    let msg = "会议已结束（引擎退出码 " + ev.code + "）";
+    if (ev.code === 0) msg = "会议已结束（正常收尾，纪要与证据已保存）";
+    else if (ev.last_log) msg += " · 最后一条：" + ev.last_log.slice(0, 110);
+    toast(msg, 9000);
+    pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
   }
 }
 
-function pushTicker(t, spk, text, hit) {
-  state.ticker.push({ t, spk, text, hit });
+function pushTicker(t, spk, text, kind) {
+  state.ticker.push({ t, spk, text, kind });
   if (state.ticker.length > 60) state.ticker.shift();
   const body = $("ticker");
   const div = document.createElement("div");
-  div.className = "tk" + (hit ? " hit" : "");
+  div.className = "tk" + (kind ? " " + kind : "");
   div.innerHTML = `<span class="t">${esc(t)}</span><span class="s">${esc(spk)}</span>${esc(text)}`;
   body.appendChild(div);
-  while (body.children.length > 12) body.removeChild(body.firstChild);
+  while (body.children.length > 14) body.removeChild(body.firstChild);
   body.scrollTop = body.scrollHeight;
 }
 
@@ -167,6 +185,7 @@ $("btnRec").onclick = async () => {
   $("ticker").innerHTML = ""; $("statHits").textContent = "命中 0";
   $("statSpeakers").textContent = "说话人 —";
   setRunning(true, r.started_at);
+  pushTicker("", "系统", "正在启动引擎（首次加载模型约 40 秒）…", "sys");
   toast("会议开始：" + state.project);
 };
 $("btnVar").onclick = async () => {
@@ -216,15 +235,20 @@ async function scanProject(path) {
   state.project = path;
   $("projPath").textContent = path;
   $("homeProject").textContent = path;
+  $("rpProjName").textContent = path;
   $("scanMeta").textContent = "读取中…（大文件夹约需数秒到半分钟）";
   $("scanTerms").innerHTML = "";
-  $("projTree").innerHTML = "";
+  $("sideTree").innerHTML = "";
   $("treeStat").textContent = "";
   $("btnUseProject").disabled = true;
   const d = await pywebview.api.scan_project(path);
   state.scan = d;
-  if (!d.ok) { $("scanMeta").textContent = "读取失败：" + (d.error || ""); return; }
-  renderTree(d.tree || [], $("projTree"), 0);
+  if (!d.ok) {
+    $("scanMeta").textContent = "读取失败：" + (d.error || "");
+    $("sideTree").innerHTML = `<div class="muted" style="padding:4px 8px">读取失败：${esc(d.error || "")}</div>`;
+    return;
+  }
+  renderTree(d.tree || [], $("sideTree"), 0);
   $("treeStat").textContent = "（" + (d.doc_count || 0) + " 份文档）";
   let meta = `文档 ${d.doc_count} 份 · 监听词 ${d.term_count} 个` +
     (d.repo && d.repo.is_repo ? ` · 代码符号 ${d.repo.terms} 个` : "");
@@ -254,21 +278,41 @@ $("btnScanInput").onclick = () => {
 };
 $("btnUseProject").onclick = () => { switchPage("home"); toast("已就绪——回主页按「开始会议」"); };
 
-/* ---------- 会议库 ---------- */
+/* ---------- 会议库（按项目分组：项目 → 场次 → 详情） ---------- */
 async function refreshLibrary() {
-  const sessions = await pywebview.api.list_sessions();
+  const groups = await pywebview.api.list_library();
   $("sessionDetail").hidden = true;
-  const box = $("sessionList");
-  if (!sessions.length) { box.innerHTML = `<div class="muted">还没有会议记录（零命中会话按设计不留任何文件）</div>`; return; }
-  box.innerHTML = sessions.map((s) => `
-    <div class="sess" data-sid="${esc(s.sid)}">
-      <div>
-        <div class="sid">${esc(s.sid)}</div>
-        <div class="meta">${new Date(s.mtime * 1000).toLocaleString()}</div>
-      </div>
-      <div class="badge">${s.clips != null ? s.clips + " 片段" : ""} ${s.minutes ? "· 有纪要" : ""}</div>
-    </div>`).join("");
-  box.querySelectorAll(".sess").forEach((el) => { el.onclick = () => showSession(el.dataset.sid); });
+  const box = $("libGroups");
+  if (!groups.length) { box.innerHTML = `<div class="muted">还没有会议记录（零命中会话按设计不留任何文件）</div>`; return; }
+  box.innerHTML = "";
+  for (const g of groups) {
+    const wrap = document.createElement("div");
+    wrap.className = "lib-group";
+    const head = document.createElement("div");
+    head.className = "lib-proj";
+    head.innerHTML =
+      `<span class="tree-ico">${g.project ? "📁" : "❔"}</span>` +
+      `<span class="lib-name">${esc(g.name)}</span>` +
+      `<span class="lib-path muted">${esc(g.project || "")}</span>` +
+      `<span class="lib-meta muted">${g.sessions.length} 场 · ${relTime(g.latest)}</span>`;
+    const body = document.createElement("div");
+    body.className = "lib-sessions";
+    body.hidden = true;
+    for (const s of g.sessions) {
+      const row = document.createElement("div");
+      row.className = "sess-row";
+      row.innerHTML =
+        `<span class="sid">${esc(s.sid)}</span>` +
+        `<span class="meta muted">${new Date(s.mtime * 1000).toLocaleString()} · ${relTime(s.mtime)} · ` +
+        `${s.clips != null ? s.clips + " 片段" : ""} ${s.minutes ? " · 有纪要" : ""}</span>`;
+      row.onclick = (e) => { e.stopPropagation(); showSession(s.sid); };
+      body.appendChild(row);
+    }
+    head.onclick = () => { body.hidden = !body.hidden; head.classList.toggle("open", !body.hidden); };
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    box.appendChild(wrap);
+  }
 }
 async function showSession(sid) {
   const d = await pywebview.api.session_detail(sid);
@@ -288,21 +332,59 @@ async function showSession(sid) {
   $("sessionDetail").scrollIntoView({ behavior: "smooth" });
 }
 
-/* ---------- 设置 ---------- */
+/* ---------- 设置 + LLM 服务 ---------- */
+async function refreshLlm() {
+  const st = await pywebview.api.llm_status();
+  $("llmStatus").textContent = st.up
+    ? `● 运行中（${st.model || "模型已载入"}）`
+    : (st.managed ? "○ 启动中…（首次加载约 30-60 秒）" : "○ 未运行");
+  $("llmPill").textContent = st.up ? "LLM ●" : "LLM ○";
+  $("llmPill").classList.toggle("on", !!st.up);
+  return st;
+}
+$("btnLlmStart").onclick = async () => {
+  const r = await pywebview.api.llm_start();
+  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
+  toast("LLM 服务启动中（首次加载模型约 30-60 秒）");
+  let n = 0;
+  const t = setInterval(async () => {
+    const st = await refreshLlm();
+    if (st.up || ++n > 40) { clearInterval(t); if (st.up) toast("LLM 服务已就绪"); }
+  }, 3000);
+};
+$("btnLlmStop").onclick = async () => {
+  const r = await pywebview.api.llm_stop();
+  if (!r.ok) toast(r.error || "停止失败");
+  refreshLlm();
+};
+$("cfgUseLlm").onchange = async () => {
+  await pywebview.api.set_config({ use_llm: $("cfgUseLlm").checked });
+  toast($("cfgUseLlm").checked ? "开会时将叠加 LLM 语义层" : "已关闭 LLM 语义层");
+};
 async function loadConfig() {
   const cfg = await pywebview.api.get_config();
   $("cfgPy").value = cfg.engine_python || "";
   $("cfgRepo").value = cfg.repo_dir || "";
   $("cfgDevice").value = cfg.device || "cuda";
-  if (cfg.last_project) { state.project = cfg.last_project; $("homeProject").textContent = cfg.last_project; $("projPath").textContent = cfg.last_project; }
+  $("cfgGguf").value = cfg.llm_gguf || "";
+  $("cfgUseLlm").checked = !!cfg.use_llm;
+  if (cfg.last_project) {
+    state.project = cfg.last_project;
+    $("homeProject").textContent = cfg.last_project;
+    $("projPath").textContent = cfg.last_project;
+    $("rpProjName").textContent = cfg.last_project;
+    scanProject(cfg.last_project); // 右栏项目树：启动即恢复上次项目上下文
+  }
+  refreshLlm();
 }
 $("btnSaveCfg").onclick = async () => {
   await pywebview.api.set_config({
     engine_python: $("cfgPy").value.trim(), repo_dir: $("cfgRepo").value.trim(),
-    device: $("cfgDevice").value,
+    device: $("cfgDevice").value, llm_gguf: $("cfgGguf").value.trim(),
   });
   toast("配置已保存");
 };
+$("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };
 $("btnTestEngine").onclick = async () => {
   $("testResult").textContent = "测试中…";
   const r = await pywebview.api.test_engine();

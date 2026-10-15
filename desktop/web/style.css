@@ -36,6 +36,12 @@ body {
   background: rgba(255,255,255,.12); color: #c8d2dc;
 }
 .status-pill.live { background: rgba(224,67,47,.25); color: #ffb8ad; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.llm-pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,.08); color: #93a0af;
+}
+.llm-pill.on { background: rgba(47,158,99,.3); color: #b7e6c9; }
 /* ---------- 布局 ---------- */
 .app { flex: 1 1 auto; display: flex; min-height: 0; }
 .side { width: 148px; flex: 0 0 148px; padding: 10px 8px; display: flex; flex-direction: column; gap: 4px; }
@@ -45,7 +51,34 @@ body {
 }
 .navbtn:hover { background: rgba(0,0,0,.05); }
 .navbtn.active { background: var(--card); box-shadow: 0 1px 2px rgba(20,30,40,.08); font-weight: 600; }
-main { flex: 1 1 auto; min-width: 0; padding: 12px 16px 16px 4px; overflow-y: auto; }
+main { flex: 1 1 auto; min-width: 0; padding: 12px 12px 16px 4px; overflow-y: auto; }
+/* 右栏：项目文件树（工作区居中；参照 ZCode 的侧栏信息结构） */
+.rightpanel {
+  width: 336px; flex: 0 0 336px; margin: 12px 14px 16px 2px;
+  background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(20,30,40,.08);
+  display: flex; flex-direction: column; min-height: 0; padding: 10px 6px 10px 12px;
+}
+.rightpanel .tree-body { flex: 1 1 auto; overflow: auto; font-size: 13px; line-height: 1.5; min-height: 60px; }
+.rp-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 0 4px 2px; }
+.rp-refresh { margin-left: auto; padding: 1px 9px; font-size: 13px; line-height: 1.3; }
+.rp-proj { font-size: 11.5px; padding: 0 4px 8px; word-break: break-all; }
+@media (max-width: 1000px) { .rightpanel { display: none; } }
+/* 会议库：项目分组 */
+.lib-groups { display: flex; flex-direction: column; gap: 6px; }
+.lib-group { background: var(--card); border-radius: 10px; box-shadow: 0 1px 2px rgba(20,30,40,.06); overflow: hidden; }
+.lib-proj { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; }
+.lib-proj:hover { background: #f7f8fa; }
+.lib-proj.open { background: #f2f4f7; }
+.lib-name { font-weight: 600; }
+.lib-path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.lib-meta { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
+.lib-sessions { border-top: 1px solid var(--line); }
+.sess-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 34px; cursor: pointer; font-size: 12.5px; }
+.sess-row:hover { background: #f7f8fa; }
+.sess-row .sid { font-variant-numeric: tabular-nums; }
+.sess-row .meta { margin-left: auto; }
+.set-h { margin: 16px 0 6px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+.checkrow { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; cursor: pointer; }
 .page { display: none; }
 .page.active { display: block; }
 /* ---------- 通用 ---------- */
@@ -95,27 +128,20 @@ main { flex: 1 1 auto; min-width: 0; padding: 12px 16px 16px 4px; overflow-y: au
 .tk .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
 .tk .s { font-weight: 600; margin-right: 6px; }
 .tk.hit { background: #fdeceA; border-radius: 6px; padding: 2px 6px; }
+.tk.sys { color: var(--muted); font-size: 12.5px; }
+.tk.err { color: var(--accent); font-size: 12.5px; background: #fdeceA; border-radius: 6px; padding: 2px 6px; }
+.tk .s { color: var(--muted); font-weight: 600; }
 /* ---------- 项目页 ---------- */
 .path { color: var(--muted); word-break: break-all; }
 .scan { margin: 4px 0; }
 .scan h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
-/* ---------- 项目页：VSCode 式文件树 ---------- */
-.proj-split { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
-.tree-panel { width: 380px; flex: 0 0 380px; max-height: 470px; display: flex; flex-direction: column; padding: 10px 6px 8px 10px; }
-.tree-title { font-size: 12px; color: var(--fg); font-weight: 600; margin: 0 0 6px 6px; }
-.tree-title .muted { font-weight: 400; }
-.tree-body { overflow: auto; font-size: 13px; line-height: 1.5; }
+/* ---------- 文件树（右栏共用：VSCode 式） ---------- */
 .tree-row { display: flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
 .tree-dir { cursor: pointer; }
 .tree-row:hover { background: #f0f2f6; }
 .tree-ico { flex: 0 0 auto; width: 18px; text-align: center; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
 .tree-size { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.proj-side { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-@media (max-width: 900px) {
-  .proj-split { flex-wrap: wrap; }
-  .tree-panel { flex: 1 1 100%; width: auto; max-height: 320px; }
-}
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   background: var(--card); border: 1px solid var(--line); border-radius: 999px;
