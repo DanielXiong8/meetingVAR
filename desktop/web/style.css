@@ -13,6 +13,9 @@
   --blue: #2f6fed;
 }
 * { box-sizing: border-box; }
+/* hidden 属性必须永远生效：作者样式里的 display:flex 等会覆盖 UA 的 [hidden]{display:none}，
+   点名弹窗曾因此"按钮点了没反应/回车关不掉"（实测坑，勿删 !important） */
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
@@ -54,6 +57,8 @@ main { flex: 1 1 auto; min-width: 0; padding: 12px 16px 16px 4px; overflow-y: au
   font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: #fff; color: var(--fg); min-width: 0; flex: 1 1 220px;
 }
+/* 纵向布局里 input 不能按 220px 基准增长（否则弹窗/表单里被撑成大块） */
+.modal-card .input, .field > .input { flex: 0 0 auto; height: 36px; }
 .btn {
   font: inherit; padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
   background: #fff; color: var(--fg); cursor: pointer;

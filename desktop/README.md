@@ -76,6 +76,10 @@ python app.py --smoke-engine    :: 不开窗演练全链：起会→手动 VAR�
 8. 引擎 stdout 的 funasr `[INFO] decoding…` 空 VAD 日志每 5 秒一条，UI 侧已过滤；
    `[WARNING]/[ERROR]` 保留（如实暴露引擎问题）；冒烟脚本检测"会议监听开始"要扫 log 事件
    （该行不是 status 事件——等满 240s 的冤枉路走过一次）。
+9. **`hidden` 属性会被作者样式里的 `display` 覆盖**——`.modal{display:flex}` 曾让点名弹窗
+   "跳过/确认/回车都关不掉"（事件其实都执行了，只是弹窗永远显示）。全站由
+   `[hidden]{display:none !important}` 兜底；另外 `.input{flex:1 1 220px}` 在**纵向** flex
+   容器里会把 220px 当高度基准把输入框撑成大块，弹窗/表单里用 `.modal-card .input,.field>.input{flex:0 0 auto}` 修正。
 
 ## v0.1 功能清单
 

@@ -500,6 +500,8 @@ def _smoke_engine(backend: Backend) -> None:
     tmp_project.mkdir(exist_ok=True)
     (tmp_project / "说明.md").write_text("# 冒烟测试项目\n这是一个用于 UI 冒烟测试的临时项目。\n", encoding="utf-8")
 
+    # 冒烟不得污染用户配置里的"当前项目"（临时目录会被清掉，曾出现在界面上）
+    saved_project = backend._cfg.get("last_project", "")
     r = backend.start_meeting(str(tmp_project), mode="go")
     print("start:", r, flush=True)
     if not r.get("ok"):
@@ -545,6 +547,9 @@ def _smoke_engine(backend: Backend) -> None:
     print("---- engine raw tail ----", flush=True)
     for e in tail:
         print("  |", e.get("text", ""), flush=True)
+    # 恢复用户原本的"当前项目"（冒烟只借用配置，不留痕）
+    backend._cfg["last_project"] = saved_project
+    save_config(backend._cfg)
     print("SMOKE-DONE", flush=True)
 
 
