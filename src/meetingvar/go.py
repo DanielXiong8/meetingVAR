@@ -114,6 +114,9 @@ def register(sub) -> None:
     g.add_argument("--no-repo", action="store_true", help="跳过代码符号抽取")
     g.add_argument("--no-screen", action="store_true")
     g.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
+    g.add_argument("--source", choices=["both", "loopback", "mic"], default="both",
+                   help="采集源：both=系统声音+麦克风（默认）/ loopback=仅系统声音 / mic=仅麦克风")
+    g.add_argument("--mic-device", type=int, help="麦克风设备编号；缺省跟随系统默认麦克风")
     g.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算）")
     g.add_argument("--llm", action="store_true", help="后台叠加本地/云端小模型语义抽取并热更新")
     g.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")

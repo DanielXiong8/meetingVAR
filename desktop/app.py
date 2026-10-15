@@ -57,6 +57,7 @@ CONFIG_DEFAULTS = {
     "projects": [],          # 已知项目（会议归档分组用；start_meeting 时维护）
     "llm_gguf": "",          # 本地 4B GGUF 路径（LLM 服务启动用；自动探测）
     "use_llm": False,        # 开会时是否叠加 LLM 语义层（需服务在线）
+    "audio_source": "both",  # 采集源：both=系统声音+麦克风 / loopback / mic
 }
 
 SESSMAP_FILE = CONFIG_DIR / "sessions_map.json"
@@ -322,6 +323,7 @@ class Backend:
             self._cfg["projects"] = projects[:30]
             save_config(self._cfg)
         cmd += ["--device", self._cfg.get("device", "cuda")]
+        cmd += ["--source", self._cfg.get("audio_source", "both")]
         if self._cfg.get("use_llm") and self.llm_status().get("up"):
             cmd.append("--llm")  # 服务在线才叠加，避免白等
         flags = 0

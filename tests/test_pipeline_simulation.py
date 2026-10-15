@@ -193,7 +193,7 @@ class PipelineSimulationTests(unittest.TestCase):
              patch("builtins.input", side_effect=EOFError):
             capture.return_value.ingest_since.side_effect = KeyboardInterrupt
             session.return_value.finish.side_effect = RuntimeError("simulated ASR failure")
-            with patch.object(sys, "argv", ["meetingvar", "go", str(project), "--no-repo"]):
+            with patch.object(sys, "argv", ["meetingvar", "go", str(project), "--no-repo", "--source", "loopback"]):
                 with self.assertRaisesRegex(RuntimeError, "simulated ASR failure"):
                     cli.main()
             capture.return_value.stop.assert_called_once()

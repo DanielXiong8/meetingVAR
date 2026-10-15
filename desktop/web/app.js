@@ -153,11 +153,14 @@ setInterval(() => {
   if (state.running && state.startedAt) {
     const el = Date.now() / 1000 - state.startedAt;
     $("statTime").textContent = "已听 " + fmtClock(el);
-    // 静默看门狗：90 秒没有一句转写 → 多半是"没有声音从扬声器播放"（耳机/静音/自己在说话）
+    // 静默看门狗：90 秒没有一句转写 → 多半是采集源头没声音
     if (!state.gotLines && !state.silenceHinted && el > 90) {
       state.silenceHinted = true;
-      pushTicker("", "系统", "已 90 秒未听到可识别语音：请确认有声音从【扬声器】播放" +
-        "（耳机、静音、只有人在自己说话 都不会被采集）。", "sys");
+      const src = (state.cfg && state.cfg.audio_source) || "both";
+      const hint = src === "loopback"
+        ? "已 90 秒未听到语音：当前是【仅系统声音】模式——请确认电脑在播放声音（或到设置页改为"系统声音+麦克风"）。"
+        : "已 90 秒未听到可识别语音：请确认电脑在播放声音、且麦克风未被系统静音/被其他软件独占。";
+      pushTicker("", "系统", hint, "sys");
     }
   }
 }, 1000);
@@ -195,7 +198,8 @@ $("btnRec").onclick = async () => {
   $("statSpeakers").textContent = "说话人 —";
   setRunning(true, r.started_at);
   pushTicker("", "系统", "正在启动引擎（首次加载模型约 40 秒）…", "sys");
-  pushTicker("", "系统", "监听目标是【系统扬声器的输出声音】（不采集麦克风）：播放/外放有声音的内容约 8 秒后，这里会出现转写。", "sys");
+  const src = (state.cfg && state.cfg.audio_source) || "both";
+  pushTicker("", "系统", `监听源：${SOURCE_LABEL[src] || src}（设置页可改）——有声音约 8 秒后，这里开始出现转写。`, "sys");
   toast("会议开始：" + state.project);
 };
 $("btnVar").onclick = async () => {
@@ -371,13 +375,20 @@ $("cfgUseLlm").onchange = async () => {
   await pywebview.api.set_config({ use_llm: $("cfgUseLlm").checked });
   toast($("cfgUseLlm").checked ? "开会时将叠加 LLM 语义层" : "已关闭 LLM 语义层");
 };
+const SOURCE_LABEL = {
+  both: "系统声音 + 麦克风",
+  loopback: "仅系统声音",
+  mic: "仅麦克风",
+};
 async function loadConfig() {
   const cfg = await pywebview.api.get_config();
+  state.cfg = cfg;
   $("cfgPy").value = cfg.engine_python || "";
   $("cfgRepo").value = cfg.repo_dir || "";
   $("cfgDevice").value = cfg.device || "cuda";
   $("cfgGguf").value = cfg.llm_gguf || "";
   $("cfgUseLlm").checked = !!cfg.use_llm;
+  $("cfgSource").value = cfg.audio_source || "both";
   if (cfg.last_project) {
     state.project = cfg.last_project;
     $("homeProject").textContent = cfg.last_project;
@@ -391,7 +402,9 @@ $("btnSaveCfg").onclick = async () => {
   await pywebview.api.set_config({
     engine_python: $("cfgPy").value.trim(), repo_dir: $("cfgRepo").value.trim(),
     device: $("cfgDevice").value, llm_gguf: $("cfgGguf").value.trim(),
+    audio_source: $("cfgSource").value,
   });
+  state.cfg = await pywebview.api.get_config();
   toast("配置已保存");
 };
 $("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };

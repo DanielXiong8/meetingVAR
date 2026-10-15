@@ -232,7 +232,8 @@ def run(output: Path) -> dict:
              patch.object(VirtualScreen, "__init__", return_value=None), \
              patch.object(pipeline_module, "Session", live_session), \
              patch("builtins.input", side_effect=EOFError):
-            command("go", project, "--no-repo", "--device", "cpu")
+            # 沙箱固定单源（虚拟采集是单个 fixture，双源混音语义不在沙箱断言范围内）
+            command("go", project, "--no-repo", "--device", "cpu", "--source", "loopback")
         live = sessions[2]
         assert virtual_audio.stopped and virtual_screen.stopped
         assert len(live.transcript) == len(SCRIPT)

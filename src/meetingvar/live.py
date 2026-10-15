@@ -16,9 +16,20 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
     if args.no_screen and args.hd:
         raise SystemExit("--no-screen 与 --hd 不能同时使用；关闭录屏时请移除 --hd")
     with ExitStack() as resources:
-        print("[rec] 打开系统音频环回…")
         index = getattr(args, "audio_device", None)
-        audio = AudioCapture(device_index=index) if index is not None else AudioCapture()
+        mic_index = getattr(args, "mic_device", None)
+        source = getattr(args, "source", "loopback")
+        if source == "both":
+            from .capture.audio import DualCapture
+
+            print("[rec] 打开音频采集（系统声音 + 麦克风）…")
+            audio = DualCapture(loopback_index=index, mic_index=mic_index)
+        elif source == "mic":
+            print("[rec] 打开麦克风…")
+            audio = AudioCapture(device_index=mic_index, mic=True)
+        else:
+            print("[rec] 打开系统音频环回…")
+            audio = AudioCapture(device_index=index) if index is not None else AudioCapture()
         audio_stopped = False
 
         def stop_audio():

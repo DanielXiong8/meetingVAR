@@ -85,6 +85,12 @@
           <option value="cuda">cuda（GPU，推荐）</option>
           <option value="cpu">cpu（无 GPU 时）</option>
         </select></label>
+      <label class="field"><span>音频采集源</span>
+        <select id="cfgSource" class="input">
+          <option value="both">系统声音 + 麦克风（推荐：别人说的 + 你说的，两头都录）</option>
+          <option value="loopback">仅系统声音（只听电脑外放/视频的声音）</option>
+          <option value="mic">仅麦克风（只听现场/自己的声音）</option>
+        </select></label>
 
       <h3 class="set-h">本地 LLM 服务（选词人 / 语义层，端口 11439）</h3>
       <div class="row">

@@ -264,8 +264,20 @@ def cmd_devices(args) -> None:
 
     with pyaudio.PyAudio() as p:
         default = p.get_default_wasapi_loopback()["index"]
+        print("环回端点（--audio-device）：")
         for info in p.get_loopback_device_info_generator():
             marker = " [系统默认]" if info["index"] == default else ""
+            print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz){marker}")
+        print("麦克风输入（--mic-device，缺省跟随系统默认麦克风）：")
+        try:
+            dmic = p.get_default_input_device_info()
+            dmic_idx = dmic["index"] if not dmic.get("isLoopbackDevice") else None
+        except Exception:  # noqa: BLE001
+            dmic_idx = None
+        for info in p.get_device_info_generator():
+            if not info.get("maxInputChannels") or info.get("isLoopbackDevice"):
+                continue
+            marker = " [系统默认]" if info["index"] == dmic_idx else ""
             print(f"  [{info['index']}] {info['name']} ({int(info['maxInputChannels'])}ch @ {int(info['defaultSampleRate'])}Hz){marker}")
 
 
@@ -374,6 +386,9 @@ def main() -> None:
     rc.add_argument("--memory", default=None)
     rc.add_argument("--no-screen", action="store_true")
     rc.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
+    rc.add_argument("--source", choices=["both", "loopback", "mic"], default="both",
+                    help="采集源：both=系统声音+麦克风（默认，两头都录）/ loopback=仅系统声音 / mic=仅麦克风")
+    rc.add_argument("--mic-device", type=int, help="麦克风设备编号；缺省跟随系统默认麦克风")
     rc.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算，实测约 13-20fps）")
     rc.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
