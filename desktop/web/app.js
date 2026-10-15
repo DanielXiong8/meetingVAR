@@ -97,6 +97,7 @@ const SYS_LINE_RE = /\[rec\]|\[go\]|\[done\]|\[spk\]|\[calibration\]|归档|停�
 
 function handleEvent(ev) {
   if (ev.type === "line") {
+    state.gotLines = true;
     state.speakers.add(ev.spk);
     $("statSpeakers").textContent = "说话人 " + [...state.speakers].join(" / ");
     pushTicker(`${ev.clock}`, ev.spk, ev.text, "");
@@ -150,7 +151,14 @@ function setRunning(running, startedAt) {
 }
 setInterval(() => {
   if (state.running && state.startedAt) {
-    $("statTime").textContent = "已听 " + fmtClock(Date.now() / 1000 - state.startedAt);
+    const el = Date.now() / 1000 - state.startedAt;
+    $("statTime").textContent = "已听 " + fmtClock(el);
+    // 静默看门狗：90 秒没有一句转写 → 多半是"没有声音从扬声器播放"（耳机/静音/自己在说话）
+    if (!state.gotLines && !state.silenceHinted && el > 90) {
+      state.silenceHinted = true;
+      pushTicker("", "系统", "已 90 秒未听到可识别语音：请确认有声音从【扬声器】播放" +
+        "（耳机、静音、只有人在自己说话 都不会被采集）。", "sys");
+    }
   }
 }, 1000);
 
@@ -182,10 +190,12 @@ $("btnRec").onclick = async () => {
   const r = await pywebview.api.start_meeting(state.project, "go");
   if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
   state.hits = 0; state.speakers.clear(); state.ticker = [];
+  state.gotLines = false; state.silenceHinted = false;
   $("ticker").innerHTML = ""; $("statHits").textContent = "命中 0";
   $("statSpeakers").textContent = "说话人 —";
   setRunning(true, r.started_at);
   pushTicker("", "系统", "正在启动引擎（首次加载模型约 40 秒）…", "sys");
+  pushTicker("", "系统", "监听目标是【系统扬声器的输出声音】（不采集麦克风）：播放/外放有声音的内容约 8 秒后，这里会出现转写。", "sys");
   toast("会议开始：" + state.project);
 };
 $("btnVar").onclick = async () => {

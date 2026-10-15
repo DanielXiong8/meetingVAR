@@ -327,11 +327,17 @@ class Backend:
         flags = 0
         if os.name == "nt":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        env = self._engine_env()
+        # 把本地 LLM 服务指给引擎（否则 go --llm / 语义层永远"不可用"——真机实测坑）
+        st = self.llm_status()
+        env["MEETINGVAR_LLM_BASE_URL"] = f"http://127.0.0.1:{LLM_PORT}/v1"
+        env.setdefault("MEETINGVAR_LLM_API_KEY", "local")
+        env["MEETINGVAR_LLM_MODEL"] = st.get("model") or "local"
         try:
             self._proc = subprocess.Popen(
                 cmd, cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                bufsize=1, env=self._engine_env(), creationflags=flags,
+                bufsize=1, env=env, creationflags=flags,
             )
         except OSError as exc:
             self._proc = None
