@@ -175,26 +175,72 @@ $("btnVar").onclick = async () => {
 };
 $("btnOpenOut").onclick = () => pywebview.api.open_path("");
 
-/* ---------- 项目页 ---------- */
+/* ---------- 项目页（VSCode 式文件树 + 右侧摘要） ---------- */
+const FILE_GLYPHS = {
+  png: "🖼", jpg: "🖼", jpeg: "🖼", gif: "🖼", webp: "🖼", bmp: "🖼",
+  md: "📄", txt: "📄", docx: "📕", doc: "📕", pdf: "📕",
+  pptx: "📊", ppt: "📊", xlsx: "📊", csv: "📊",
+  py: "⚙", js: "⚙", ts: "⚙", html: "⚙", css: "⚙", json: "⚙",
+  zip: "🗜", rar: "🗜", "7z": "🗜",
+};
+function fileGlyph(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  return FILE_GLYPHS[ext] || "📄";
+}
+function fmtSize(n) {
+  if (n == null) return "";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1048576).toFixed(1) + " MB";
+}
+function renderTree(nodes, box, depth) {
+  for (const n of nodes || []) {
+    const row = document.createElement("div");
+    row.className = "tree-row" + (n.dir ? " tree-dir" : "");
+    row.style.paddingLeft = (6 + depth * 14) + "px";
+    row.innerHTML =
+      `<span class="tree-ico">${n.dir ? "📁" : fileGlyph(n.name)}</span>` +
+      `<span class="tree-name">${esc(n.name)}</span>` +
+      (!n.dir ? `<span class="tree-size">${fmtSize(n.size)}</span>` : "");
+    box.appendChild(row);
+    if (n.dir) {
+      const kids = document.createElement("div");
+      kids.hidden = depth >= 1; // 顶层目录默认展开，更深层折叠
+      renderTree(n.children || [], kids, depth + 1);
+      row.onclick = () => { kids.hidden = !kids.hidden; row.classList.toggle("collapsed", kids.hidden); };
+      box.appendChild(kids);
+    }
+  }
+}
 async function scanProject(path) {
   state.project = path;
   $("projPath").textContent = path;
   $("homeProject").textContent = path;
-  $("scanResult").innerHTML = `<div class="muted">读取中…（大文件夹约需数秒到半分钟）</div>`;
+  $("scanMeta").textContent = "读取中…（大文件夹约需数秒到半分钟）";
+  $("scanTerms").innerHTML = "";
+  $("projTree").innerHTML = "";
+  $("treeStat").textContent = "";
   $("btnUseProject").disabled = true;
   const d = await pywebview.api.scan_project(path);
   state.scan = d;
-  if (!d.ok) { $("scanResult").innerHTML = `<div class="muted">读取失败：${esc(d.error)}</div>`; return; }
-  const chips = (obj, n = 16) => Object.keys(obj).slice(0, n)
+  if (!d.ok) { $("scanMeta").textContent = "读取失败：" + (d.error || ""); return; }
+  renderTree(d.tree || [], $("projTree"), 0);
+  $("treeStat").textContent = "（" + (d.doc_count || 0) + " 份文档）";
+  let meta = `文档 ${d.doc_count} 份 · 监听词 ${d.term_count} 个` +
+    (d.repo && d.repo.is_repo ? ` · 代码符号 ${d.repo.terms} 个` : "");
+  if (d.skipped && d.skipped.length) {
+    meta += ` · 跳过 ${d.skipped.length} 个非文本文件（${d.skipped.map(esc).join("、")}）`;
+  }
+  $("scanMeta").textContent = meta;
+  const chips = (obj, n = 20) => Object.keys(obj).slice(0, n)
     .map((w) => `<span class="chip"><b>${esc(w)}</b></span>`).join("");
-  let html = `<div class="muted">文档 ${d.doc_count} 份 · 监听词 ${d.term_count} 个` +
-    (d.repo && d.repo.is_repo ? ` · 代码仓库词 ${d.repo.terms} 个` : "") + "</div>";
-  if (d.docs && d.docs.length) html += `<h3>读到的文档</h3><div class="chips">${d.docs.slice(0, 12).map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div>`;
-  if (d.terms && Object.keys(d.terms).length) html += `<h3>抽取的监听词（L1）</h3><div class="chips">${chips(d.terms)}</div>`;
+  let html = "";
+  if (d.terms && Object.keys(d.terms).length) html += `<h3>抽取的监听词（基础层）</h3><div class="chips">${chips(d.terms)}</div>`;
   if (d.repo && d.repo.is_repo && Object.keys(d.repo.top || {}).length) html += `<h3>代码符号（L0）</h3><div class="chips">${chips(d.repo.top)}</div>`;
   if (d.persons && d.persons.length) html += `<h3>人物</h3><div class="chips">${d.persons.map((p) => `<span class="chip">${esc(p)}</span>`).join("")}</div>`;
   if (d.notes && d.notes.length) html += `<div class="muted">${d.notes.map(esc).join("；")}</div>`;
-  $("scanResult").innerHTML = html;
+  if (!html) html = `<div class="muted">没有可从文本抽取的内容（图片/压缩包不会被解析）</div>`;
+  $("scanTerms").innerHTML = html;
   $("btnUseProject").disabled = false;
   await pywebview.api.set_config({ last_project: path });
 }

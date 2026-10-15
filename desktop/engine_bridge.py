@@ -14,18 +14,59 @@ import sys
 from pathlib import Path
 
 
+_TREE_MAX_NODES = 800
+_TREE_MAX_DEPTH = 6
+
+
+def _build_tree(root: Path):
+    """VSCode 风格文件树（含被跳过的非文本文件清单）。深度/节点数封顶。"""
+    from meetingvar.memory.files import SKIP_DIRS, read_text_safely
+
+    skipped: list[str] = []
+    budget = [_TREE_MAX_NODES]
+
+    def walk(d: Path, depth: int) -> list[dict]:
+        if depth > _TREE_MAX_DEPTH or budget[0] <= 0:
+            return []
+        try:
+            entries = sorted(d.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except OSError:
+            return []
+        nodes = []
+        for p in entries:
+            if budget[0] <= 0:
+                break
+            if p.is_dir() and (p.name.lower() in SKIP_DIRS or p.is_symlink()):
+                continue
+            budget[0] -= 1
+            try:
+                if p.is_dir():
+                    nodes.append({"name": p.name, "dir": True, "children": walk(p, depth + 1)})
+                else:
+                    node = {"name": p.name, "dir": False, "size": p.stat().st_size}
+                    if p.suffix.lower() in {".txt", ".md"} and read_text_safely(p) is None:
+                        skipped.append(p.name)
+                    nodes.append(node)
+            except OSError:
+                continue
+        return nodes
+
+    return walk(root, 1), skipped
+
+
 def cmd_preview(folder: Path) -> dict:
     from meetingvar.memory.extract import extract_terms
     from meetingvar.memory.files import project_files
 
     result: dict = {
         "folder": str(folder),
-        "docs": [],
         "doc_count": 0,
         "terms": {},
         "term_count": 0,
         "persons": [],
         "repo": {"is_repo": False, "terms": 0, "top": {}},
+        "tree": [],
+        "skipped": [],
         "notes": [],
     }
     if not folder.is_dir():
@@ -33,14 +74,16 @@ def cmd_preview(folder: Path) -> dict:
         return result
 
     try:
-        docs = [
-            str(p.relative_to(folder))
-            for p in project_files(folder, {".md", ".txt", ".pdf", ".pptx", ".docx"})
-        ]
-        result["doc_count"] = len(docs)
-        result["docs"] = docs[:60]
+        result["doc_count"] = sum(
+            1 for _ in project_files(folder, {".md", ".txt", ".pdf", ".pptx", ".docx"})
+        )
     except Exception as exc:  # noqa: BLE001
         result["notes"].append(f"文档扫描失败: {type(exc).__name__}")
+
+    try:
+        result["tree"], result["skipped"] = _build_tree(folder)
+    except Exception as exc:  # noqa: BLE001
+        result["notes"].append(f"文件树构建失败: {type(exc).__name__}")
 
     try:
         terms = extract_terms(folder)

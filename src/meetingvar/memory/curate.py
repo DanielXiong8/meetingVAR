@@ -39,11 +39,16 @@ def _reference_material(memory_dir: Path | None, repo_dir: Path | None) -> str:
     """给选词人的参考资料：文档摘录（预算内）+ 代码高频定义清单（只作上下文，不作产出）。"""
     parts: list[str] = []
     if memory_dir and Path(memory_dir).exists():
+        from .files import read_text_safely
+
         budget = 30000
         for f in sorted(Path(memory_dir).rglob("*")):
-            if f.suffix.lower() not in {".md", ".txt"} or budget <= 0:
+            if f.suffix.lower() not in {".md", ".txt", ".docx"} or budget <= 0:
                 continue
-            body = f.read_text(encoding="utf-8", errors="ignore")[:4000]
+            text = read_text_safely(f)  # 二进制伪装文件跳过（曾把 zip 当 txt 喂给选词人）
+            if not text:
+                continue
+            body = text[:4000]
             parts.append(f"[文档 {f.relative_to(memory_dir)}]\n{body}")
             budget -= len(body)
     if repo_dir and Path(repo_dir).exists():

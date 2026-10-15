@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
-from .files import project_files
+from .files import project_files, read_text_safely
 
 # jieba 懒加载：llm_extract/纯结构化路径不依赖 jieba（CI model-free 环境无此包）；
 # 只有人名/拉丁抽取（_persons/_latin）真正用到，在函数内 import。
@@ -96,12 +96,14 @@ def _latin(docs: list[str], terms: dict[str, set]) -> None:
 
 
 def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None) -> dict[str, list[str]]:
-    """返回 {词: [来源, …]}。docs = memory_dir 下全部 md/txt。"""
+    """返回 {词: [来源, …]}。docs = memory_dir 下全部 md/txt/docx（二进制伪装文件跳过）。"""
     _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
-    docs = [
-        f.read_text(encoding="utf-8", errors="ignore")
-        for f in project_files(memory_dir, {".md", ".txt"})
-    ]
+    # 健壮读取：曾把伪装成 .txt 的 zip 当文本硬读，抽出 CQ/Dc/Fk 一筐二进制垃圾词
+    docs = []
+    for f in project_files(memory_dir, {".md", ".txt", ".docx"}):
+        text = read_text_safely(f)
+        if text:
+            docs.append(text)
     terms: dict[str, set] = {}
     for doc in docs:
         _structured(doc, terms)
@@ -167,8 +169,11 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
     per_doc_chars, total_chars = 6000, 40000
     parts: list[str] = []
     total = 0
-    for f in sorted(project_files(memory_dir, {".md", ".txt"})):
-        body = f.read_text(encoding="utf-8", errors="ignore")[:per_doc_chars]
+    for f in sorted(project_files(memory_dir, {".md", ".txt", ".docx"})):
+        text = read_text_safely(f)  # 二进制伪装文件跳过，不喂给 LLM
+        if not text:
+            continue
+        body = text[:per_doc_chars]
         part = f"### {f.relative_to(memory_dir)}\n{body}"
         if total + len(part) > total_chars:
             break

@@ -56,8 +56,17 @@
         <input id="projManual" class="input" placeholder="如：D:\项目\AI for ALS\数据处理与筛选">
         <button id="btnScanInput" class="btn">读取</button>
       </div>
-      <div id="scanResult" class="scan"></div>
-      <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
+      <div class="proj-split">
+        <div class="tree-panel card">
+          <div class="tree-title">项目文件 <span id="treeStat" class="muted"></span></div>
+          <div id="projTree" class="tree-body"><div class="muted" style="padding:4px 8px">（读取后显示）</div></div>
+        </div>
+        <div class="proj-side">
+          <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）</div>
+          <div id="scanTerms" class="scan"></div>
+          <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
+        </div>
+      </div>
     </section>
 
     <!-- 会议库 -->
