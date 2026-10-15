@@ -70,15 +70,34 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
     """
     records: list[dict] = []
     out = text
-    pinyin = _get_pinyin()
-    if pinyin is None or not terms:
-        return out, records  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
 
     def _rec(src: str, dst: str, status: str, reason: str, rule_id: str) -> None:
         records.append({
             "src": src, "dst": dst, "status": status, "reason": reason,
             "rule_id": rule_id, "ts": None, "termset_id": None,
         })
+
+    # 0) 缩写词归并（test2 实测：ASR 把 VCF 写成 "v c f"、SNV 写成 "s n v"，
+    #    逐字母拆写后精确子串永远匹配不上）。仅当归并形恰为词表中的缩写词时执行
+    #    （指向性替换，不做自由归一化）；右到左替换避免位移。
+    if terms:
+        for term in sorted(terms, key=len, reverse=True):
+            core = term.strip()
+            if not (2 <= len(core) <= 6 and re.fullmatch(r"[A-Za-z]+", core)):
+                continue
+            spaced = re.compile(
+                r"(?<![A-Za-z])" + r"\s*".join(re.escape(c) for c in core) + r"(?![A-Za-z])",
+                re.IGNORECASE,
+            )
+            for m in reversed(list(spaced.finditer(out))):
+                if " " not in m.group(0):  # 未拆写形态（如已正确的 VCF）不动
+                    continue
+                out = out[: m.start()] + core + out[m.end():]
+                _rec(m.group(0), core, "accepted", "缩写词去空格归并（ASR 逐字母拆写）", "acronym_join")
+
+    pinyin = _get_pinyin()
+    if pinyin is None or not terms:
+        return out, records  # 无 pypinyin：恒等返回（降级，不阻塞证据流水）
 
     # a) 中文术语：汉字滑窗 + 首尾音节锚定 + 字符重合
     #    （difflib 分块匹配算不出 0.84 的编辑相似度，改用可解释判定：
@@ -133,6 +152,12 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
                 continue
             if tok_core in EN_COMMON:
                 _rec(tok, term, "review_required", "原词为常用英文词（常见词互换是 B 组改写链根源）", "latin_common_source")
+                break
+            # 子串关系歧义（test2 重跑实测：缩写归并出的 "VCF" 被模糊匹配改写成 "gVCF"，
+            # 相似度 0.857 过线）——原词是目标词的子串时，究竟是"漏了个前缀字母"还是"另一个词"
+            # 无法从文本分辨，按宁漏勿误进待审。
+            if tok_core in term_core:
+                _rec(tok, term, "review_required", "原词是目标词的子串（前缀缺失歧义），宁漏勿误", "latin_substring")
                 break
             if ratio < 0.75:
                 _rec(tok, term, "review_required", f"拉丁相似度 {ratio:.2f} 处于灰区（0.6–0.75）", "latin_gray_zone")
