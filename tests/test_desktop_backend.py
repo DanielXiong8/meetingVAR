@@ -205,6 +205,45 @@ class BackendTests(unittest.TestCase):
         st = self.b.transcribe_media_status()
         self.assertIn("running", st)
 
+    def test_open_dirs_are_distinct(self) -> None:
+        """「打开产物文件夹」与「打开配置目录」必须打开不同目录。
+
+        曾同为 open_path("")→repo_dir（两个按钮打开同一个地方，属实现缺陷）。
+        """
+        opened: list[str] = []
+        with mock.patch.object(desktop_app, "os") as fake_os:
+            fake_os.startfile = lambda p: opened.append(str(p))
+            self.b._cfg["repo_dir"] = str(self.tmp)
+            self.b._cfg["last_project"] = ""
+            self.b.open_config_dir()
+            self.b.open_data_dir()
+        self.assertEqual(len(opened), 2)
+        self.assertEqual(Path(opened[0]), desktop_app.CONFIG_DIR)
+        self.assertEqual(Path(opened[1]), self.tmp, "无项目/无 data 时回落仓库目录")
+
+    def test_shutdown_stops_engine_and_llm(self) -> None:
+        class _FakeProc:
+            def __init__(self) -> None:
+                self.stdin = mock.MagicMock()
+                self._alive = True
+
+            def poll(self):
+                return None if self._alive else 0
+
+            def wait(self, timeout=None):
+                self._alive = False
+                return 0
+
+            def terminate(self):
+                self._alive = False
+
+        eng, llm = _FakeProc(), _FakeProc()
+        self.b._proc = eng
+        self.b._llm_proc = llm
+        self.b.shutdown()
+        self.assertIn(":stop", eng.stdin.write.call_args.args[0], "关窗必须先发优雅停止")
+        self.assertFalse(llm._alive, "本应用启动的 LLM 服务应被终止（防孤儿进程占内存）")
+
 
 if __name__ == "__main__":
     unittest.main()

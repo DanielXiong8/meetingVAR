@@ -742,6 +742,53 @@ class Backend:
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
 
+    def open_data_dir(self) -> dict:
+        """「打开产物文件夹」：优先当前项目的 meetingvar 归档（纪要/名册），否则引擎 data 池。"""
+        candidates = []
+        proj = self._cfg.get("last_project") or ""
+        if proj:
+            candidates.append(Path(proj) / "meetingvar")
+        repo = Path(self._cfg.get("repo_dir") or ".")
+        candidates += [repo / "data", repo]
+        for c in candidates:
+            if c.exists():
+                return self.open_path(str(c))
+        return {"ok": False, "error": "没有可打开的目录"}
+
+    def open_config_dir(self) -> dict:
+        """「打开配置目录」：%APPDATA%\\meetingVAR（配置/日志/会话映射都在此）。"""
+        return self.open_path(str(CONFIG_DIR))
+
+    def shutdown(self) -> None:
+        """窗口关闭后的收尾：优雅停会议（最多等 30s）→ 终止本应用启动的 LLM 服务。
+
+        必要性：Windows 子进程不随父进程退出——不清理的话关窗后引擎继续录音、
+        llama.cpp 继续占内存（实测确认无 atexit/on_closing 时的孤儿行为）。
+        """
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                if proc.stdin:
+                    proc.stdin.write(":stop\n")
+                    proc.stdin.flush()
+                    log("[ui] 退出：已发送优雅停止（:stop）")
+                    try:
+                        proc.wait(timeout=30)  # 收尾含 digest+归档，给足时间
+                    except subprocess.TimeoutExpired:
+                        log("[ui] 退出：引擎 30s 未退出，终止")
+                        proc.terminate()
+            except Exception:  # noqa: BLE001 — 退出路径不许抛
+                try:
+                    proc.terminate()
+                except Exception:  # noqa: BLE001
+                    pass
+        if self._llm_proc is not None and self._llm_proc.poll() is None:
+            try:
+                self._llm_proc.terminate()
+                log("[ui] 退出：LLM 服务已终止")
+            except Exception:  # noqa: BLE001
+                pass
+
     def get_config(self) -> dict:
         return self._cfg
 
@@ -810,6 +857,7 @@ def main() -> None:
         log("[ui] 窗口就绪")
 
     webview.start(_on_start, debug=selftest)  # 自检开 debug：JS 控制台错误可见
+    backend.shutdown()  # 关窗即收尾：停会议 + 停本应用起的 LLM 服务（防孤儿进程）
     if selftest:
         # 正常路径：start 返回 = 窗口已关闭
         print("SELFTEST-OK", flush=True)

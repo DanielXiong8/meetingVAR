@@ -214,7 +214,7 @@ $("btnVar").onclick = async () => {
   const r = await pywebview.api.manual_var();
   toast(r.ok ? "已标记（手动 VAR：回溯 300s）" : "会议未在运行");
 };
-$("btnOpenOut").onclick = () => pywebview.api.open_path("");
+$("btnOpenOut").onclick = () => pywebview.api.open_data_dir();
 
 /* ---------- 项目页（VSCode 式文件树 + 右侧摘要） ---------- */
 const FILE_GLYPHS = {
@@ -539,7 +539,7 @@ $("btnTestEngine").onclick = async () => {
   const r = await pywebview.api.test_engine();
   $("testResult").textContent = r.ok ? `引擎正常：Python ${r.python} · meetingvar ${r.meetingvar}` : "失败：" + (r.error || "");
 };
-$("btnOpenCfg").onclick = () => pywebview.api.open_path("");
+$("btnOpenCfg").onclick = () => pywebview.api.open_config_dir();
 
 /* ---------- 导航/弹窗事件 ---------- */
 document.querySelectorAll(".navbtn").forEach((b) => { b.onclick = () => switchPage(b.dataset.page); });
