@@ -44,6 +44,25 @@ class ProbeTests(unittest.TestCase):
         docs, _ = probe.load_corpus(self.tmp)
         self.assertEqual([n for n, _ in docs], ["a.txt"], "归档区文件必须被排除")
 
+    def test_tiny_duplicates_are_not_reported(self) -> None:
+        """3 字的'重复文件'是噪音（实测 docx 小附件一箩筐）：小于 200 字不去重、不报告。"""
+        (self.tmp / "tiny1.txt").write_text("同上\n", encoding="utf-8")
+        (self.tmp / "tiny2.txt").write_text("同上\n", encoding="utf-8")
+        docs, notes = probe.load_corpus(self.tmp)
+        names = [n for n, _ in docs]
+        self.assertIn("tiny1.txt", names)
+        self.assertIn("tiny2.txt", names)
+        self.assertFalse(any("tiny" in n and "重复" in n for n in notes))
+
+    def test_plan_notes_stats_and_summary(self) -> None:
+        """预算行只给摘要（去重/跳过各几组），明细在 notes 里——曾把几十条说明糊一墙。"""
+        p = probe.plan(self.tmp)
+        st = p["notes_stats"]
+        self.assertEqual(st["skipped"], 1, "bin.txt 应计 1 个跳过")
+        self.assertEqual(st["dups"], 1, "b_copy.txt 应计 1 组重复")
+        self.assertIn("跳过 1 个不可读文件", p["notes_summary"])
+        self.assertIn("合并重复 1 组", p["notes_summary"])
+
     def test_headings_need_re_multiline_and_labels(self) -> None:
         docs, _ = probe.load_corpus(self.tmp)
         chunks = probe.split_chunks(docs, chunk_chars=800)

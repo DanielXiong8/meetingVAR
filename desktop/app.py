@@ -215,6 +215,47 @@ class Backend:
         env.update({"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         return env
 
+    def _llm_env(self) -> dict:
+        """按设置页厂商构造引擎侧 LLM 环境变量；未就绪抛 ValueError（带可行动提示）。
+
+        真机教训：全库理解/开会都想当然地拿"配置里的厂商"，但自定义厂商 base_url 为空
+        或本地服务没起时，引擎侧 MEETINGVAR_LLM_* 就是空的 → 子进程只会报"模型无输出"。
+        统一在这里给出人话错误，UI 直接展示。
+        """
+        provider = self._cfg.get("llm_provider") or "local"
+        if provider == "custom":
+            base = (self._cfg.get("llm_base_url") or "").strip()
+            if not base:
+                raise ValueError("当前厂商是「自定义 API」但没填 Base URL（设置页 → 模型服务），或切回「本地模型」")
+            return {
+                "MEETINGVAR_LLM_BASE_URL": base.rstrip("/"),
+                "MEETINGVAR_LLM_API_KEY": (self._cfg.get("llm_api_key") or "").strip() or "sk-none",
+                "MEETINGVAR_LLM_MODEL": (self._cfg.get("llm_model") or "").strip() or "custom",
+            }
+        st = self.llm_status()
+        if not st.get("up"):
+            raise ValueError("本地模型服务未启动（设置页 → 模型服务 → 启动服务），或切到「自定义 API」")
+        return {
+            "MEETINGVAR_LLM_BASE_URL": f"http://127.0.0.1:{LLM_PORT}/v1",
+            "MEETINGVAR_LLM_API_KEY": "local",
+            "MEETINGVAR_LLM_MODEL": st.get("model") or "local",
+        }
+
+    def _provider_info(self) -> dict:
+        """给 UI 的厂商状态（不抛异常）：label/egress/ready/error 一起算好。"""
+        provider = self._cfg.get("llm_provider") or "local"
+        label = "自定义 API" if provider == "custom" else "本地模型"
+        try:
+            self._llm_env()
+            ready, error = True, ""
+        except ValueError as exc:
+            ready, error = False, str(exc)
+        if provider == "custom":
+            egress = "块文本将发送到自定义 API（内容出机）" if ready else "自定义 API 未配置（不会出网，但也不能跑）"
+        else:
+            egress = "本地模型=零出网" if ready else "本地模型服务未启动"
+        return {"provider": provider, "label": label, "egress": egress, "ready": ready, "error": error}
+
     _VAR_RE = re.compile(r">>> VAR!")
     _LINE_RE = re.compile(r"^\s*\[(\d{1,2}:\d{2}:\d{2})\]\s*(\S+):\s*(.+)$")
     _ASK_RE = re.compile(r"\[spk\] 检测到新说话人\s*(spk\w+?)\s*[（(]")
@@ -369,26 +410,14 @@ class Backend:
                 return {"ok": False, "error": "已选讯飞识别，但未配置讯飞文件夹（设置页 → 识别引擎）"}
             cmd += ["--asr", "xfyun", "--xfyun-cred", xdir]
         env = self._engine_env()
-        provider = self._cfg.get("llm_provider") or "local"
-        if provider == "custom":
-            # 自定义 OpenAI 兼容端点：环境变量直接可被引擎的语义层/纪要层使用
-            base = (self._cfg.get("llm_base_url") or "").strip()
-            if base:
-                env["MEETINGVAR_LLM_BASE_URL"] = base.rstrip("/")
-                env["MEETINGVAR_LLM_API_KEY"] = (self._cfg.get("llm_api_key") or "").strip() or "sk-none"
-                env["MEETINGVAR_LLM_MODEL"] = (self._cfg.get("llm_model") or "").strip() or "custom"
-                if self._cfg.get("use_llm"):
-                    cmd.append("--llm")
-            elif self._cfg.get("use_llm"):
-                log("[ui] 已勾选叠加 LLM 但自定义端点未填 base_url——本次未叠加")
-        else:
-            if self._cfg.get("use_llm") and self.llm_status().get("up"):
-                cmd.append("--llm")  # 服务在线才叠加，避免白等
-            # 把本地 LLM 服务指给引擎（否则 go --llm / 语义层永远"不可用"——真机实测坑）
-            st = self.llm_status()
-            env["MEETINGVAR_LLM_BASE_URL"] = f"http://127.0.0.1:{LLM_PORT}/v1"
-            env.setdefault("MEETINGVAR_LLM_API_KEY", "local")
-            env["MEETINGVAR_LLM_MODEL"] = st.get("model") or "local"
+        try:
+            env.update(self._llm_env())
+            if self._cfg.get("use_llm"):
+                cmd.append("--llm")
+        except ValueError as exc:
+            # 模型未就绪不拦开会（会议照录），只在勾选叠加时留一条日志（界面有个 toast 提示）
+            if self._cfg.get("use_llm"):
+                log(f"[ui] LLM 语义层本次未叠加：{exc}")
         flags = _SPAWN_FLAGS  # 无控制台黑窗（用户实测："点开始会议弹出脚本页"）
         try:
             self._proc = subprocess.Popen(
@@ -730,9 +759,7 @@ class Backend:
             data = json.loads(out[-1])
         except ValueError:
             return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
-        data["provider"] = self._cfg.get("llm_provider") or "local"
-        data["egress"] = ("块文本将发送到自定义 API（内容出机）"
-                          if data["provider"] == "custom" else "本地模型=零出网")
+        data.update(self._provider_info())
         return data
 
     def understand_start(self, folder: str, max_chunks: int = 0) -> dict:
@@ -748,10 +775,16 @@ class Backend:
                      "progress": "启动…", "result": {}, "error": "", "max_chunks": max_chunks}
         cmd = [py, str(BRIDGE_PY), "understand", folder] + ([str(max_chunks)] if max_chunks else [])
         try:
+            env = self._engine_env()
+            env.update(self._llm_env())  # 全库理解必须有模型：本地服务/自定义端点在此校验
+        except ValueError as exc:
+            self._und.update({"running": False, "done": True, "error": str(exc)})
+            return {"ok": False, "error": str(exc)}
+        try:
             proc = subprocess.Popen(
                 cmd, cwd=self._cfg.get("repo_dir") or None, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                bufsize=1, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+                bufsize=1, env=env, creationflags=_SPAWN_FLAGS,
             )
         except OSError as exc:
             self._und.update({"running": False, "done": True, "error": f"启动失败: {exc}"})

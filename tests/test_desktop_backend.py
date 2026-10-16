@@ -205,6 +205,51 @@ class BackendTests(unittest.TestCase):
         st = self.b.transcribe_media_status()
         self.assertIn("running", st)
 
+    def test_llm_env_requires_ready_provider(self) -> None:
+        """全库理解/开会共用 _llm_env：自定义厂商没填 Base URL 或本地服务没起时必须给人话错误。"""
+        no_llm = {"up": False, "model": "", "managed": False, "gguf": ""}
+        self.b._cfg["llm_provider"] = "custom"
+        self.b._cfg["llm_base_url"] = ""
+        with mock.patch.object(desktop_app.Backend, "llm_status", return_value=no_llm):
+            with self.assertRaises(ValueError) as ctx:
+                self.b._llm_env()
+            self.assertIn("Base URL", str(ctx.exception))
+            info = self.b._provider_info()
+            self.assertFalse(info["ready"])
+            self.assertIn("未配置", info["egress"])
+            # 本地服务也没起 → 同样明确报错
+            self.b._cfg["llm_provider"] = "local"
+            with self.assertRaises(ValueError) as ctx2:
+                self.b._llm_env()
+            self.assertIn("未启动", str(ctx2.exception))
+        # 自定义厂商填了 base_url → 就绪，环境变量指向它
+        self.b._cfg["llm_provider"] = "custom"
+        self.b._cfg["llm_base_url"] = "https://api.example.com/v1"
+        self.b._cfg["llm_model"] = "m1"
+        env = self.b._llm_env()
+        self.assertEqual(env["MEETINGVAR_LLM_BASE_URL"], "https://api.example.com/v1")
+        self.assertEqual(env["MEETINGVAR_LLM_MODEL"], "m1")
+        self.assertTrue(self.b._provider_info()["ready"])
+
+    def test_understand_start_blocked_when_provider_not_ready(self) -> None:
+        import subprocess as sp
+
+        self.b._cfg["engine_python"] = sys.executable
+        self.b._cfg["llm_provider"] = "custom"
+        self.b._cfg["llm_base_url"] = ""
+        called = {"popen": False}
+
+        def fake_popen(*a, **k):
+            called["popen"] = True
+            raise sp.TimeoutExpired("x", 0)
+
+        with mock.patch.object(desktop_app, "_SPAWN_FLAGS", desktop_app._SPAWN_FLAGS), \
+             mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+            r = self.b.understand_start(str(self.tmp), 5)
+        self.assertFalse(r["ok"])
+        self.assertIn("Base URL", r["error"])
+        self.assertFalse(called["popen"], "未就绪时不得启动子进程")
+
     def test_open_dirs_are_distinct(self) -> None:
         """「打开产物文件夹」与「打开配置目录」必须打开不同目录。
 

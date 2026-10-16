@@ -280,18 +280,23 @@ async function scanProject(path) {
   }
   renderTree(d.tree || [], $("sideTree"), 0);
   $("treeStat").textContent = "（" + (d.doc_count || 0) + " 份文档）";
-  let meta = `文档 ${d.doc_count} 份 · 监听词 ${d.term_count} 个` +
-    (d.repo && d.repo.is_repo ? ` · 代码符号 ${d.repo.terms} 个` : "");
+  let meta = `文档 ${d.doc_count} 份`;
   if (d.skipped && d.skipped.length) {
-    meta += ` · 跳过 ${d.skipped.length} 个非文本文件（${d.skipped.map(esc).join("、")}）`;
+    const head = d.skipped.slice(0, 3).map(esc).join("、");
+    meta += ` · 跳过 ${d.skipped.length} 个非文本文件（${head}${d.skipped.length > 3 ? " 等" : ""}）`;
   }
   $("scanMeta").textContent = meta;
   const chips = (obj, n = 20) => Object.keys(obj).slice(0, n)
     .map((w) => `<span class="chip"><b>${esc(w)}</b></span>`).join("");
   let html = "";
-  if (d.terms && Object.keys(d.terms).length) html += `<h3>抽取的监听词（基础层）</h3><div class="chips">${chips(d.terms)}</div>`;
   if (d.repo && d.repo.is_repo && Object.keys(d.repo.top || {}).length) html += `<h3>代码符号（L0）</h3><div class="chips">${chips(d.repo.top)}</div>`;
   if (d.persons && d.persons.length) html += `<h3>人物</h3><div class="chips">${d.persons.map((p) => `<span class="chip">${esc(p)}</span>`).join("")}</div>`;
+  if (d.terms && Object.keys(d.terms).length) {
+    // 原始 L1 词表默认折叠：实测在小说/杂文档上产出的多是 A4/AM5/碎片这类噪音，
+    // 真正该看的候选词走下面的「全库理解」。这里只留调试入口，不再抢视线。
+    html += `<details class="rawterms"><summary class="muted">原始抽取（未治理，仅供调试）· ${d.term_count} 个词</summary>` +
+      `<div class="chips">${chips(d.terms, 40)}</div></details>`;
+  }
   if (d.notes && d.notes.length) html += `<div class="muted">${d.notes.map(esc).join("；")}</div>`;
   if (!html) html = `<div class="muted">没有可从文本抽取的内容（图片/压缩包不会被解析）</div>`;
   $("scanTerms").innerHTML = html;
@@ -603,15 +608,24 @@ $("btnUndPlan").onclick = async () => {
   $("undPlanLine").textContent = "计算中…";
   const p = await pywebview.api.understand_plan(state.project);
   if (!p.ok) { $("undPlanLine").textContent = "失败：" + (p.error || ""); return; }
-  $("undProvider").textContent = p.provider === "custom" ? "自定义 API" : "本地模型";
+  $("undProvider").textContent = p.label || (p.provider === "custom" ? "自定义 API" : "本地模型");
   $("undEgress").textContent = p.egress || "";
   const hrs = p.est_local_minutes >= 90 ? `${(p.est_local_minutes / 60).toFixed(1)} 小时` : `${p.est_local_minutes} 分钟`;
+  // 摘要一行 + 明细折叠（曾被几十条去重说明糊成一面墙——实测教训）
   let line = `全库 ${p.chars} 字 / ${p.chunks.length} 块；本地模型预计 ~${hrs}`;
-  if (p.notes && p.notes.length) line += ` · 说明：${p.notes.join("；")}`;
+  if (p.notes_summary) line += `；${p.notes_summary}`;
   line += "；云端厂商通常快 10~50 倍（费用在厂商侧）";
-  $("undPlanLine").textContent = line;
-  $("btnUndGo").disabled = false;
-  $("btnUndSmall").disabled = false;
+  let extra = "";
+  if (p.notes && p.notes.length) {
+    extra = `<details class="rawterms"><summary class="muted">明细（${p.notes.length} 条）</summary>` +
+      `<div class="muted">${p.notes.map(esc).join("<br>")}</div></details>`;
+  }
+  if (!p.ready && p.error) {
+    extra = `<div class="pick-warn">✗ 模型未就绪：${esc(p.error)}</div>` + extra;
+  }
+  $("undPlanLine").innerHTML = esc(line) + extra;
+  $("btnUndGo").disabled = !p.ready;
+  $("btnUndSmall").disabled = !p.ready;
 };
 $("btnUndGo").onclick = async () => {
   if (state.running) { toast("会议进行中——全库理解会抢占模型资源，请先结束会议"); return; }

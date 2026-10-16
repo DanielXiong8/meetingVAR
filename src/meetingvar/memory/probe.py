@@ -73,9 +73,11 @@ def load_corpus(folder: Path) -> tuple[list[tuple[str, str]], list[str]]:
         if not t:
             notes.append(f"{f.name}: 跳过（二进制/解码失败）")
             continue
-        dup_of = next((name for name, prev in docs
-                       if (len(t) > 2000 and t[:20000] == prev[:20000])
-                       or t[:50000] in prev or prev[:50000] in t), None)
+        dup_of = None
+        if len(t) >= 200:  # 3 字的"重复文件"报告纯属噪音（实测：docx 小附件一箩筐）
+            dup_of = next((name for name, prev in docs
+                           if (len(t) > 2000 and t[:20000] == prev[:20000])
+                           or t[:50000] in prev or prev[:50000] in t), None)
         if dup_of:
             notes.append(f"{f.name}: 与 {dup_of} 内容重复（{len(t)} 字），只读一份")
             continue
@@ -116,10 +118,19 @@ def plan(folder: Path) -> dict:
     chunks = split_chunks(docs)
     unique = sum(len(t) for _, t in docs)
     tokens = unique / CHARS_PER_TOKEN
+    n_skip = sum(1 for n in notes if "跳过" in n)
+    n_dup = sum(1 for n in notes if "重复" in n)
+    summary = []
+    if n_skip:
+        summary.append(f"跳过 {n_skip} 个不可读文件")
+    if n_dup:
+        summary.append(f"合并重复 {n_dup} 组")
     return {
         "folder": str(folder),
         "files": [{"name": n, "chars": len(t)} for n, t in docs],
         "notes": notes,
+        "notes_stats": {"skipped": n_skip, "dups": n_dup},
+        "notes_summary": "；".join(summary),
         "chars": unique,
         "chunks": [{"doc": ch["doc"], "offset": ch["offset"], "end": ch["end"],
                     "label": ch["label"], "chars": len(ch["text"])} for ch in chunks],
