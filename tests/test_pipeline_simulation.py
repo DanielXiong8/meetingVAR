@@ -104,6 +104,19 @@ class PipelineSimulationTests(unittest.TestCase):
         self.assertEqual(first["lines"], 2)
         self.assertEqual(first, second)
 
+    def test_cloud_engine_disables_overlap_window(self):
+        """无句级时间戳的云引擎（讯飞 IAT）必须关掉重叠窗口。
+
+        实网集成实测：重叠块里同一句话两种切法文本必不一致，管线的
+        "同时间戳同文本"去重挡不住 → 每句都重复上一句尾巴。钉子防回归。
+        """
+        from meetingvar.pipeline import Session
+        session = Session("cloud_no_overlap", terms=[], echo=False, device="cpu")
+        session.asr.sentence_timestamps = False  # 模拟云引擎能力位
+        with patch.object(session.asr, "transcribe_pcm16k", return_value=[]):
+            session.ingest_pcm(bytes(10 * 32000), 1000.0)
+        self.assertEqual(session._pending, [], "云引擎不得保留重叠尾巴")
+
     def test_terms_are_not_person_assignees(self):
         from meetingvar import config
         from meetingvar.report.generate import _thin_no_llm

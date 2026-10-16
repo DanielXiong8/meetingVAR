@@ -50,9 +50,22 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
             from .capture.hd import HDCapture
             hd = HDCapture()
             resources.callback(hd.stop)
+        engine = getattr(args, "asr", "local")
+        cred = getattr(args, "xfyun_cred", None)
+        if engine == "xfyun":
+            from pathlib import Path as _P
+
+            from .transcribe.xfyun_cred import find_iat
+
+            if cred and _P(cred).is_dir():
+                cred = find_iat(_P(cred))  # 允许直接给讯飞文件夹（UI 就是这么传的）
+            if not cred or not _P(cred).exists():
+                raise SystemExit("[rec] 选用讯飞识别需要有效的凭证：--xfyun-cred 指向 .env 或讯飞文件夹")
+            print("[rec] ASR 后端: 讯飞语音听写（云端；无本地声纹→说话人退化为 spk?）")
         session = Session(session_id, terms=terms, focus_docs=focus_docs, device=args.device,
                           screen_capture=screen, echo=True, l2_threshold=l2_threshold,
-                          speaker_book=speaker_book)
+                          speaker_book=speaker_book,
+                          asr_engine=engine, xfyun_cred=cred)
         session.hd = hd
         if on_session:
             on_session(session)

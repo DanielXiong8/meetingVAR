@@ -393,6 +393,9 @@ def main() -> None:
     rc.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    rc.add_argument("--asr", choices=["local", "xfyun"], default="local",
+                    help="识别后端：local=本地 FunASR（含说话人）；xfyun=讯飞语音听写（云端，说话人退化为 spk?）")
+    rc.add_argument("--xfyun-cred", default=None, help="讯飞语音听写凭证 .env 路径（--asr xfyun 时必填）")
 
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)

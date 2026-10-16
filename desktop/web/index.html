@@ -35,8 +35,10 @@
         <div class="recside">
           <button id="btnVar" class="btn">手动 VAR（回车等价）</button>
           <button id="btnOpenOut" class="btn">打开产物文件夹</button>
+          <button id="btnTf" class="btn" title="选一个录音/录像文件 → 讯飞录音文件转写（含说话人分离）→ 生成 <文件名>.transcript.txt">文件转写…</button>
         </div>
       </div>
+      <div id="tfLine" class="muted" hidden></div>
       <div class="statusline">
         <span id="statTime">--</span>
         <span id="statHits">命中 0</span>
@@ -92,15 +94,44 @@
           <option value="mic">仅麦克风（只听现场/自己的声音）</option>
         </select></label>
 
-      <h3 class="set-h">本地 LLM 服务（选词人 / 语义层，端口 11439）</h3>
-      <div class="row">
-        <span id="llmStatus" class="muted">检测中…</span>
-        <button id="btnLlmStart" class="btn">启动服务</button>
-        <button id="btnLlmStop" class="btn">停止服务</button>
+      <h3 class="set-h">识别引擎（实时转写）</h3>
+      <label class="field"><span>引擎</span>
+        <select id="cfgAsr" class="input">
+          <option value="local">本地 FunASR（推荐：离线可跑，带说话人分离）</option>
+          <option value="xfyun">讯飞语音听写（云端：联网即用，无说话人分离→全场 spk?）</option>
+        </select></label>
+      <div class="row" id="xfyunRow">
+        <input id="cfgXfyunDir" class="input" placeholder="讯飞控制台下载的文件夹（内含 语音听写 / 录音文件转写 子目录）">
+        <button id="btnXfyunDir" class="btn">选择…</button>
+        <button id="btnXfyunCheck" class="btn">检测</button>
       </div>
-      <label class="field"><span>模型 GGUF 路径（自动探测，可改）</span>
-        <input id="cfgGguf" class="input" placeholder="D:\env\models\models\Qwen--Qwen3-4B-GGUF\...\Qwen3-4B-Q4_K_M.gguf"></label>
-      <label class="checkrow"><input type="checkbox" id="cfgUseLlm"> 开会时启用 LLM 语义层（需服务在线）</label>
+      <div id="xfyunResult" class="muted">讯飞文件夹选好后点「检测」：认领凭证并联网探活（密钥只读不显示）。</div>
+
+      <h3 class="set-h">模型服务（LLM：选词人 / 语义层 / 纪要）</h3>
+      <label class="field"><span>厂商</span>
+        <select id="cfgProvider" class="input">
+          <option value="local">本地模型（内置 llama.cpp 服务，离线免费）</option>
+          <option value="custom">自定义 API（任意 OpenAI 兼容：DeepSeek / 通义 / OpenAI / 自建…）</option>
+        </select></label>
+      <div id="provLocal">
+        <div class="row">
+          <span id="llmStatus" class="muted">检测中…</span>
+          <button id="btnLlmStart" class="btn">启动服务</button>
+          <button id="btnLlmStop" class="btn">停止服务</button>
+        </div>
+        <label class="field"><span>模型 GGUF 路径（自动探测，可改）</span>
+          <input id="cfgGguf" class="input" placeholder="D:\env\models\models\Qwen--Qwen3-4B-GGUF\...\Qwen3-4B-Q4_K_M.gguf"></label>
+      </div>
+      <div id="provCustom" hidden>
+        <label class="field"><span>Base URL（OpenAI 兼容，通常以 /v1 结尾）</span>
+          <input id="cfgBaseUrl" class="input" placeholder="https://api.deepseek.com/v1"></label>
+        <label class="field"><span>模型名</span>
+          <input id="cfgModel" class="input" placeholder="deepseek-chat"></label>
+        <label class="field"><span>API Key（只存本机配置目录，不随纪要/仓库外发）</span>
+          <input id="cfgApiKey" class="input" type="password" placeholder="sk-…"></label>
+        <div class="row"><button id="btnTestLlm" class="btn">测试连接</button><span id="llmTestResult" class="muted"></span></div>
+      </div>
+      <label class="checkrow"><input type="checkbox" id="cfgUseLlm"> 开会时启用 LLM 语义层（本地厂商需服务在线）</label>
 
       <div class="row">
         <button id="btnTestEngine" class="btn">测试引擎</button>

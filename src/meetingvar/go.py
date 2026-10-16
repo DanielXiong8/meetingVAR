@@ -122,3 +122,6 @@ def register(sub) -> None:
     g.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     g.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    g.add_argument("--asr", choices=["local", "xfyun"], default="local",
+                   help="识别后端：local=本地 FunASR（含说话人）；xfyun=讯飞语音听写（云端，说话人退化为 spk?）")
+    g.add_argument("--xfyun-cred", default=None, help="讯飞语音听写凭证 .env 路径（--asr xfyun 时必填）")

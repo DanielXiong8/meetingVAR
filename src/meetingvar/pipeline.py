@@ -37,6 +37,8 @@ class Session:
         correction_terms: list[str] | None = None,
         l2_threshold: float | None = None,
         speaker_book=None,
+        asr_engine: str = "local",
+        xfyun_cred: str | None = None,
     ):
         self.session_id = session_id
         self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
@@ -44,7 +46,15 @@ class Session:
         # 用户给的就是要纠错的词；漏斗自动词必须经 govern 治理后单独传入。
         self.correction_terms = correction_terms if correction_terms is not None else list(terms)
         self.pool = Pool(session_id)
-        self.asr = ASR(device)
+        if asr_engine == "xfyun":
+            # 云端识别：一句话一条 DB，无说话人声纹（with_embeddings=False），
+            # 聚类降级为"整场 spk?"——UI 侧已就该限制提示用户。
+            from .transcribe.xfyun_iat import XfyunASR
+            if not xfyun_cred:
+                raise ValueError("asr_engine=xfyun 需要提供 --xfyun-cred 凭证文件")
+            self.asr = XfyunASR(xfyun_cred)
+        else:
+            self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
         self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
         self.manual = ManualVAR()
@@ -143,8 +153,11 @@ class Session:
             return
         if not force and span < config.CHUNK_SECONDS:
             return
-        # 滑窗重叠：保留 CHUNK_OVERLAP_SECONDS 尾巴进下一块，防截句
-        if not force:
+        # 滑窗重叠：保留 CHUNK_OVERLAP_SECONDS 尾巴进下一块，防截句。
+        # 但重叠块会重复上一句内容，全靠下面"同时间戳同文本"去重挡掉——该去重
+        # 依赖句级时间戳（同一句话在相邻块里落在同一绝对时刻）。云引擎（讯飞 IAT）
+        # 不给句级时间戳，去重必然失手 → 对它直接关掉重叠（实网实测的病根）。
+        if not force and getattr(self.asr, "sentence_timestamps", True):
             tail_size = min(len(pcm), int(config.CHUNK_OVERLAP_SECONDS * 2 * config.ASR_RATE))
             self._pending = [(end_ts - tail_size / 2 / config.ASR_RATE, pcm[-tail_size:])] if tail_size else []
         else:

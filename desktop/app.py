@@ -65,6 +65,12 @@ CONFIG_DEFAULTS = {
     "llm_gguf": "",          # 本地 4B GGUF 路径（LLM 服务启动用；自动探测）
     "use_llm": False,        # 开会时是否叠加 LLM 语义层（需服务在线）
     "audio_source": "both",  # 采集源：both=系统声音+麦克风 / loopback / mic
+    "asr_engine": "local",   # 识别引擎：local=本地 FunASR（含说话人）/ xfyun=讯飞语音听写
+    "xfyun_dir": "",         # 讯飞控制台下载的文件夹（自动认领 .env：听写 / 录音文件转写）
+    "llm_provider": "local", # 模型服务：local=内置 llama.cpp 服务 / custom=自定义 OpenAI 兼容 API
+    "llm_base_url": "",      # custom: 形如 https://api.xxx.com/v1
+    "llm_model": "",         # custom: 模型名
+    "llm_api_key": "",       # custom: API Key（仅存本机配置）
 }
 
 SESSMAP_FILE = CONFIG_DIR / "sessions_map.json"
@@ -123,6 +129,9 @@ class Backend:
         self._current_project = ""
         self._last_log = ""
         self._llm_proc: subprocess.Popen | None = None
+        # 文件转写任务（后台线程 + 进度轮询）
+        self._tf: dict = {"running": False, "done": False, "ok": False,
+                          "file": "", "progress": "", "out": "", "error": ""}
         # 会话→项目 映射（会议库按项目分组；go 结束行 "[done] session=go_x" 时登记）
         self._session_projects: dict[str, str] = {}
         try:
@@ -286,6 +295,24 @@ class Backend:
         save_config(self._cfg)
         return str(path)
 
+    def pick_xfyun_dir(self):
+        """选讯飞文件夹（独立选择器：不污染 last_project）。"""
+        import webview
+
+        if self._window is None:
+            return None
+        try:
+            result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception as exc:  # noqa: BLE001
+            log(f"[ui] 文件夹对话框失败: {exc}")
+            return None
+        if not result:
+            return None
+        path = str(result[0] if isinstance(result, (list, tuple)) else result)
+        self._cfg["xfyun_dir"] = path
+        save_config(self._cfg)
+        return path
+
     def scan_project(self, folder: str) -> dict:
         """只读预览：用引擎 Python 跑 engine_bridge（不写任何文件）。"""
         py = self._cfg.get("engine_python") or ""
@@ -331,15 +358,33 @@ class Backend:
             save_config(self._cfg)
         cmd += ["--device", self._cfg.get("device", "cuda")]
         cmd += ["--source", self._cfg.get("audio_source", "both")]
-        if self._cfg.get("use_llm") and self.llm_status().get("up"):
-            cmd.append("--llm")  # 服务在线才叠加，避免白等
-        flags = _SPAWN_FLAGS  # 无控制台黑窗（用户实测："点开始会议弹出脚本页"）
+        if self._cfg.get("asr_engine") == "xfyun":
+            xdir = (self._cfg.get("xfyun_dir") or "").strip()
+            if not xdir or not Path(xdir).exists():
+                return {"ok": False, "error": "已选讯飞识别，但未配置讯飞文件夹（设置页 → 识别引擎）"}
+            cmd += ["--asr", "xfyun", "--xfyun-cred", xdir]
         env = self._engine_env()
-        # 把本地 LLM 服务指给引擎（否则 go --llm / 语义层永远"不可用"——真机实测坑）
-        st = self.llm_status()
-        env["MEETINGVAR_LLM_BASE_URL"] = f"http://127.0.0.1:{LLM_PORT}/v1"
-        env.setdefault("MEETINGVAR_LLM_API_KEY", "local")
-        env["MEETINGVAR_LLM_MODEL"] = st.get("model") or "local"
+        provider = self._cfg.get("llm_provider") or "local"
+        if provider == "custom":
+            # 自定义 OpenAI 兼容端点：环境变量直接可被引擎的语义层/纪要层使用
+            base = (self._cfg.get("llm_base_url") or "").strip()
+            if base:
+                env["MEETINGVAR_LLM_BASE_URL"] = base.rstrip("/")
+                env["MEETINGVAR_LLM_API_KEY"] = (self._cfg.get("llm_api_key") or "").strip() or "sk-none"
+                env["MEETINGVAR_LLM_MODEL"] = (self._cfg.get("llm_model") or "").strip() or "custom"
+                if self._cfg.get("use_llm"):
+                    cmd.append("--llm")
+            elif self._cfg.get("use_llm"):
+                log("[ui] 已勾选叠加 LLM 但自定义端点未填 base_url——本次未叠加")
+        else:
+            if self._cfg.get("use_llm") and self.llm_status().get("up"):
+                cmd.append("--llm")  # 服务在线才叠加，避免白等
+            # 把本地 LLM 服务指给引擎（否则 go --llm / 语义层永远"不可用"——真机实测坑）
+            st = self.llm_status()
+            env["MEETINGVAR_LLM_BASE_URL"] = f"http://127.0.0.1:{LLM_PORT}/v1"
+            env.setdefault("MEETINGVAR_LLM_API_KEY", "local")
+            env["MEETINGVAR_LLM_MODEL"] = st.get("model") or "local"
+        flags = _SPAWN_FLAGS  # 无控制台黑窗（用户实测："点开始会议弹出脚本页"）
         try:
             self._proc = subprocess.Popen(
                 cmd, cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -526,7 +571,138 @@ class Backend:
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
 
-    # ---- 会议库（按项目分组；ZCode 侧栏同款信息结构） ----
+    # ---- 讯飞识别（设置检测 + 文件转写工具）----
+    def check_xfyun(self) -> dict:
+        """检测讯飞文件夹：认领凭证 + 语音听写静音握手探活（不打印密钥）。"""
+        xdir = (self._cfg.get("xfyun_dir") or "").strip()
+        if not xdir or not Path(xdir).exists():
+            return {"ok": False, "error": "未配置讯飞文件夹（设置页选择讯飞控制台下载目录）"}
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        try:
+            r = subprocess.run(
+                [py, str(BRIDGE_PY), "check_xfyun", xdir],
+                cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=60,
+                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "检测超时（>60s）"}
+        out = (r.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）"}
+        try:
+            return json.loads(out[-1])
+        except ValueError:
+            return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
+
+    def test_llm(self) -> dict:
+        """按当前 provider 测连接：local=本机服务 /v1/models；custom=远程 OpenAI 兼容端点。"""
+        provider = self._cfg.get("llm_provider") or "local"
+        if provider == "local":
+            st = self.llm_status()
+            if st["up"]:
+                return {"ok": True, "provider": "local", "model": st["model"], "note": "本地服务在线"}
+            return {"ok": False, "provider": "local", "error": "本地服务未运行（可点「启动服务」）"}
+        import urllib.error
+        import urllib.request
+
+        base = (self._cfg.get("llm_base_url") or "").strip().rstrip("/")
+        if not base:
+            return {"ok": False, "provider": "custom", "error": "未填写 Base URL"}
+        url = base + "/models"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {(self._cfg.get('llm_api_key') or 'sk-none').strip()}"})
+        try:
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with op.open(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            ids = [m.get("id", "") for m in (data.get("data") or []) if isinstance(m, dict)][:5]
+            return {"ok": True, "provider": "custom", "models": ids, "note": f"连通，{len(ids)} 个模型可见"}
+        except urllib.error.HTTPError as exc:
+            return {"ok": False, "provider": "custom", "error": f"HTTP {exc.code}（鉴权或路径问题）"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "provider": "custom", "error": f"{type(exc).__name__}: {str(exc)[:140]}"}
+
+    def pick_media(self):
+        """选一个媒体文件（视频/音频）用于离线转写。"""
+        import webview
+
+        if self._window is None:
+            return None
+        try:
+            result = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                file_types=("媒体文件 (*.mp4;*.mov;*.mkv;*.avi;*.wav;*.mp3;*.m4a;*.flac;*.aac)", "所有文件 (*.*)"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"[ui] 文件对话框失败: {exc}")
+            return None
+        if not result:
+            return None
+        return str(result[0] if isinstance(result, (list, tuple)) else result)
+
+    def transcribe_media_start(self, path: str) -> dict:
+        """后台起"文件转写"（ffmpeg 抽音 → 讯飞录音文件转写 → 写 <stem>.transcript.txt）。"""
+        if self._tf.get("running"):
+            return {"ok": False, "error": "已有转写任务在跑"}
+        xdir = (self._cfg.get("xfyun_dir") or "").strip()
+        if not xdir or not Path(xdir).exists():
+            return {"ok": False, "error": "未配置讯飞文件夹（设置页 → 识别引擎）"}
+        if not path or not Path(path).exists():
+            return {"ok": False, "error": "文件不存在"}
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        self._tf = {"running": True, "file": path, "progress": "启动…", "done": False,
+                    "ok": False, "out": "", "error": ""}
+        try:
+            proc = subprocess.Popen(
+                [py, str(BRIDGE_PY), "transcribe_file", path, xdir],
+                cwd=self._cfg.get("repo_dir") or None, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                bufsize=1, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+            )
+        except OSError as exc:
+            self._tf.update({"running": False, "done": True, "error": f"启动失败: {exc}"})
+            return {"ok": False, "error": str(exc)}
+        threading.Thread(target=self._tf_reader, args=(proc,), daemon=True).start()
+        log(f"[ui] 文件转写任务启动: {path}")
+        return {"ok": True, "file": Path(path).name}
+
+    def _tf_reader(self, proc: subprocess.Popen) -> None:
+        final: dict | None = None
+        try:
+            for line in proc.stdout or []:
+                line = line.rstrip("\r\n")
+                if line.startswith("[progress] "):
+                    self._tf["progress"] = line[len("[progress] "):]
+                elif line.startswith("{"):
+                    final = line
+        except Exception as exc:  # noqa: BLE001
+            self._tf.update({"error": f"读取输出失败: {exc}"})
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if final:
+            try:
+                data = json.loads(final)
+                self._tf.update({"ok": bool(data.get("ok")), "out": data.get("out", ""),
+                                 "error": data.get("error", "") or "",
+                                 "progress": "完成" if data.get("ok") else "失败"})
+            except ValueError:
+                self._tf.update({"error": "结果解析失败"})
+        elif not self._tf.get("error"):
+            self._tf.update({"error": f"引擎退出（rc={proc.returncode}）且无结果"})
+        self._tf["running"] = False
+        self._tf["done"] = True
+        log(f"[ui] 文件转写结束: ok={self._tf['ok']} out={self._tf['out'] or '-'} err={self._tf['error'] or '-'}")
+        self._push("transcribe_done", **{k: self._tf[k] for k in ("ok", "out", "error", "file")})
+
+    def transcribe_media_status(self) -> dict:
+        return dict(self._tf)
     def list_library(self) -> list[dict]:
         sessions = {s["sid"]: s for s in self.list_sessions()}
         mapping = dict(self._session_projects)

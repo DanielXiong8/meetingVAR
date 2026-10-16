@@ -121,6 +121,14 @@ function handleEvent(ev) {
     else if (ev.last_log) msg += " · 最后一条：" + ev.last_log.slice(0, 110);
     toast(msg, 9000);
     pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
+  } else if (ev.type === "transcribe_done") {
+    if (ev.ok) {
+      toast("文件转写完成：" + (ev.out || "").split("\\").pop(), 9000);
+      pushTicker("", "系统", "文件转写完成 → " + (ev.out || ""), "sys");
+    } else {
+      toast("文件转写失败：" + (ev.error || "未知错误"), 9000);
+      pushTicker("", "系统", "文件转写失败：" + (ev.error || ""), "err");
+    }
   }
 }
 
@@ -347,13 +355,31 @@ async function showSession(sid) {
 }
 
 /* ---------- 设置 + LLM 服务 ---------- */
+const PROVIDER_LABEL = { local: "本地模型", custom: "自定义 API" };
+function applyProviderUi(provider) {
+  $("cfgProvider").value = provider;
+  $("provLocal").hidden = provider !== "local";
+  $("provCustom").hidden = provider !== "custom";
+}
+function applyAsrUi(engine) {
+  $("cfgAsr").value = engine;
+  $("xfyunRow").hidden = engine !== "xfyun";
+  $("xfyunResult").hidden = engine !== "xfyun";
+}
 async function refreshLlm() {
   const st = await pywebview.api.llm_status();
   $("llmStatus").textContent = st.up
     ? `● 运行中（${st.model || "模型已载入"}）`
     : (st.managed ? "○ 启动中…（首次加载约 30-60 秒）" : "○ 未运行");
-  $("llmPill").textContent = st.up ? "LLM ●" : "LLM ○";
-  $("llmPill").classList.toggle("on", !!st.up);
+  const cfg = state.cfg || {};
+  if ((cfg.llm_provider || "local") === "custom") {
+    const ready = !!(cfg.llm_base_url || "").trim();
+    $("llmPill").textContent = ready ? "API ●" : "API ○";
+    $("llmPill").classList.toggle("on", ready);
+  } else {
+    $("llmPill").textContent = st.up ? "LLM ●" : "LLM ○";
+    $("llmPill").classList.toggle("on", !!st.up);
+  }
   return st;
 }
 $("btnLlmStart").onclick = async () => {
@@ -389,6 +415,12 @@ async function loadConfig() {
   $("cfgGguf").value = cfg.llm_gguf || "";
   $("cfgUseLlm").checked = !!cfg.use_llm;
   $("cfgSource").value = cfg.audio_source || "both";
+  $("cfgXfyunDir").value = cfg.xfyun_dir || "";
+  applyAsrUi(cfg.asr_engine || "local");
+  $("cfgBaseUrl").value = cfg.llm_base_url || "";
+  $("cfgModel").value = cfg.llm_model || "";
+  $("cfgApiKey").value = cfg.llm_api_key || "";
+  applyProviderUi(cfg.llm_provider || "local");
   if (cfg.last_project) {
     state.project = cfg.last_project;
     $("homeProject").textContent = cfg.last_project;
@@ -403,9 +435,103 @@ $("btnSaveCfg").onclick = async () => {
     engine_python: $("cfgPy").value.trim(), repo_dir: $("cfgRepo").value.trim(),
     device: $("cfgDevice").value, llm_gguf: $("cfgGguf").value.trim(),
     audio_source: $("cfgSource").value,
+    xfyun_dir: $("cfgXfyunDir").value.trim(),
+    llm_base_url: $("cfgBaseUrl").value.trim(),
+    llm_model: $("cfgModel").value.trim(),
+    llm_api_key: $("cfgApiKey").value.trim(),
   });
   state.cfg = await pywebview.api.get_config();
+  refreshLlm();
   toast("配置已保存");
+};
+
+/* ---------- 识别引擎（本地 / 讯飞） ---------- */
+$("cfgAsr").onchange = async () => {
+  applyAsrUi($("cfgAsr").value);
+  await pywebview.api.set_config({ asr_engine: $("cfgAsr").value });
+  state.cfg = await pywebview.api.get_config();
+  toast($("cfgAsr").value === "xfyun"
+    ? "实时转写将走讯飞语音听写（云端；说话人退化为 spk?）"
+    : "实时转写使用本地 FunASR");
+};
+$("btnXfyunDir").onclick = async () => {
+  const p = await pywebview.api.pick_xfyun_dir();
+  if (p) {
+    $("cfgXfyunDir").value = p;
+    await pywebview.api.set_config({ xfyun_dir: p });
+    state.cfg = await pywebview.api.get_config();
+    $("xfyunResult").textContent = "文件夹已保存，点「检测」验证凭证与网络。";
+  }
+};
+$("btnXfyunCheck").onclick = async () => {
+  const dir = $("cfgXfyunDir").value.trim();
+  await pywebview.api.set_config({ xfyun_dir: dir });
+  state.cfg = await pywebview.api.get_config();
+  $("xfyunResult").textContent = "检测中（联网握手约 1-2 秒）…";
+  const r = await pywebview.api.check_xfyun();
+  if (!r.ok && !r.iat && !r.lfasr) {
+    $("xfyunResult").textContent = "✗ " + (r.error || "未找到可用凭证");
+    return;
+  }
+  const mark = (x) => x ? (x.valid ? (x.ok === false ? "✗ " : "✓ ") : "✗ ") : "—";
+  const parts = [
+    `${mark(r.iat)}语音听写（实时转写）` + (r.iat && r.iat.error ? `：${r.iat.error}` : ""),
+    `${mark(r.lfasr)}录音文件转写（文件转写工具）` + (r.lfasr && r.lfasr.error ? `：${r.lfasr.error}` : ""),
+  ];
+  if (r.notes && r.notes.length) parts.push("提示：" + r.notes.join("；"));
+  $("xfyunResult").textContent = parts.join("　|　");
+};
+
+/* ---------- 模型厂商（本地 / 自定义 API） ---------- */
+$("cfgProvider").onchange = async () => {
+  applyProviderUi($("cfgProvider").value);
+  await pywebview.api.set_config({ llm_provider: $("cfgProvider").value });
+  state.cfg = await pywebview.api.get_config();
+  refreshLlm();
+  toast($("cfgProvider").value === "custom" ? "使用自定义 OpenAI 兼容 API" : "使用本地模型服务");
+};
+$("btnTestLlm").onclick = async () => {
+  await pywebview.api.set_config({
+    llm_base_url: $("cfgBaseUrl").value.trim(),
+    llm_model: $("cfgModel").value.trim(),
+    llm_api_key: $("cfgApiKey").value.trim(),
+  });
+  state.cfg = await pywebview.api.get_config();
+  $("llmTestResult").textContent = "测试中…";
+  const r = await pywebview.api.test_llm();
+  $("llmTestResult").textContent = r.ok
+    ? `✓ ${r.note || "连通"}` + (r.models && r.models.length ? `：${r.models.join(", ")}` : "")
+    : "✗ " + (r.error || "失败");
+  refreshLlm();
+};
+
+/* ---------- 文件转写工具（媒体文件 → 讯飞 → transcript.txt） ---------- */
+let tfTimer = null;
+async function pollTf() {
+  const st = await pywebview.api.transcribe_media_status();
+  const line = $("tfLine");
+  if (st.running) {
+    line.hidden = false;
+    line.textContent = `文件转写中：${(st.file || "").split("\\").pop()} · ${st.progress || "…"}`;
+    return;
+  }
+  if (!st.done) return;
+  clearInterval(tfTimer); tfTimer = null;
+  line.hidden = false;
+  line.textContent = st.ok ? `✓ 转写完成：${st.out}` : `✗ 转写失败：${st.error}`;
+  if (st.ok && st.out) toast("转写稿已生成：" + st.out.split("\\").pop(), 9000);
+}
+$("btnTf").onclick = async () => {
+  if (state.running) { toast("会议进行中，先停止会议再做文件转写（避免抢云端配额）"); return; }
+  const p = await pywebview.api.pick_media();
+  if (!p) return;
+  const r = await pywebview.api.transcribe_media_start(p);
+  if (!r.ok) { toast("无法开始转写：" + (r.error || "")); return; }
+  $("tfLine").hidden = false;
+  $("tfLine").textContent = `文件转写中：${p.split("\\").pop()} · 启动…`;
+  toast("已开始转写（讯飞云端，通常每分钟音频几秒出结果）");
+  if (tfTimer) clearInterval(tfTimer);
+  tfTimer = setInterval(pollTf, 2000);
 };
 $("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };
 $("btnTestEngine").onclick = async () => {

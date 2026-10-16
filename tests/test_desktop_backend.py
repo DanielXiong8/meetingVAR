@@ -134,6 +134,77 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(self.b._cfg["device"], "cpu")
         self.assertNotIn("bogus", self.b._cfg)
 
+    def test_config_defaults_have_asr_and_provider_keys(self) -> None:
+        for k in ("asr_engine", "xfyun_dir", "llm_provider", "llm_base_url", "llm_model", "llm_api_key"):
+            self.assertIn(k, desktop_app.CONFIG_DEFAULTS, f"缺配置默认值 {k}")
+
+    def test_start_meeting_xfyun_requires_dir(self) -> None:
+        self.b._cfg["engine_python"] = sys.executable
+        self.b._cfg["asr_engine"] = "xfyun"
+        self.b._cfg["xfyun_dir"] = ""
+        r = self.b.start_meeting("", mode="record")
+        self.assertFalse(r["ok"])
+        self.assertIn("讯飞文件夹", r["error"])
+
+    def test_start_meeting_xfyun_passes_dir_to_engine(self) -> None:
+        captured: dict = {}
+
+        def fake_popen(cmd, **kw):
+            captured["cmd"] = list(cmd)
+            raise OSError("stop-after-capture")
+
+        self.b._cfg["engine_python"] = sys.executable
+        self.b._cfg["repo_dir"] = str(self.tmp)
+        self.b._cfg["asr_engine"] = "xfyun"
+        self.b._cfg["xfyun_dir"] = str(self.tmp)
+        no_llm = {"up": False, "model": "", "managed": False, "gguf": ""}
+        with mock.patch.object(desktop_app.Backend, "llm_status", return_value=no_llm):
+            with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+                self.b.start_meeting("", mode="record")
+        cmd = captured["cmd"]
+        self.assertIn("--asr", cmd)
+        self.assertEqual(cmd[cmd.index("--asr") + 1], "xfyun")
+        self.assertEqual(cmd[cmd.index("--xfyun-cred") + 1], str(self.tmp))
+        # 未选讯飞引擎时不应带这些参数
+        self.b._cfg["asr_engine"] = "local"
+        with mock.patch.object(desktop_app.Backend, "llm_status", return_value=no_llm):
+            with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+                self.b.start_meeting("", mode="record")
+        self.assertNotIn("--asr", captured["cmd"])
+
+    def test_start_meeting_custom_provider_injects_env(self) -> None:
+        captured: dict = {}
+
+        def fake_popen(cmd, **kw):
+            captured["cmd"] = list(cmd)
+            captured["env"] = dict(kw.get("env") or {})
+            raise OSError("stop-after-capture")
+
+        self.b._cfg.update({
+            "engine_python": sys.executable, "repo_dir": str(self.tmp),
+            "use_llm": True, "llm_provider": "custom",
+            "llm_base_url": "https://api.example.com/v1", "llm_model": "demo-model",
+            "llm_api_key": "sk-test-not-real",
+        })
+        with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+            self.b.start_meeting("", mode="record")
+        self.assertIn("--llm", captured["cmd"], "自定义端点填了 base_url 且勾选叠加时应带 --llm")
+        env = captured["env"]
+        self.assertEqual(env.get("MEETINGVAR_LLM_BASE_URL"), "https://api.example.com/v1")
+        self.assertEqual(env.get("MEETINGVAR_LLM_MODEL"), "demo-model")
+        self.assertEqual(env.get("MEETINGVAR_LLM_API_KEY"), "sk-test-not-real")
+
+    def test_transcribe_media_guards(self) -> None:
+        self.b._cfg["xfyun_dir"] = ""
+        r = self.b.transcribe_media_start(str(self.tmp / "x.mp4"))
+        self.assertFalse(r["ok"])
+        self.b._cfg["xfyun_dir"] = str(self.tmp)
+        self.b._cfg["engine_python"] = sys.executable
+        r2 = self.b.transcribe_media_start(str(self.tmp / "nope.mp4"))
+        self.assertFalse(r2["ok"], "文件不存在必须被拦下")
+        st = self.b.transcribe_media_status()
+        self.assertIn("running", st)
+
 
 if __name__ == "__main__":
     unittest.main()
