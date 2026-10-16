@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -882,8 +883,8 @@ def _smoke_engine(backend: Backend) -> None:
     tmp_project.mkdir(exist_ok=True)
     (tmp_project / "说明.md").write_text("# 冒烟测试项目\n这是一个用于 UI 冒烟测试的临时项目。\n", encoding="utf-8")
 
-    # 冒烟不得污染用户配置里的"当前项目"（临时目录会被清掉，曾出现在界面上）
-    saved_project = backend._cfg.get("last_project", "")
+    # 冒烟不得污染用户配置里的"当前项目"与"项目列表"（临时目录会被清掉，曾出现在界面/会议库）
+    saved_cfg = {k: v for k, v in backend._cfg.items() if k in ("last_project", "projects")}
     r = backend.start_meeting(str(tmp_project), mode="go")
     print("start:", r, flush=True)
     if not r.get("ok"):
@@ -929,9 +930,18 @@ def _smoke_engine(backend: Backend) -> None:
     print("---- engine raw tail ----", flush=True)
     for e in tail:
         print("  |", e.get("text", ""), flush=True)
-    # 恢复用户原本的"当前项目"（冒烟只借用配置，不留痕）
-    backend._cfg["last_project"] = saved_project
+    # 恢复用户原本的"当前项目"与"项目列表"（冒烟只借用配置，不留痕——
+    # 曾漏恢复 projects，临时项目出现在会议库里）
+    for k, v in saved_cfg.items():
+        backend._cfg[k] = v
     save_config(backend._cfg)
+    # 清掉本场冒烟在产物池留下的会话目录（否则会以"空会话"出现在会议库）
+    sids = [e.get("text", "").split("[done] session=", 1)[1].split()[0]
+            for e in all_ev if "[done] session=" in e.get("text", "")]
+    for sid in sids[-1:]:
+        for sub in ("reports", "sessions"):
+            shutil.rmtree(Path(backend._cfg.get("repo_dir") or ".") / "data" / sub / sid,
+                          ignore_errors=True)
     print("SMOKE-DONE", flush=True)
 
 
