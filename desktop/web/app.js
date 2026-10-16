@@ -121,6 +121,9 @@ function handleEvent(ev) {
     else if (ev.last_log) msg += " · 最后一条：" + ev.last_log.slice(0, 110);
     toast(msg, 9000);
     pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
+  } else if (ev.type === "understand_done") {
+    if (ev.ok) toast("全库理解完成——回「项目」页勾选候选词并写入词表", 9000);
+    else toast("全库理解中断：" + (ev.error || ""), 9000);
   } else if (ev.type === "transcribe_done") {
     if (ev.ok) {
       toast("文件转写完成：" + (ev.out || "").split("\\").pop(), 9000);
@@ -259,6 +262,7 @@ function renderTree(nodes, box, depth) {
 }
 async function scanProject(path) {
   state.project = path;
+  resetUnderstand();  // 换项目：清空全库理解卡片（结果属于旧项目）
   $("projPath").textContent = path;
   $("homeProject").textContent = path;
   $("rpProjName").textContent = path;
@@ -537,6 +541,101 @@ $("btnTf").onclick = async () => {
   if (tfTimer) clearInterval(tfTimer);
   tfTimer = setInterval(pollTf, 2000);
 };
+/* ---------- 全库理解（项目页：预算 → 后台跑 → 勾选 → 写词表） ---------- */
+let undTimer = null;
+function resetUnderstand() {
+  if (undTimer) { clearInterval(undTimer); undTimer = null; }
+  $("undPlanLine").textContent = "";
+  $("undProgress").textContent = "";
+  $("undResult").hidden = true;
+  $("undResult").innerHTML = "";
+  $("btnUndGo").disabled = true;
+  $("btnUndSmall").disabled = true;
+  $("btnUndCancel").hidden = true;
+}
+async function undPoll() {
+  const st = await pywebview.api.understand_status();
+  if (st.running) {
+    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重复花算力）`;
+    $("btnUndCancel").hidden = false;
+    return;
+  }
+  $("btnUndCancel").hidden = true;
+  if (!st.done) return;
+  clearInterval(undTimer); undTimer = null;
+  const r = st.result || {};
+  $("undProgress").textContent = st.ok
+    ? `✓ 读毕 ${r.chunks_read}/${r.chunks_total} 块 · 覆盖 ${r.covered_chars}/${r.unique_chars} 字（${r.coverage_pct}%）· 缓存命中 ${r.cache_hits} 块`
+    : `✗ 中断：${st.error || "未知错误"}（已完成块保留，可续跑）`;
+  if (st.ok) renderUnderstandResult(r);
+}
+function renderUnderstandResult(r) {
+  const box = $("undResult");
+  const terms = r.terms || [];
+  const parts = [];
+  if (r.overview) parts.push(`<div class="muted">一句话理解：${esc(r.overview)}</div>`);
+  parts.push(`<div class="row"><b>候选词</b><span class="muted">数字=开会被听到的预期次数（精确子串口径）；勾选后写入项目词表</span>
+    <button class="btn btn-primary" id="btnUndWrite">写入项目词表</button></div>`);
+  parts.push('<div class="chips und-chips">' + terms.map((t, i) =>
+    `<label class="chip und-chip" title="${esc(t.why || "")}"><input type="checkbox" class="und-pick" data-term="${esc(t.term)}" checked> ${esc(t.term)} <span class="muted">x${t.count}</span></label>`
+  ).join("") + "</div>");
+  if ((r.persons || []).length) {
+    parts.push('<div class="muted" style="margin-top:6px">人物：' +
+      r.persons.map((p) => `${esc(p.name)}(x${p.count})`).join("、") + "</div>");
+  }
+  if ((r.events || []).length) {
+    parts.push('<details style="margin-top:6px"><summary class="muted">事件摘录（' +
+      r.events.length + ' 条）</summary>' + r.events.slice(0, 8).map((e) =>
+        `<div class="muted">· ${esc(e.what)}${e.quote ? `（原句：${esc(e.quote)}）` : ""}</div>`).join("") + "</details>");
+  }
+  box.innerHTML = parts.join("");
+  box.hidden = false;
+  $("btnUndWrite").onclick = async () => {
+    const picked = [...document.querySelectorAll(".und-pick:checked")].map((c) => c.dataset.term);
+    if (!picked.length) { toast("没有勾选任何词"); return; }
+    const w = await pywebview.api.terms_write(state.project, picked);
+    if (!w.ok) { toast("写入失败：" + (w.error || "")); return; }
+    toast(`已写入 ${w.count} 词 → 下次「开始会议」自动采用（${(w.out || "").split("\\").pop()}）`, 9000);
+  };
+}
+$("btnUndPlan").onclick = async () => {
+  if (!state.project) { toast("先选项目文件夹"); return; }
+  $("undPlanLine").textContent = "计算中…";
+  const p = await pywebview.api.understand_plan(state.project);
+  if (!p.ok) { $("undPlanLine").textContent = "失败：" + (p.error || ""); return; }
+  $("undProvider").textContent = p.provider === "custom" ? "自定义 API" : "本地模型";
+  $("undEgress").textContent = p.egress || "";
+  const hrs = p.est_local_minutes >= 90 ? `${(p.est_local_minutes / 60).toFixed(1)} 小时` : `${p.est_local_minutes} 分钟`;
+  let line = `全库 ${p.chars} 字 / ${p.chunks.length} 块；本地模型预计 ~${hrs}`;
+  if (p.notes && p.notes.length) line += ` · 说明：${p.notes.join("；")}`;
+  line += "；云端厂商通常快 10~50 倍（费用在厂商侧）";
+  $("undPlanLine").textContent = line;
+  $("btnUndGo").disabled = false;
+  $("btnUndSmall").disabled = false;
+};
+$("btnUndGo").onclick = async () => {
+  if (state.running) { toast("会议进行中——全库理解会抢占模型资源，请先结束会议"); return; }
+  const r = await pywebview.api.understand_start(state.project, 0);
+  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
+  $("undResult").hidden = true;
+  $("undProgress").textContent = "启动中…";
+  if (undTimer) clearInterval(undTimer);
+  undTimer = setInterval(undPoll, 2000);
+};
+$("btnUndSmall").onclick = async () => {
+  if (state.running) { toast("会议进行中——请先结束会议再跑全库理解"); return; }
+  const r = await pywebview.api.understand_start(state.project, 5);
+  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
+  toast("小样试跑：只读前 5 块，用来先看产出质量");
+  $("undResult").hidden = true;
+  if (undTimer) clearInterval(undTimer);
+  undTimer = setInterval(undPoll, 2000);
+};
+$("btnUndCancel").onclick = async () => {
+  const r = await pywebview.api.understand_cancel();
+  toast(r.ok ? "已取消（已完成块保留，可续跑）" : (r.error || "取消失败"));
+};
+
 $("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };
 $("btnTestEngine").onclick = async () => {
   $("testResult").textContent = "测试中…";

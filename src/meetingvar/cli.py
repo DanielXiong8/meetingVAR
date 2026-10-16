@@ -430,12 +430,58 @@ def main() -> None:
     rs.add_argument("--extra", default=None, help="手动词文件（#!keep 永久保留）")
     rs.add_argument("--llm", action="store_true", help="叠加本地/云端小模型语义抽取")
 
+    un = sub.add_parser("understand", help="全库理解：分层读完整个文件夹，产出候选词/人物（不自动写词表）")
+    un.add_argument("folder", help="项目文件夹")
+    un.add_argument("--max", type=int, default=0, help="只读前 N 块（0=全部；小样试跑用）")
+    un.add_argument("--write", action="store_true", help="候选词写入 <folder>/meetingvar/terms.txt（#!keep，下次开会自动采用）")
+    un.add_argument("--json", action="store_true", help="结果以单行 JSON 输出（桥接/UI 调用）")
+
     register_go(sub)
 
     args = ap.parse_args()
     {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
      "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
-     "go": cmd_go, "rescan": cmd_rescan}[args.cmd](args)
+     "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand}[args.cmd](args)
+
+
+def cmd_understand(args) -> None:
+    """全库分层阅读：读完整个文件夹（分块+逐块校验+确定性合并），产出候选词/人物。
+
+    用哪个厂商由 MEETINGVAR_LLM_* 决定（本地模型=零出网；API=块文本出网）——
+    产品里这个选择交给用户在设置页做，本命令与厂商无关。
+    """
+    import json as _json
+
+    from .memory.probe import plan, understand, write_terms
+
+    folder = Path(args.folder)
+    if not folder.is_dir():
+        raise SystemExit(f"[understand] 不是文件夹: {folder}")
+    p = plan(folder)
+    if not args.json:
+        print(f"[understand] 全库 {p['chars']} 字 / {len(p['chunks'])} 块"
+              f"（本地 4B 预估 {p['est_local_minutes']:.0f} 分钟；云端模型快得多，费用按所选厂商）")
+        for n in p["notes"]:
+            print(f"  [note] {n}")
+    prog = (lambda m: print(f"[progress] {m}", flush=True)) if args.json \
+        else (lambda m: print(f"[understand] {m}", flush=True))
+    r = understand(folder, max_chunks=args.max or None, progress=prog)
+    if args.json:
+        print(_json.dumps(r, ensure_ascii=False), flush=True)
+        return
+    print(f"[understand] ok={r['ok']} · 覆盖 {r['covered_chars']}/{r['unique_chars']} 字"
+          f"（{r['coverage_pct']}%）· 缓存命中 {r['cache_hits']} 块")
+    if r.get("error"):
+        print(f"  [error] {r['error']}")
+    if r.get("overview"):
+        print(f"  一句话理解：{r['overview']}")
+    for t in r["terms"][:30]:
+        print(f"  {t['term']}  x{t['count']}（{t['chunks']} 块）")
+    for p_ in r["persons"][:15]:
+        print(f"  人物 {p_['name']}  x{p_['count']}")
+    if args.write and r["terms"]:
+        out = write_terms(folder, [t["term"] for t in r["terms"][:30]])
+        print(f"[understand] 已写入 {min(30, len(r['terms']))} 词（#!keep）→ {out}")
 
 
 def cmd_rescan(args) -> None:

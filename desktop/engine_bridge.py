@@ -299,6 +299,47 @@ def cmd_transcribe_file(media: Path, xfyun_dir: Path, out_path: Path | None) -> 
     }
 
 
+def cmd_understand_plan(folder: Path) -> dict:
+    """零 LLM 预估：字数/块数/本地耗时估算（UI 在开始前展示，用户据此选档）。"""
+    from meetingvar.memory.probe import plan
+
+    p = plan(Path(folder))
+    p["ok"] = bool(p["chunks"])
+    if not p["chunks"]:
+        p["error"] = "没有可读文本文件（.md/.txt/.docx）"
+    return p
+
+
+def cmd_understand(folder: Path, max_chunks: int = 0) -> dict:
+    """全库分层阅读（UI 后台任务）：进度以 [progress] 行前置，最后单行 JSON。
+
+    厂商无关：MEETINGVAR_LLM_* 指向本地模型=零出网；指向自定义 API=块文本出网。
+    """
+    from meetingvar.memory.probe import understand
+
+    def progress(msg: str) -> None:
+        print(f"[progress] {msg}", flush=True)
+
+    r = understand(Path(folder), max_chunks=max_chunks or None, progress=progress)
+    return r
+
+
+def cmd_write_terms(folder: Path, terms_file: Path) -> dict:
+    """把确认词写入 <folder>/meetingvar/terms.txt（逐行 #!keep；go 下次开会自动并入）。"""
+    import json as _json
+
+    from meetingvar.memory.probe import write_terms
+
+    try:
+        terms = _json.loads(Path(terms_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": f"词表 JSON 读取失败: {exc}"}
+    if not isinstance(terms, list) or not terms:
+        return {"ok": False, "error": "词表为空"}
+    out = write_terms(Path(folder), [str(t) for t in terms])
+    return {"ok": True, "out": str(out), "count": len(terms)}
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(json.dumps({"ok": False, "error": "usage: engine_bridge.py preview <folder> | check"}))
@@ -316,6 +357,13 @@ def main() -> None:
             xfyun_dir = Path(sys.argv[3])
             out_path = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
             payload = cmd_transcribe_file(media, xfyun_dir, out_path)
+        elif cmd == "understand_plan":
+            payload = cmd_understand_plan(Path(sys.argv[2]))
+        elif cmd == "understand":
+            payload = cmd_understand(Path(sys.argv[2]),
+                                     int(sys.argv[3]) if len(sys.argv) > 3 else 0)
+        elif cmd == "write_terms":
+            payload = cmd_write_terms(Path(sys.argv[2]), Path(sys.argv[3]))
         else:
             payload = {"ok": False, "error": f"unknown command: {cmd}"}
     except Exception as exc:  # noqa: BLE001

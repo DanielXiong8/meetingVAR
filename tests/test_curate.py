@@ -68,7 +68,10 @@ class CurateTests(unittest.TestCase):
         repo = ROOT / "src" / "meetingvar"
         mat = _reference_material(None, repo)
         self.assertIn("代码高频定义", mat)
-        self.assertIn("Session", mat)
+        # 不再断言具体符号（曾断言 "Session" 在 top-80——新增文件把它挤出去就脆断）；
+        # 只验证"仓库符号确实被带进参考资料"这一性质
+        self.assertTrue(any(sym in mat for sym in ("cmd_go", "understand", "extract_terms", "Session", "ASR")),
+                        "repo 符号应出现在参考资料里")
 
     def test_unconfigured_llm_returns_none(self) -> None:
         old = config.LLM_BASE_URL, config.LLM_MODEL

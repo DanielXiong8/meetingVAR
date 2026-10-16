@@ -17,6 +17,12 @@ from . import config
 from .cli import load_memory_docs, load_terms
 
 
+def load_confirm_terms(project: Path) -> list[str]:
+    """项目确认词（<项目>/meetingvar/terms.txt 里的 #!keep 词；全库理解/人工确认写入）。"""
+    f = Path(project) / "meetingvar" / "terms.txt"
+    return load_terms(f) if f.exists() else []
+
+
 def cmd_go(args) -> None:
     from .report.generate import digest as digest_
 
@@ -44,6 +50,12 @@ def cmd_go(args) -> None:
     for w, s in dterms.items():
         terms.setdefault(w, []).extend(s)
     print(f"[go] L1 jieba: 共 {len(terms)} 词 — 立即可用")
+    # 项目确认词表（全库理解/人工确认写入的 #!keep 词）：优先级最高，永远并入
+    kept = load_confirm_terms(project)
+    for w in kept:
+        terms.setdefault(w, ["确认词"])
+    if kept:
+        print(f"[go] 项目确认词表: {len(kept)} 词（全库理解/人工确认，本次必然生效）")
     wordlist = list(terms)
     if not wordlist:
         print("[go] 警告：项目里没抽到词，本次只有手动 VAR（回车）兜底")

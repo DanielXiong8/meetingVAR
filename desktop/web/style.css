@@ -148,6 +148,11 @@ main { flex: 1 1 auto; min-width: 0; padding: 12px 12px 16px 4px; overflow-y: au
   padding: 3px 10px; font-size: 12.5px;
 }
 .chip b { color: var(--blue); font-weight: 600; }
+/* 全库理解：可勾选的候选词 chip */
+.und-chips { margin-top: 6px; }
+.und-chip { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.und-chip input { margin: 0; accent-color: var(--blue); }
+.und-chip:has(input:checked) { border-color: var(--blue); background: rgba(37, 99, 235, .06); }
 /* ---------- 会议库 ---------- */
 .sessions { display: flex; flex-direction: column; gap: 6px; }
 .sess {

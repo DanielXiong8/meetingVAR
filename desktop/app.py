@@ -133,6 +133,10 @@ class Backend:
         # 文件转写任务（后台线程 + 进度轮询）
         self._tf: dict = {"running": False, "done": False, "ok": False,
                           "file": "", "progress": "", "out": "", "error": ""}
+        # 全库理解任务（后台进程 + [progress] 行 + 断点续跑缓存；可取消）
+        self._und: dict = {"running": False, "done": False, "ok": False, "folder": "",
+                           "progress": "", "result": {}, "error": "", "max_chunks": 0}
+        self._und_proc: subprocess.Popen | None = None
         # 会话→项目 映射（会议库按项目分组；go 结束行 "[done] session=go_x" 时登记）
         self._session_projects: dict[str, str] = {}
         try:
@@ -701,6 +705,136 @@ class Backend:
         self._tf["done"] = True
         log(f"[ui] 文件转写结束: ok={self._tf['ok']} out={self._tf['out'] or '-'} err={self._tf['error'] or '-'}")
         self._push("transcribe_done", **{k: self._tf[k] for k in ("ok", "out", "error", "file")})
+
+    # ---- 全库理解（分层阅读整个文件夹；厂商由设置页决定，本地=零出网）----
+    def understand_plan(self, folder: str) -> dict:
+        """零 LLM 预估：字数/块数/本地耗时 + 当前厂商与出网提示（开始前给用户看）。"""
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        try:
+            r = subprocess.run(
+                [py, str(BRIDGE_PY), "understand_plan", folder],
+                cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=120,
+                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "预估超时（>120s）"}
+        out = (r.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）"}
+        try:
+            data = json.loads(out[-1])
+        except ValueError:
+            return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
+        data["provider"] = self._cfg.get("llm_provider") or "local"
+        data["egress"] = ("块文本将发送到自定义 API（内容出机）"
+                          if data["provider"] == "custom" else "本地模型=零出网")
+        return data
+
+    def understand_start(self, folder: str, max_chunks: int = 0) -> dict:
+        """后台开跑全库理解；进度 [progress] 行；可随时取消（已完成块有缓存，续跑不重复）。"""
+        if self._und.get("running"):
+            return {"ok": False, "error": "已有全库理解任务在跑"}
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        self._und = {"running": True, "done": False, "ok": False, "folder": folder,
+                     "progress": "启动…", "result": {}, "error": "", "max_chunks": max_chunks}
+        cmd = [py, str(BRIDGE_PY), "understand", folder] + ([str(max_chunks)] if max_chunks else [])
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=self._cfg.get("repo_dir") or None, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                bufsize=1, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+            )
+        except OSError as exc:
+            self._und.update({"running": False, "done": True, "error": f"启动失败: {exc}"})
+            return {"ok": False, "error": str(exc)}
+        self._und_proc = proc
+        threading.Thread(target=self._und_reader, args=(proc,), daemon=True).start()
+        log(f"[ui] 全库理解任务启动: {folder} max_chunks={max_chunks or '全量'}")
+        return {"ok": True, "folder": folder}
+
+    def _und_reader(self, proc: subprocess.Popen) -> None:
+        final: str | None = None
+        try:
+            for line in proc.stdout or []:
+                line = line.rstrip("\r\n")
+                if line.startswith("[progress] "):
+                    self._und["progress"] = line[len("[progress] "):]
+                elif line.startswith("{"):
+                    final = line
+        except Exception as exc:  # noqa: BLE001
+            self._und["error"] = f"读取输出失败: {exc}"
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if final:
+            try:
+                data = json.loads(final)
+                self._und.update({"ok": bool(data.get("ok")), "result": data,
+                                  "error": data.get("error") or "",
+                                  "progress": "完成" if data.get("ok") else "中断"})
+            except ValueError:
+                self._und["error"] = "结果解析失败"
+        elif not self._und.get("error"):
+            rc = proc.returncode
+            self._und["error"] = ("已取消（已完成块有缓存，下次续跑不重复）" if rc not in (0, None)
+                                  else "引擎退出但无结果")
+        self._und["running"] = False
+        self._und["done"] = True
+        self._und_proc = None
+        log(f"[ui] 全库理解结束: ok={self._und['ok']} err={self._und['error'] or '-'}")
+        self._push("understand_done", ok=self._und["ok"], error=self._und["error"],
+                   folder=self._und["folder"])
+
+    def understand_status(self) -> dict:
+        return dict(self._und)
+
+    def understand_cancel(self) -> dict:
+        proc = self._und_proc
+        if proc is None or proc.poll() is not None:
+            return {"ok": False, "error": "没有在跑的任务"}
+        try:
+            proc.terminate()
+            return {"ok": True}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def terms_write(self, folder: str, terms: list[str]) -> dict:
+        """把勾选的确认词写入 <folder>/meetingvar/terms.txt（#!keep，下次开会自动采用）。"""
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).exists():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        words = [str(t).strip() for t in (terms or []) if str(t).strip()]
+        if not words:
+            return {"ok": False, "error": "没有勾选任何词"}
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = CONFIG_DIR / "_terms_confirm.json"
+            tmp.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
+            r = subprocess.run(
+                [py, str(BRIDGE_PY), "write_terms", folder, str(tmp)],
+                cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=60,
+                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        out = (r.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）"}
+        try:
+            return json.loads(out[-1])
+        except ValueError:
+            return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
 
     def transcribe_media_status(self) -> dict:
         return dict(self._tf)

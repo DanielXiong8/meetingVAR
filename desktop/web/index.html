@@ -64,6 +64,21 @@
       <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）；文件树在右侧</div>
       <div id="scanTerms" class="scan"></div>
       <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
+
+      <div class="card" id="undCard">
+        <div class="row"><b>全库理解</b>
+          <span class="muted">让模型把整个文件夹分层读完（覆盖率和耗时都能核算），产出候选词 → 勾选确认 → 写入项目词表，开会自动采用</span></div>
+        <div class="muted">当前厂商：<span id="undProvider">—</span> · <span id="undEgress">—</span>（设置页可切换；本地模型不联网）</div>
+        <div class="row">
+          <button id="btnUndPlan" class="btn">① 先算预算（字数 / 块数 / 预计耗时）</button>
+          <button id="btnUndGo" class="btn btn-primary" disabled>② 开始全库理解</button>
+          <button id="btnUndSmall" class="btn" disabled>小样试跑（前 5 块）</button>
+          <button id="btnUndCancel" class="btn" hidden>取消（已完成块保留）</button>
+        </div>
+        <div id="undPlanLine" class="muted"></div>
+        <div id="undProgress" class="muted"></div>
+        <div id="undResult" hidden></div>
+      </div>
     </section>
 
     <!-- 会议库（按项目分组；参照 ZCode 侧栏信息结构：项目 → 场次 → 详情） -->
