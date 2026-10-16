@@ -5,10 +5,12 @@ desktop/app.py 已把 webview 延迟导入——CI 无 pywebview 环境可 impor
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -90,6 +92,40 @@ class BackendTests(unittest.TestCase):
         for key in ("up", "model", "managed", "gguf"):
             self.assertIn(key, st, f"llm_status 必须带 {key} 字段（前端依赖）")
         self.assertIsInstance(st["up"], bool)
+
+    def test_spawns_are_windowless(self) -> None:
+        """GUI 壳启动的控制台子进程必须带 CREATE_NO_WINDOW。
+
+        真机实测（2026-10-16）：缺该旗标时点开始会议/读取/起 LLM 都会弹出黑窗
+        （用户描述"弹出一个脚本页面"），且会议期间一直挂着。
+        """
+        import subprocess as sp
+
+        if os.name != "nt":
+            self.skipTest("CREATE_NO_WINDOW 为 Windows 专属旗标")
+        captured: dict = {}
+
+        def fake_popen(cmd, **kw):
+            captured["flags"] = kw.get("creationflags", 0)
+            raise OSError("stop-after-capture")
+
+        self.b._cfg["engine_python"] = sys.executable  # 存在即可过前置校验
+        self.b._cfg["repo_dir"] = str(self.tmp)
+        # 探测打成确定值，避免依赖本机是否恰好开着 LLM 服务
+        no_llm = {"up": False, "model": "", "managed": False, "gguf": ""}
+        with mock.patch.object(desktop_app.Backend, "llm_status", return_value=no_llm):
+            with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+                r = self.b.start_meeting(str(self.tmp), mode="record")
+            self.assertFalse(r["ok"])
+            self.assertTrue(captured.get("flags", 0) & sp.CREATE_NO_WINDOW, "引擎子进程必须无窗口")
+
+            captured.clear()
+            gguf = self.tmp / "m.gguf"
+            gguf.write_bytes(b"x")
+            self.b._cfg["llm_gguf"] = str(gguf)
+            with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
+                self.b.llm_start()
+            self.assertTrue(captured.get("flags", 0) & sp.CREATE_NO_WINDOW, "LLM 服务子进程必须无窗口")
 
     def test_set_config_type_guard(self) -> None:
         self.b.set_config({"use_llm": True, "projects": ["a", "b"], "device": "cpu", "bogus": "x"})

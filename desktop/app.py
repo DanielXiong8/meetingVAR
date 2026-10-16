@@ -42,6 +42,13 @@ CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "ui_config.json"
 LOG_FILE = CONFIG_DIR / "ui.log"
 
+# 子进程一律无控制台窗口（GUI 壳是 windowed 程序，控制台子进程默认会弹黑窗——
+# 实测用户点开始会议/读取/起 LLM 都会弹"脚本页"，且会议期间一直挂着）。
+# 输出照旧走管道/日志文件，不受影响。
+_SPAWN_FLAGS = 0
+if os.name == "nt":
+    _SPAWN_FLAGS = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+
 ENGINE_PY_CANDIDATES = [
     r"D:\miniconda3\envs\meetingvar\python.exe",
 ]
@@ -289,7 +296,7 @@ class Backend:
             r = subprocess.run(
                 [py, str(BRIDGE_PY), "preview", folder],
                 cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=180, env=self._engine_env(),
+                timeout=180, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "预览超时（>180s）"}
@@ -326,9 +333,7 @@ class Backend:
         cmd += ["--source", self._cfg.get("audio_source", "both")]
         if self._cfg.get("use_llm") and self.llm_status().get("up"):
             cmd.append("--llm")  # 服务在线才叠加，避免白等
-        flags = 0
-        if os.name == "nt":
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        flags = _SPAWN_FLAGS  # 无控制台黑窗（用户实测："点开始会议弹出脚本页"）
         env = self._engine_env()
         # 把本地 LLM 服务指给引擎（否则 go --llm / 语义层永远"不可用"——真机实测坑）
         st = self.llm_status()
@@ -497,12 +502,11 @@ class Backend:
             logf = open(LLM_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115 — 进程存活期持有
         except OSError:
             logf = subprocess.DEVNULL
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         try:
             self._llm_proc = subprocess.Popen(
                 [py, "-m", "llama_cpp.server", "--model", gguf, "--n_ctx", "32768", "--port", str(LLM_PORT)],
                 cwd=self._cfg.get("repo_dir") or None, stdout=logf, stderr=subprocess.STDOUT,
-                env=self._engine_env(), creationflags=flags,
+                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
             )
         except OSError as exc:
             return {"ok": False, "error": f"启动失败: {exc}"}
@@ -588,7 +592,8 @@ class Backend:
         try:
             r = subprocess.run([py, str(BRIDGE_PY), "check"], cwd=repo,
                                capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=90, env=self._engine_env())
+                               errors="replace", timeout=90, env=self._engine_env(),
+                               creationflags=_SPAWN_FLAGS)
             out = (r.stdout or "").strip().splitlines()
             if out:
                 data = json.loads(out[-1])
