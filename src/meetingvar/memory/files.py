@@ -28,7 +28,9 @@ def read_text_safely(path: Path, max_bytes: int = 2_000_000) -> str | None:
     实测教训（2026-10-15 真机）：一个伪装成 .txt 的 zip 文件同时引爆两个 bug——
     ① load_memory_docs 严格 utf-8 读取直接崩溃（引擎退出码 1，界面只见"会议已结束"）；
     ② extract_terms 带 errors=ignore 硬读 → 二进制垃圾混进词表（CQ/Dc/Fk…）。
-    规则：zip 魔数 → 仅 .docx 尝试解析正文；含 NUL → 判二进制；utf-8 严格失败回退 GBK。
+    规则：zip 魔数 → 仅 .docx 尝试解析正文；BOM 标记的 UTF-16 → 按文本解码
+    （实测教训 2026-10-16：轻小说第九卷/轻国版第八卷是 UTF-16，被 NUL 判定误伤成
+    二进制，两整卷对全部下游不可见）；含 NUL → 判二进制；utf-8 严格失败回退 GBK。
     """
     try:
         data = path.read_bytes()[:max_bytes]
@@ -38,9 +40,21 @@ def read_text_safely(path: Path, max_bytes: int = 2_000_000) -> str | None:
         return None
     if data[:4] in _ZIP_MAGICS:
         return _read_docx(path) if path.suffix.lower() == ".docx" else None
+    for bom, enc in ((b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            body = data[2:]
+            if len(body) % 2:  # max_bytes 截断可能切在字符中间：去掉尾半个码元
+                body = body[:-1]
+            probe = body[:4096]
+            probe = probe[: len(probe) - len(probe) % 2]
+            try:
+                probe.decode(enc)  # 头 4K 严格校验：真二进制不会通过
+            except UnicodeDecodeError:
+                return None
+            return body.decode(enc, "replace")
     if b"\x00" in data[:4096]:
         return None
-    for enc in ("utf-8", "gbk"):
+    for enc in ("utf-8-sig", "gbk"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:

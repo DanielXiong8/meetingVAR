@@ -82,6 +82,30 @@ class SafeReadTests(unittest.TestCase):
         docs = load_memory_docs(self.tmp)  # 修复前这里抛 UnicodeDecodeError
         self.assertEqual(len(docs), 1)
 
+    def test_utf16_le_with_bom_decoded(self) -> None:
+        """实测教训（2026-10-16）：轻小说第九卷是 UTF-16LE（带 BOM），曾被 NUL 规则
+        误判成二进制——整卷对词表/选词人/索引全部不可见。"""
+        import codecs
+
+        p = self.tmp / "v9.txt"
+        p.write_bytes(codecs.BOM_UTF16_LE + "第九卷 正文内容".encode("utf-16-le"))
+        text = read_text_safely(p)
+        self.assertIsNotNone(text)
+        self.assertIn("第九卷 正文内容", text)
+
+    def test_utf16_be_with_bom_decoded(self) -> None:
+        import codecs
+
+        p = self.tmp / "be.txt"
+        p.write_bytes(codecs.BOM_UTF16_BE + "大端也要能读".encode("utf-16-be"))
+        self.assertIn("大端也要能读", read_text_safely(p) or "")
+
+    def test_binary_with_fake_utf16_bom_still_rejected(self) -> None:
+        """FFFE 打头的真二进制必须仍被拦下（头 4K 严格解码校验）。"""
+        p = self.tmp / "fake.txt"
+        p.write_bytes(b"\xff\xfe" + b"\x00\xd8\x41\x00" * 300)  # 孤立高代理=非法 UTF-16
+        self.assertIsNone(read_text_safely(p))
+
 
 if __name__ == "__main__":
     unittest.main()
