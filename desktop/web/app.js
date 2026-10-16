@@ -200,6 +200,10 @@ $("btnRec").onclick = async () => {
   if (!state.project) { toast("还没有选项目——先去「项目」页选一个文件夹"); switchPage("project"); return; }
   const r = await pywebview.api.start_meeting(state.project, "go");
   if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
+  const cfg0 = state.cfg || {};
+  if (cfg0.use_llm && (cfg0.llm_provider || "local") === "custom" && !(cfg0.llm_base_url || "").trim()) {
+    toast("提示：勾选了 LLM 语义层，但自定义厂商未填 Base URL——本次不会叠加 LLM", 9000);
+  }
   state.hits = 0; state.speakers.clear(); state.ticker = [];
   state.gotLines = false; state.silenceHinted = false;
   $("ticker").innerHTML = ""; $("statHits").textContent = "命中 0";
