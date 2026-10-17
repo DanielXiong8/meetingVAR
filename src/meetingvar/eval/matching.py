@@ -101,8 +101,6 @@ def evaluate(session_pool_dir: Path, labels_file: Path, merge_gap: float = 90.0,
 
     约定：P/R/F1 的分母为 0 时取 0.0（不抛除零，不虚报 1.0）。
     """
-    if meeting_hours is not None and meeting_hours <= 0:
-        raise ValueError(f"meeting_hours 必须 > 0（误触发率分母），当前 {meeting_hours}")
     raw_labels = json.loads(labels_file.read_text(encoding="utf-8"))
     gold = []
     for i, e in enumerate(raw_labels):
@@ -112,6 +110,23 @@ def evaluate(session_pool_dir: Path, labels_file: Path, merge_gap: float = 90.0,
         _validate_interval(iv, f"真值第 {i} 条")
         gold.append(iv)
     raw_preds = load_predictions(session_pool_dir)
+    return evaluate_preds(gold, raw_preds, meeting_hours=meeting_hours, merge_gap=merge_gap, tol=tol)
+
+
+def f2_score(precision: float, recall: float, beta: float = 2.0) -> float:
+    """F_beta（默认 F2：召回权重是精确率的 4 倍——产品更怕漏报）。分母为 0 → 0.0。"""
+    if precision <= 0 or recall <= 0:
+        return 0.0
+    b2 = beta * beta
+    return (1 + b2) * precision * recall / (b2 * precision + recall)
+
+
+def evaluate_preds(gold: list[tuple[float, float]], raw_preds: list[tuple[float, float]],
+                   meeting_hours: float | None = None, merge_gap: float = 90.0,
+                   tol: float = 45.0) -> dict:
+    """通用评估入口（离线裁判 B0/B3 与片段池共用）：raw_preds=原始命中区间，内部先合并再匹配。"""
+    if meeting_hours is not None and meeting_hours <= 0:
+        raise ValueError(f"meeting_hours 必须 > 0（误触发率分母），当前 {meeting_hours}")
     preds = merge_predictions(raw_preds, merge_gap)
     tp, fp, fn, details = match(gold, preds, tol)
     p = tp / (tp + fp) if tp + fp else 0.0
@@ -121,6 +136,7 @@ def evaluate(session_pool_dir: Path, labels_file: Path, merge_gap: float = 90.0,
         "gold_events": len(gold), "raw_hits": len(raw_preds), "merged_events": len(preds),
         "TP": tp, "FP": fp, "FN": fn,
         "precision": round(p, 3), "recall": round(r, 3), "f1": round(f1, 3),
+        "f2": round(f2_score(p, r), 3),
         "details": details,
     }
     if meeting_hours is not None and meeting_hours > 0:

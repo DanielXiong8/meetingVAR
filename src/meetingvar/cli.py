@@ -436,12 +436,26 @@ def main() -> None:
     un.add_argument("--write", action="store_true", help="候选词写入 <folder>/meetingvar/terms.txt（#!keep，下次开会自动采用）")
     un.add_argument("--json", action="store_true", help="结果以单行 JSON 输出（桥接/UI 调用）")
 
+    bn = sub.add_parser("bench", help="离线事件评测：B0 热词基线 / B3 关注点+滑窗裁判（不碰真实保存链路）")
+    bn.add_argument("--transcript", required=True, help="转写 txt（[HH:MM:SS] 说话人: 文本；须与标注同一份）")
+    bn.add_argument("--labels", default=None, help="标注 JSON（benchmark_v0 的 events 或 [start,end] 列表）")
+    bn.add_argument("--variant", choices=["b0", "b3"], default="b0")
+    bn.add_argument("--terms", default=None, help="b0 用词表文件")
+    bn.add_argument("--focus", default=None, help="b3 用关注清单（focus_list_v0.json）")
+    bn.add_argument("--window", type=float, default=120.0)
+    bn.add_argument("--stride", type=float, default=30.0)
+    bn.add_argument("--chunk", type=float, default=8.0, help="b0 判定块长（秒）")
+    bn.add_argument("--merge-gap", type=float, default=30.0, help="事件级合并间隔（秒）")
+    bn.add_argument("--tol", type=float, default=45.0, help="匹配容差（秒）")
+    bn.add_argument("--hours", type=float, default=0.0, help="会议时长；0=从转写推断")
+    bn.add_argument("--out", default=None, help="结果 JSON 输出路径")
+
     register_go(sub)
 
     args = ap.parse_args()
     {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
      "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
-     "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand}[args.cmd](args)
+     "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench}[args.cmd](args)
 
 
 def cmd_understand(args) -> None:
@@ -482,6 +496,73 @@ def cmd_understand(args) -> None:
     if args.write and r["terms"]:
         out = write_terms(folder, [t["term"] for t in r["terms"][:30]])
         print(f"[understand] 已写入 {min(30, len(r['terms']))} 词（#!keep）→ {out}")
+
+
+def cmd_bench(args) -> None:
+    """离线事件级评测：B0=现役热词基线 / B3=关注点+滑窗 LLM 裁判（不碰真实保存链路）。
+
+    转写格式：[HH:MM:SS] 说话人: 文本（同一份转写必须同时用于标注与评测，否则 turn_id 对不上）。
+    指标口径见 eval/matching.py：P/R/F1/**F2**（主看召回）/每小时误触发；标注支持
+    benchmark_v0 的 {"events":[{start_time,end_time,...}]} 或 [{"start","end"}]。
+    """
+    import json as _json
+
+    from .eval.judge import judge_transcript, load_focus, load_labels, merge_hits, parse_transcript
+    from .eval.matching import evaluate_preds, merge_predictions
+
+    turns = parse_transcript(Path(args.transcript))
+    if not turns:
+        raise SystemExit("[bench] 转写为空或格式不匹配（需要 [HH:MM:SS] 说话人: 文本）")
+    duration = turns[-1]["t1"]
+    hours = args.hours or duration / 3600.0
+    detail: dict = {}
+    if args.variant == "b0":
+        from .monitor.hotwords import HotwordMonitor
+
+        terms = load_terms(Path(args.terms)) if args.terms else []
+        if not terms:
+            raise SystemExit("[bench] b0 需要 --terms 词表文件")
+        mon = HotwordMonitor(terms)
+        chunk = max(2.0, float(args.chunk))
+        preds: list[tuple[float, float]] = []
+        t = 0.0
+        while t < duration:
+            sel = [x for x in turns if t <= x["t0"] < t + chunk]
+            text = " ".join(x["text"] for x in sel)
+            if text.strip() and mon.check(text, now=t + chunk):
+                preds.append((t, t + chunk))
+            t += chunk
+        detail = {"variant": "b0", "terms": len(terms), "raw_hits": len(preds)}
+    else:
+        focus = load_focus(Path(args.focus)) if args.focus else []
+        hits = judge_transcript(turns, window=float(args.window), stride=float(args.stride),
+                                focus=focus, progress=lambda m: print(f"[progress] {m}", flush=True))
+        merged_hits = merge_hits(hits, gap=float(args.merge_gap))
+        preds = [(h["start"], h["end"]) for h in merged_hits]
+        detail = {
+            "variant": "b3", "windows": sum(1 for _ in hits),
+            "hit_windows": sum(1 for h in hits if h["hit"]),
+            "merged_events": len(merged_hits),
+            "events": [{k: h.get(k) for k in ("start", "end", "event_type", "event_status",
+                                              "focus_id", "evidence_turn_ids", "evidence_quote",
+                                              "reason", "confidence", "owner", "deadline")}
+                       for h in merged_hits],
+        }
+    shown = merge_predictions(preds, float(args.merge_gap)) if args.variant == "b0" else preds
+    result = {"transcript": str(args.transcript), "turns": len(turns),
+              "duration_s": round(duration, 1), "hours": round(hours, 3), **detail,
+              "predictions": [[round(a, 1), round(b, 1)] for a, b in shown]}
+    if args.labels:
+        gold = load_labels(Path(args.labels))
+        result["metrics"] = evaluate_preds([(g["start"], g["end"]) for g in gold], preds,
+                                           meeting_hours=hours, merge_gap=float(args.merge_gap),
+                                           tol=float(args.tol))
+        result["gold_events"] = len(gold)
+    out = _json.dumps(result, ensure_ascii=False, indent=1)
+    print(out, flush=True)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(out, encoding="utf-8")
 
 
 def cmd_rescan(args) -> None:
