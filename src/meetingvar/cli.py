@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import threading
 import time
 from pathlib import Path
@@ -262,6 +263,28 @@ def cmd_devices(args) -> None:
 
 
 def cmd_terms(args) -> None:
+    # 选词人模式（2026-10-12 C 路线定案）：--curate 时 LLM 直接产出 10~20 个核心关键词，
+    # L0/L1 降级为参考资料，不再产出千级词表。
+    if getattr(args, "curate", False):
+        from .memory.curate import curate_terms
+        from .memory.extract import write_terms_file
+
+        r = curate_terms(Path(args.memory) if args.memory else None,
+                         Path(args.repo) if args.repo else None)
+        if r is None:
+            raise SystemExit("[terms] 选词人模式失败：LLM 未配置（MEETINGVAR_LLM_*）或解析失败")
+        out_p = Path(args.out)
+        write_terms_file({k["term"]: ["选词人"] for k in r["keywords"]}, out_p)
+        report = out_p.parent / f"{out_p.stem}.curate.json"
+        report.write_text(json.dumps(r, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[terms] 选词人模式：{len(r['keywords'])} 个核心关键词（上限 {20}）-> {out_p}")
+        for k in r["keywords"]:
+            print(f"  {k['term']}  — {k['why']}")
+        for p in r["persons"]:
+            print(f"  人物: {p['name']} — {p.get('role', '?')}（{p.get('why', '')}）")
+        print(f"[terms] 选词报告 -> {report}（termset_id={r['termset_id']}）")
+        return
+
     from .memory.extract import extract_terms, llm_extract, write_terms_file
 
     extra = load_terms(Path(args.extra)) if args.extra else []
@@ -373,6 +396,7 @@ def main() -> None:
     tm.add_argument("--llm", action="store_true", help="文档语义层：本地小模型抽人名/角色/焦点（需 MEETINGVAR_LLM_*）")
     tm.add_argument("--repo", default=None, help="代码仓库路径（L0 工具层：符号抽取，零 LLM）")
     tm.add_argument("--govern", action="store_true", help="治理：监听表/纠错表分离（词形+常用词守卫），另写 <out>.correction.txt 与 <out>.govern.json")
+    tm.add_argument("--curate", action="store_true", help="选词人模式（推荐）：LLM 直接产出 10~20 个核心关键词（带理由），L0/L1 仅作参考资料")
     tm.add_argument("--api", action="store_true", help="仓库语义层：API 大模型只读关键文件候选摘要（需 MEETINGVAR_LLM_* 指向 API）")
 
     rs = sub.add_parser("rescan", help="把项目内全部归档纪要+文档重扫一遍，更新该项目热词库")

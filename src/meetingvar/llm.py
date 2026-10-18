@@ -39,8 +39,16 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.LLM_API_KEY}"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
+        # 本机 LLM 服务绝不走系统代理（SETUP 坑：HTTP_PROXY 劫持全部请求，
+        # 代理进程不在时连 127.0.0.1 的 llama.cpp 都会被拒绝）
+        host = config.LLM_BASE_URL.split("//")[-1].split(":")[0].lower()
+        if host in {"127.0.0.1", "localhost", "::1"}:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            resp = opener.open(req, timeout=timeout)
+        else:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        with resp as r:
+            data = json.loads(r.read())
         choice = data["choices"][0]
         if not isinstance(choice, dict):
             return None
