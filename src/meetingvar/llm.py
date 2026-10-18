@@ -212,21 +212,12 @@ def _final_text(content) -> str | None:
     return re.sub(r"<think>.*?(?:</think>|$)", "", content, flags=re.S | re.I).strip()
 
 
-def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900) -> dict:
-    """Generate once, returning safe diagnostics instead of printing failures."""
-    try:
-        profile = client_profile()
-        budget = token_budget()
-    except ClientConfigError as exc:
-        return error_result(exc.error_code)
-    if not isinstance(prompt, str):
-        return error_result("invalid_config")
-    if not budget.fits(prompt):
-        return error_result("context_budget")
+def _request_once(prompt: str, *, temperature: float, timeout: int,
+                  profile: dict, max_tokens: int, thinking: str) -> dict:
     body = {"model": profile["model"], "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature, "max_tokens": profile["max_output_tokens"]}
-    if profile["thinking"]:
-        body["thinking"] = {"type": profile["thinking"]}
+            "temperature": temperature, "max_tokens": max_tokens}
+    if thinking:
+        body["thinking"] = {"type": thinking}
     try:
         req = urllib.request.Request(
             profile["endpoint"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),
@@ -274,6 +265,55 @@ def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900) -> di
         return error_result("empty_content", finish_reason=finish, usage=usage)
     return {"ok": True, "content": content, "error_code": None, "error": None,
             "retryable": False, "finish_reason": finish, "usage": usage}
+
+
+def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
+                max_tokens: int | None = None, thinking: str | None = None) -> dict:
+    """Generate once, with one safe retry when a reasoning model exhausts the budget.
+
+    Some OpenAI-compatible reasoning models count hidden reasoning tokens against
+    max_tokens and return no final content when finish_reason=length. If such a
+    response exposes reasoning_tokens, retry once with thinking disabled and a
+    larger output allowance. Providers that reject the extension keep the
+    original, truthful truncated result.
+    """
+    try:
+        profile = client_profile()
+        context = _positive_int(profile["context_tokens"])
+        effective_max = profile["max_output_tokens"] if max_tokens is None else _positive_int(max_tokens)
+        effective_thinking = profile["thinking"] if thinking is None else str(thinking).strip().lower()
+        if effective_thinking not in {"", "enabled", "disabled"}:
+            raise ClientConfigError()
+        budget = TokenBudget(context, effective_max)
+        if budget.input_limit <= budget.chat_overhead_tokens:
+            raise ClientConfigError()
+    except ClientConfigError as exc:
+        return error_result(exc.error_code)
+    if not isinstance(prompt, str):
+        return error_result("invalid_config")
+    if not budget.fits(prompt):
+        return error_result("context_budget")
+    result = _request_once(prompt, temperature=temperature, timeout=timeout,
+                           profile=profile, max_tokens=effective_max, thinking=effective_thinking)
+    reasoning = (result.get("usage") or {}).get("completion_tokens_details", {}).get("reasoning_tokens", 0)
+    if result.get("error_code") != "truncated" or effective_thinking == "disabled" or not isinstance(reasoning, int) or reasoning <= 0:
+        return result
+    retry_max = min(max(effective_max, 8192), context // 2)
+    retry_budget = TokenBudget(context, retry_max)
+    if retry_max <= effective_max or not retry_budget.fits(prompt):
+        return result
+    retried = _request_once(prompt, temperature=temperature, timeout=timeout,
+                            profile=profile, max_tokens=retry_max, thinking="disabled")
+    if retried.get("ok"):
+        retried["retried_without_thinking"] = True
+        retried["original_usage"] = result.get("usage") or {}
+        return retried
+    # Do not hide the original truncation if the provider does not support
+    # disabling thinking; the retry failure is diagnostic-only.
+    if retried.get("error_code") not in {"truncated", "http_error", "invalid_config"}:
+        result = dict(result)
+        result["thinking_retry_error"] = retried.get("error_code")
+    return result
 
 
 def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | None:

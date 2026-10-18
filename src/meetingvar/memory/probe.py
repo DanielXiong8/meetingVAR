@@ -20,7 +20,7 @@ MIN_CHUNK_CHARS = 4000
 TERM_LIMIT = 60
 LOCAL_TOKENS_PER_SEC = 73.0  # Historical CPU estimate, not a current benchmark.
 CACHE_VERSION = 2
-PROMPT_VERSION = "reading-v2"
+PROMPT_VERSION = "reading-v3"
 _BUDGET_WARNING = "输入按 UTF-8 字节保守上界估算，含消息开销和安全余量；不是精确 tokenizer 计数，耗时仅供参考。"
 
 _HEADING_RE = re.compile(
@@ -103,6 +103,8 @@ _MAP_SYS = """你是严谨的文本分析员。下面是某个项目（可能是
  "keywords":[{"term":"原文中出现的词","why":"为什么它对这个项目重要（这一块里的依据）"}],
  "events":[{"what":"这一块里发生了什么关键事","quote":"原文短引（≤30字）"}]}
 硬规则：人名/词必须在这块原文里逐字出现（系统会校验，编造会被丢弃）；没有就输出 []。
+为控制输出长度，persons 最多 8 项、keywords 最多 12 项、events 最多 6 项；只保留最重要的，按重要性排序，不重复。
+不要输出推理过程、解释、代码围栏或额外字段。
 
 【块：<<DOC>> 第 <<OFF>> 字起 · <<LABEL>>】
 <<TEXT>>

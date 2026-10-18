@@ -68,6 +68,26 @@ class LlmClientTests(unittest.TestCase):
         self.assertEqual(body["thinking"], {"type": "disabled"})
         self.assertEqual(body["max_tokens"], 4096)
 
+    def test_reasoning_truncation_retries_once_without_thinking(self):
+        class Response:
+            def __init__(self, payload): self.payload = payload
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return json.dumps(self.payload).encode()
+        first = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                 "usage": {"completion_tokens": 2048,
+                           "completion_tokens_details": {"reasoning_tokens": 1500}}}
+        second = {"choices": [{"message": {"content": '{"ok":true}'}, "finish_reason": "stop"}],
+                  "usage": {"completion_tokens": 20}}
+        self.urlopen.side_effect = [Response(first), Response(second)]
+        result = chat_result("synthetic input", max_tokens=2048)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["retried_without_thinking"])
+        self.assertEqual(self.urlopen.call_count, 2)
+        retry = json.loads(self.urlopen.call_args_list[1].args[0].data)
+        self.assertEqual(retry["thinking"], {"type": "disabled"})
+        self.assertEqual(retry["max_tokens"], 8192)
+
     def test_invalid_budget_and_thinking_never_make_requests(self):
         for key, values in (("LLM_MAX_TOKENS", ("", "NaN", "0", "-1", True)),
                             ("LLM_CONTEXT_TOKENS", ("", "bad", "0", "-1")),

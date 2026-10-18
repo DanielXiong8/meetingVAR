@@ -42,7 +42,7 @@ class ServiceTests(unittest.TestCase):
         interest = self.backend._llm_env(provider="custom", purpose="interest")
         for key in ["MEETINGVAR_LLM_BASE_URL", "MEETINGVAR_LLM_MODEL", "MEETINGVAR_LLM_API_KEY"]:
             self.assertEqual(reading[key], interest[key])
-        self.assertEqual(reading["MEETINGVAR_LLM_MAX_TOKENS"], "4096")
+        self.assertEqual(reading["MEETINGVAR_LLM_MAX_TOKENS"], "8192")
         self.assertEqual(interest["MEETINGVAR_LLM_MAX_TOKENS"], "1600")
         self.assertEqual(reading["MEETINGVAR_LLM_CONTEXT_TOKENS"], "32768")
 

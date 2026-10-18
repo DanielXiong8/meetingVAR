@@ -69,7 +69,7 @@ CONFIG_DEFAULTS = {
     "llm_context_tokens": 16384,
     "llm_gpu_layers": -1,
     "llm_device": "",
-    "llm_reading_max_tokens": 4096,
+    "llm_reading_max_tokens": 8192,
     "llm_api_context_tokens": 32768,
     "llm_thinking": "",
     "use_llm": False,        # 旧版配置兼容，实时兴趣由 interest_mode 控制
@@ -318,7 +318,7 @@ class Backend:
             raise ValueError("未知模型厂商")
         try:
             context = int(context)
-            output = 1600 if purpose == "interest" else int(self._cfg.get("llm_reading_max_tokens", 4096))
+            output = 1600 if purpose == "interest" else int(self._cfg.get("llm_reading_max_tokens", 8192))
         except (TypeError, ValueError):
             raise ValueError("模型上下文或输出预算须为整数") from None
         if context < 4096 or context > 1048576 or output < 128:
