@@ -20,7 +20,7 @@ PUNC_KEYWORD = "punc_ct-transformer"
 # ---- 音频 ----
 ASR_RATE = 16000          # ASR 统一 16k 单声道
 CHUNK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_CHUNK", "8"))   # 增量转写块长（流式化：8s 步长）
-CHUNK_OVERLAP_SECONDS = 3   # 块间重叠，避免句子被截断
+CHUNK_OVERLAP_SECONDS = float(os.environ.get("MEETINGVAR_OVERLAP", "3"))
 RING_SECONDS = 600        # 音频环形缓冲保留时长（≈10min，1s/格）
                           # 不变量：RING_SECONDS ≥ LOOKBACK_SECONDS（否则回溯被静默截短）
 
@@ -29,8 +29,11 @@ RING_SECONDS = 600        # 音频环形缓冲保留时长（≈10min，1s/格�
 MIN_TEXT_CHARS = int(__import__("os").environ.get("MEETINGVAR_MIN_TEXT_CHARS", "2"))
 
 # ---- 录屏 ----
-SCREEN_FPS = 2.0
-SCREEN_BUFFER_FRAMES = 240  # 2fps × 120s 回溯
+SCREEN_FPS = float(os.environ.get("MEETINGVAR_SCREEN_FPS", "5"))
+SCREEN_MAX_WIDTH = int(os.environ.get("MEETINGVAR_SCREEN_WIDTH", "1600"))
+SCREEN_JPEG_QUALITY = int(os.environ.get("MEETINGVAR_SCREEN_QUALITY", "75"))
+SCREEN_MAX_BYTES = int(float(os.environ.get("MEETINGVAR_SCREEN_MB", "128")) * 1024**2)
+SCREEN_BUFFER_FRAMES = None  # 默认按时间和字节预算淘汰，静态画面只保留一份
 
 # ---- 高清补录（命中后 30fps 段）资源约束 ----
 # 帧先双线性缩到 HD_WIDTH 宽再落盘：临时空间与合成耗时降 ~4 倍（1440p→1280 宽）

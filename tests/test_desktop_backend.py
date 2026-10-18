@@ -28,6 +28,7 @@ class BackendTests(unittest.TestCase):
         desktop_app.SESSMAP_FILE = self.tmp / "sessions_map.json"
         desktop_app.LLM_LOG_FILE = self.tmp / "llm.log"
         self.b = desktop_app.Backend()
+        self.b._cfg.update(interest_mode="manual", asr_engine="local")
 
     def _events(self, kind: str | None = None):
         return [e for e in self.b.poll_events(0)["events"] if kind is None or e["type"] == kind]
@@ -170,7 +171,8 @@ class BackendTests(unittest.TestCase):
         with mock.patch.object(desktop_app.Backend, "llm_status", return_value=no_llm):
             with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
                 self.b.start_meeting("", mode="record")
-        self.assertNotIn("--asr", captured["cmd"])
+        self.assertEqual(captured["cmd"][captured["cmd"].index("--asr") + 1], "local")
+        self.assertNotIn("--xfyun-cred", captured["cmd"])
 
     def test_start_meeting_custom_provider_injects_env(self) -> None:
         captured: dict = {}
@@ -182,13 +184,15 @@ class BackendTests(unittest.TestCase):
 
         self.b._cfg.update({
             "engine_python": sys.executable, "repo_dir": str(self.tmp),
-            "use_llm": True, "llm_provider": "custom",
+            "interest_mode": "api", "llm_provider": "custom",
             "llm_base_url": "https://api.example.com/v1", "llm_model": "demo-model",
             "llm_api_key": "sk-test-not-real",
         })
         with mock.patch.object(desktop_app.subprocess, "Popen", fake_popen):
             self.b.start_meeting("", mode="record")
-        self.assertIn("--llm", captured["cmd"], "自定义端点填了 base_url 且勾选叠加时应带 --llm")
+        self.assertEqual(captured["cmd"][captured["cmd"].index("--interest") + 1], "api")
+        self.assertIn("--no-ask-speakers", captured["cmd"])
+        self.assertNotIn("--llm", captured["cmd"])
         env = captured["env"]
         self.assertEqual(env.get("MEETINGVAR_LLM_BASE_URL"), "https://api.example.com/v1")
         self.assertEqual(env.get("MEETINGVAR_LLM_MODEL"), "demo-model")

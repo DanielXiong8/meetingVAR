@@ -15,6 +15,7 @@ from collections import deque
 from pathlib import Path
 
 from . import config
+from .events import emit
 from .monitor.hotwords import HotwordMonitor, InterestScorer, ManualVAR
 from .pool.store import Pool
 from .transcribe.asr import ASR
@@ -39,6 +40,7 @@ class Session:
         speaker_book=None,
         asr_engine: str = "local",
         xfyun_cred: str | None = None,
+        auto_triggers: bool = True,
     ):
         self.session_id = session_id
         self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
@@ -46,7 +48,13 @@ class Session:
         # 用户给的就是要纠错的词；漏斗自动词必须经 govern 治理后单独传入。
         self.correction_terms = correction_terms if correction_terms is not None else list(terms)
         self.pool = Pool(session_id)
-        if asr_engine == "xfyun":
+        self.auto_triggers = auto_triggers
+        self.streaming = asr_engine == "xfyun_rtasr"
+        self._final_ids: set[str] = set()
+        self.interest_turns: list[dict] = []
+        if self.streaming:
+            self.asr = None
+        elif asr_engine == "xfyun":
             # 云端识别：一句话一条 DB，无说话人声纹（with_embeddings=False），
             # 聚类降级为"整场 spk?"——UI 侧已就该限制提示用户。
             from .transcribe.xfyun_iat import XfyunASR
@@ -56,7 +64,7 @@ class Session:
         else:
             self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
-        self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
+        self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs and auto_triggers else None
         self.manual = ManualVAR()
         # 会话级说话人聚类：跨块维持声纹质心 → 全场稳定的 spk0/spk1/…
         self.speaker_cluster = OnlineSpeakerCluster(threshold=config.SPEAKER_SIM_THRESHOLD)
@@ -110,8 +118,10 @@ class Session:
         cutoff = start_ts + step - config.RING_SECONDS
         while self._ring and self._ring[0][0] + len(self._ring[0][1]) / _PCM_BYTES_PER_SECOND <= cutoff:
             self._ring.popleft()
-        self._pending.append((start_ts, pcm))
         self._last_flush_ts = start_ts + step
+        if self.streaming:
+            return
+        self._pending.append((start_ts, pcm))
         span = self._last_flush_ts - self._pending[0][0]
         if span >= config.CHUNK_SECONDS:
             self._flush()
@@ -163,9 +173,28 @@ class Session:
         else:
             self._pending = []
 
-        segs = self.asr.transcribe_pcm16k(pcm)
+        asr_started = time.monotonic()
+        if self.echo:
+            emit("asr_state", processing=True, seconds=round(span, 2))
+        try:
+            segs = self.asr.transcribe_pcm16k(pcm)
+        except Exception:
+            if self.echo:
+                emit("asr_state", processing=False, error="语音识别失败，请检查引擎日志")
+            raise
+        if self.echo:
+            emit("asr_state", processing=False, latency=round(time.monotonic() - asr_started, 2),
+                 lag=max(0, round(time.time() - end_ts, 2)))
+        self._processed_until = end_ts
+        self.accept_segments(segs, start_ts)
+
+    def accept_segments(self, segs: list[dict], start_ts: float) -> None:
+        """Accept finalized ASR segments; streaming partials never enter this path."""
         new_lines = []
         for seg in segs:
+            event_id = seg.get("id")
+            if event_id and event_id in self._final_ids:
+                continue
             if len(seg["text"].strip()) < config.MIN_TEXT_CHARS:
                 # 噪声碎片过滤（阈值可调，见 config.MIN_TEXT_CHARS）：
                 # 该过滤同时影响触发判断与证据/报告——边界语义固化在
@@ -209,11 +238,18 @@ class Session:
                 })
             new_lines.append(line)
             self.transcript.append(line)
+            if event_id:
+                self._final_ids.add(event_id)
+            self.interest_turns.append({"id": event_id or f"turn_{len(self.interest_turns) + 1}",
+                                       "ts": line_ts, "end_ts": start_ts + float(seg.get("end", seg["start"])),
+                                       "text": orig_text, "corrected_text": fixed})
         self.transcript.sort(key=lambda line: line["ts"])
-        self._processed_until = end_ts
-        if self.echo and new_lines:
-            last = new_lines[-1]
-            print(f"  [{time.strftime('%H:%M:%S', time.localtime(last['ts']))}] {last['speaker']}: {last['text'][:80]}")
+        if self.echo:
+            for line in new_lines:
+                clock = time.strftime('%H:%M:%S', time.localtime(line['ts']))
+                if not emit("line", clock=clock, spk=line["speaker"], text=line["text"],
+                            ts=self._relative_ts(line["ts"])):
+                    print(f"  [{clock}] {line['speaker']}: {line['text']}", flush=True)
 
         joined = " ".join(l["text"] for l in new_lines)
         # 触发时刻用会议时间轴（最后进音频的绝对时间戳），不用墙钟——
@@ -221,15 +257,33 @@ class Session:
         trigger_ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
         # 同一转写块内命中的多个词合并为一次回看（evidence 记录全部命中词）：
         # 各存一份会把同一个 300s 窗口重复保存 N 次——大词表下直接撑爆磁盘（test1 实测 752 片段）
-        fired = self.monitor.check(joined, trigger_ts)
+        fired = self.monitor.check(joined, trigger_ts) if self.auto_triggers else []
         if fired:
             self._make_clip("L1", "热词:" + "+".join(fired), trigger_ts)
-        if self.scorer:
+        if self.auto_triggers and self.scorer:
             hit, score = self.scorer.check(joined)
             if hit:
                 self._make_clip("L2", f"interest_score={score:.2f}", trigger_ts)
         if self.manual.consume():
             self._make_clip("L3", "manual_hotkey", trigger_ts)
+
+    def capture_interest(self, event: dict) -> str | None:
+        known = {turn["id"]: turn for turn in self.interest_turns}
+        ids = event.get("evidence_ids") or []
+        if not ids or any(key not in known for key in ids):
+            return None
+        evidence = [known[key] for key in ids]
+        end = max(turn["end_ts"] for turn in evidence)
+        start = min(turn["ts"] for turn in evidence)
+        chunks = list(self._ring)
+        if self._ring_carry and self._ring_carry_ts is not None:
+            chunks.append((self._ring_carry_ts, self._ring_carry))
+        if not chunks or start < chunks[0][0] or self._last_flush_ts is None or end > self._last_flush_ts + 0.1:
+            emit("interest_state", state="error", message="API返回时证据已不在音频缓冲内，本次未保存")
+            return None
+        reason = f"API兴趣/{event['event_type']}: {event['reason']}"
+        quotes = "；".join(f"{turn['id']}: {turn['text']}" for turn in evidence)
+        return self._make_clip("L3", reason, min(end, self._last_flush_ts), explanation=quotes)
 
     def trigger_manual(self) -> str | None:
         """外部（回车/程序）手动 VAR。"""
@@ -328,7 +382,7 @@ class Session:
         """全场转写的会议相对秒视图（内存态，供 transcribe 显式导出；默认模式不落盘）。"""
         return [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
 
-    def _make_clip(self, layer: str, evidence: str, trigger_ts: float) -> str:
+    def _make_clip(self, layer: str, evidence: str, trigger_ts: float, explanation: str = "") -> str:
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 ≤90s 预算内高帧率补录（帧缩至 1280 宽）
         start_ts = trigger_ts - LOOKBACK_SECONDS
@@ -355,7 +409,7 @@ class Session:
         clip_lines = [{**line, "ts": self._relative_ts(line["ts"])} for line in lines]
         # 截屏 manifest 与 JSON 时间语义保持一致：一律会议相对秒
         screens = [
-            (self._relative_ts(t), jpg)
+            (self._relative_ts(max(t, media_start if media_start is not None else start_ts)), jpg)
             for t, jpg in (self.screen_capture.frames_since(start_ts) if self.screen_capture else [])
             if t <= trigger_ts
         ]
@@ -364,6 +418,7 @@ class Session:
         clip_id = self.pool.add_clip(
             trigger_layer=layer,
             evidence=evidence,
+            explanation=explanation,
             audio_wav=pcm_to_wav_bytes(pcm),
             audio_start_ts=self._relative_ts(media_start if media_start is not None else trigger_ts),
             audio_end_ts=self._relative_ts(media_end),

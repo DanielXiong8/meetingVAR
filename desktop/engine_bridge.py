@@ -199,11 +199,23 @@ def cmd_check_xfyun(xfyun_dir: Path) -> dict:
     result: dict = {
         "ok": bool(found["iat"] or found["lfasr"]),
         "dir": str(xfyun_dir),
+        "rtasr": None,
         "iat": None,
         "lfasr": None,
         "files": found["files"],
-        "notes": [],
+        "notes": ["仅检查配置格式；连接、配额和识别质量尚未验证"],
     }
+    from meetingvar.transcribe.xfyun_rtasr import find_rtasr, load_creds as rt_load
+    try:
+        rt_path = find_rtasr(xfyun_dir)
+        if rt_path is not None:
+            rt_load(rt_path)
+            result["rtasr"] = {"valid": True}
+            result["ok"] = True
+        else:
+            result["notes"].append("未找到实时语音转写RTASR凭证")
+    except (OSError, ValueError):
+        result["rtasr"] = {"valid": False, "error": "RTASR凭证缺失、格式错误或有多个候选"}
     if found["iat"]:
         probe = {"valid": False}
         try:
@@ -213,8 +225,6 @@ def cmd_check_xfyun(xfyun_dir: Path) -> dict:
             probe = {"valid": True}
         except Exception as exc:  # noqa: BLE001
             probe = {"valid": False, "error": str(exc)[:120]}
-        if probe["valid"]:
-            probe.update(_probe_iat(Path(found["iat"])))  # 联网探活（静音握手）
         result["iat"] = {"path": found["iat"], **probe}
     else:
         result["notes"].append("未找到语音听写凭证（需含 APPID / APIKey / APISecret 的 .env）")
@@ -321,6 +331,11 @@ def cmd_understand(folder: Path, max_chunks: int = 0) -> dict:
         print(f"[progress] {msg}", flush=True)
 
     r = understand(Path(folder), max_chunks=max_chunks or None, progress=progress)
+    from meetingvar.memory.interest_context import context_from_result
+    out = Path(folder) / "meetingvar" / "interest_context.json"
+    if not max_chunks or not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(context_from_result(r), ensure_ascii=False, indent=2), encoding="utf-8")
     return r
 
 

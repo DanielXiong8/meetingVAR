@@ -32,7 +32,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.2"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -64,9 +64,12 @@ CONFIG_DEFAULTS = {
     "last_project": "",
     "projects": [],          # 已知项目（会议归档分组用；start_meeting 时维护）
     "llm_gguf": "",          # 本地 4B GGUF 路径（LLM 服务启动用；自动探测）
-    "use_llm": False,        # 开会时是否叠加 LLM 语义层（需服务在线）
-    "audio_source": "both",  # 采集源：both=系统声音+麦克风 / loopback / mic
-    "asr_engine": "local",   # 识别引擎：local=本地 FunASR（含说话人）/ xfyun=讯飞语音听写
+    "use_llm": False,        # 旧版配置兼容，实时兴趣由 interest_mode 控制
+    "interest_mode": "api",
+    "interest_focus": "",
+    "meeting_engine_version": "0.1.2",
+    "audio_source": "both",
+    "asr_engine": "xfyun_rtasr",
     "xfyun_dir": "",         # 讯飞控制台下载的文件夹（自动认领 .env：听写 / 录音文件转写）
     "llm_provider": "local", # 模型服务：local=内置 llama.cpp 服务 / custom=自定义 OpenAI 兼容 API
     "llm_base_url": "",      # custom: 形如 https://api.xxx.com/v1
@@ -103,7 +106,11 @@ def load_config() -> dict:
     cfg = dict(CONFIG_DEFAULTS)
     try:
         if CONFIG_FILE.exists():
-            cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+            saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg.update(saved)
+            if saved.get("meeting_engine_version") != "0.1.2":
+                cfg.update(asr_engine="xfyun_rtasr", interest_mode="api", llm_provider="custom",
+                           meeting_engine_version="0.1.2")
     except (OSError, ValueError):
         pass
     return cfg
@@ -124,6 +131,9 @@ class Backend:
         self._events_lock = threading.Lock()
         self._event_seq = 0
         self._meeting_started_at: float | None = None
+        self._screen_state: dict = {}
+        self._meeting_summary: dict = {}
+        self._capture_phase = "idle"
         self._server: ThreadingHTTPServer | None = None
         self._server_port = 0
         self._page_ready = False
@@ -189,6 +199,51 @@ class Backend:
         class _Quiet(SimpleHTTPRequestHandler):
             def log_message(self, *args):  # noqa: A003
                 pass
+
+            def send_head(self):
+                self._remaining = None
+                requested = self.headers.get("Range")
+                path = Path(self.translate_path(self.path))
+                if not requested or not path.is_file():
+                    return super().send_head()
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested.strip())
+                size = path.stat().st_size
+                if not match or not any(match.groups()) or not size:
+                    self.send_error(416, "Invalid byte range")
+                    return None
+                first, last = match.groups()
+                start = int(first) if first else max(0, size - int(last))
+                end = min(size - 1, int(last)) if first and last else size - 1
+                if start >= size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
+                try:
+                    stream = path.open("rb")
+                except OSError:
+                    self.send_error(404)
+                    return None
+                stream.seek(start)
+                self._remaining = end - start + 1
+                self.send_response(206)
+                self.send_header("Content-Type", self.guess_type(str(path)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.send_header("Content-Length", str(self._remaining))
+                self.end_headers()
+                return stream
+
+            def copyfile(self, source, outputfile):
+                if self._remaining is None:
+                    return super().copyfile(source, outputfile)
+                while self._remaining > 0:
+                    block = source.read(min(65536, self._remaining))
+                    if not block:
+                        break
+                    outputfile.write(block)
+                    self._remaining -= len(block)
 
         handler = partial(_Quiet, directory=str(data_dir))
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -264,6 +319,22 @@ class Backend:
 
     def _handle_line(self, raw: str) -> None:
         line = raw.rstrip("\r\n")
+        prefix = "@@MEETINGVAR_EVENT "
+        if line.startswith(prefix):
+            try:
+                event = json.loads(line[len(prefix):])
+                kind = event.pop("type")
+                if kind == "screen_state":
+                    self._screen_state = event
+                elif kind in {"line", "partial_line", "capture_state", "asr_state", "asr_stream_state", "interest_state", "audio_state", "meeting_summary", "recording_warning"}:
+                    if kind == "capture_state":
+                        self._capture_phase = event.get("phase", "loading")
+                    elif kind == "meeting_summary":
+                        self._meeting_summary = event
+                    self._push(kind, **event)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                self._push("log", text="[ui] 无法解析引擎事件")
+            return
         if not line.strip():
             return
         # funasr/模型库噪声不进入事件流（空 VAD 每 5s 打一行 decoding…，会淹掉真正的事件）
@@ -299,7 +370,8 @@ class Backend:
             self._push("log", text=f"[ui] 读流异常: {type(exc).__name__}")
         finally:
             code = proc.wait()
-            self._push("exit", code=code, last_log=self._last_log[-200:])
+            self._push("exit", code=code, last_log=self._last_log[-200:], summary=self._meeting_summary)
+            self._capture_phase = "idle"
             self._meeting_started_at = None
 
     # ---------------- JS API ----------------
@@ -402,23 +474,44 @@ class Backend:
                 projects.insert(0, folder)
             self._cfg["projects"] = projects[:30]
             save_config(self._cfg)
-        cmd += ["--device", self._cfg.get("device", "cuda")]
+        if self._und.get("running"):
+            return {"ok": False, "error": "项目理解仍在运行，请等待完成或取消后再开会"}
+        interest = self._cfg.get("interest_mode", "api")
+        if interest not in {"api", "manual"}:
+            return {"ok": False, "error": "请选择API兴趣判断或仅手动保存"}
+        base = (self._cfg.get("llm_base_url") or "").strip()
+        model = (self._cfg.get("llm_model") or "").strip()
+        if interest == "api" and (not base or not model):
+            return {"ok": False, "error": "API兴趣判断缺少自定义API地址或模型名。请在设置中填写，或明确选择仅手动保存；不会退回热词触发。"}
+        if interest == "api":
+            from urllib.parse import urlparse
+            parsed = urlparse(base)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                return {"ok": False, "error": "API地址须为http/https地址，不要将密钥写入URL"}
+        cmd += ["--device", self._cfg.get("device", "cuda"), "--no-ask-speakers", "--interest", interest]
         cmd += ["--source", self._cfg.get("audio_source", "both")]
-        if self._cfg.get("asr_engine") == "xfyun":
+        engine = self._cfg.get("asr_engine", "xfyun_rtasr")
+        if engine not in {"local", "xfyun", "xfyun_rtasr"}:
+            return {"ok": False, "error": "识别引擎设置无效"}
+        cmd += ["--asr", engine]
+        if engine in {"xfyun", "xfyun_rtasr"}:
             xdir = (self._cfg.get("xfyun_dir") or "").strip()
             if not xdir or not Path(xdir).exists():
                 return {"ok": False, "error": "已选讯飞识别，但未配置讯飞文件夹（设置页 → 识别引擎）"}
-            cmd += ["--asr", "xfyun", "--xfyun-cred", xdir]
+            cmd += ["--xfyun-cred", xdir]
         env = self._engine_env()
-        try:
-            env.update(self._llm_env())
-            if self._cfg.get("use_llm"):
-                cmd.append("--llm")
-        except ValueError as exc:
-            # 模型未就绪不拦开会（会议照录），只在勾选叠加时留一条日志（界面有个 toast 提示）
-            if self._cfg.get("use_llm"):
-                log(f"[ui] LLM 语义层本次未叠加：{exc}")
-        flags = _SPAWN_FLAGS  # 无控制台黑窗（用户实测："点开始会议弹出脚本页"）
+        env.update({"MEETINGVAR_DESKTOP_EVENTS": "1", "MEETINGVAR_CHUNK": "8",
+                    "MEETINGVAR_OVERLAP": "3", "MEETINGVAR_MIN_TEXT_CHARS": "1" if engine == "xfyun_rtasr" else "2",
+                    "MEETINGVAR_INTEREST_FOCUS": (self._cfg.get("interest_focus") or "")[:6000]})
+        if interest == "api":
+            env.update({"MEETINGVAR_LLM_BASE_URL": base.rstrip("/"), "MEETINGVAR_LLM_MODEL": model,
+                        "MEETINGVAR_LLM_API_KEY": self._cfg.get("llm_api_key") or "",
+                        "MEETINGVAR_LLM_MAX_TOKENS": "1600", "MEETINGVAR_LLM_THINKING": ""})
+        self._screen_state = {}
+        self._meeting_summary = {}
+        self._capture_phase = "loading"
+        self._last_log = ""
+        flags = _SPAWN_FLAGS
         try:
             self._proc = subprocess.Popen(
                 cmd, cwd=repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -461,7 +554,7 @@ class Backend:
                 return {"ok": False, "error": str(exc2)}
 
     def manual_var(self) -> dict:
-        return self._write_stdin("\n")  # 空行 = 引擎的手动 VAR
+        return self._write_stdin(":var\n")
 
     def answer_prompt(self, text: str) -> dict:
         return self._write_stdin((text or "").strip() + "\n")  # 名字（空=跳过）
@@ -482,7 +575,8 @@ class Backend:
             evs = [e for e in self._events if e["i"] > since]
             nxt = self._event_seq
         return {"events": evs, "next": nxt, "running": self.is_running(),
-                "started_at": self._meeting_started_at}
+                "started_at": self._meeting_started_at, "screen": self._screen_state,
+                "phase": self._capture_phase}
 
     # ---- 会议库 ----
     def list_sessions(self) -> list[dict]:
@@ -538,8 +632,26 @@ class Backend:
                 hd_dir = (d.get("screen") or {}).get("hd_clip_dir")
                 if hd_dir:
                     hd_mp4 = Path(hd_dir) / "hd_clip.mp4"
+                    if not hd_mp4.is_absolute():
+                        hd_mp4 = Path(self._cfg["repo_dir"]) / hd_mp4
                     if hd_mp4.exists():
                         hd_url = self._media_url(str(hd_mp4))
+                audio = d.get("audio") or {}
+                frames = []
+                media_dir = data / "clips" / str(d.get("clip_id", ""))
+                manifest = media_dir / "screens" / "manifest.txt"
+                try:
+                    for row in manifest.read_text(encoding="utf-8").splitlines():
+                        name, timestamp = row.split("\t", 1)
+                        if Path(name).name != name:
+                            continue
+                        url = self._media_url(str(media_dir / "screens" / name))
+                        if url:
+                            frames.append({"ts": float(timestamp), "url": url})
+                except (OSError, ValueError):
+                    pass
+                frames.sort(key=lambda frame: frame["ts"])
+                video_path = (d.get("screen") or {}).get("video_path")
                 detail["clips"].append({
                     "clip_id": d.get("clip_id", "")[:8],
                     "layer": (d.get("trigger") or {}).get("layer", ""),
@@ -548,6 +660,10 @@ class Backend:
                     "lines": len(d.get("transcript", [])),
                     "audio_url": self._media_url((d.get("audio") or {}).get("path")),
                     "hd_url": hd_url,
+                    "video_url": self._media_url(video_path),
+                    "frames": frames,
+                    "start_ts": audio.get("start_ts", 0),
+                    "end_ts": audio.get("end_ts", 0),
                 })
         return detail
 
@@ -632,32 +748,36 @@ class Backend:
             return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
 
     def test_llm(self) -> dict:
-        """按当前 provider 测连接：local=本机服务 /v1/models；custom=远程 OpenAI 兼容端点。"""
-        provider = self._cfg.get("llm_provider") or "local"
-        if provider == "local":
-            st = self.llm_status()
-            if st["up"]:
-                return {"ok": True, "provider": "local", "model": st["model"], "note": "本地服务在线"}
-            return {"ok": False, "provider": "local", "error": "本地服务未运行（可点「启动服务」）"}
+        """Test the configured interest API with a short generation request."""
         import urllib.error
         import urllib.request
 
         base = (self._cfg.get("llm_base_url") or "").strip().rstrip("/")
         if not base:
             return {"ok": False, "provider": "custom", "error": "未填写 Base URL"}
-        url = base + "/models"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {(self._cfg.get('llm_api_key') or 'sk-none').strip()}"})
+        model = (self._cfg.get("llm_model") or "").strip()
+        if not model:
+            return {"ok": False, "provider": "custom", "error": "未填写模型名"}
+        url = base + "/chat/completions"
+        body = {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}],
+                "max_tokens": 128, "temperature": 0}
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {(self._cfg.get('llm_api_key') or '').strip()}"})
         try:
-            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with op.open(req, timeout=10) as r:
+            from urllib.parse import urlparse
+            local = urlparse(base).hostname in {"127.0.0.1", "localhost", "::1"}
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({})) if local else urllib.request.build_opener()
+            with op.open(req, timeout=30) as r:
                 data = json.loads(r.read().decode("utf-8", "replace"))
-            ids = [m.get("id", "") for m in (data.get("data") or []) if isinstance(m, dict)][:5]
-            return {"ok": True, "provider": "custom", "models": ids, "note": f"连通，{len(ids)} 个模型可见"}
+            content = data["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                return {"ok": False, "error": "API没有返回有效生成文本"}
+            return {"ok": True, "provider": "custom", "note": "已完成一次实际生成测试", "models": [model]}
         except urllib.error.HTTPError as exc:
             return {"ok": False, "provider": "custom", "error": f"HTTP {exc.code}（鉴权或路径问题）"}
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "provider": "custom", "error": f"{type(exc).__name__}: {str(exc)[:140]}"}
+            return {"ok": False, "provider": "custom", "error": f"生成测试失败（{type(exc).__name__}），请核对地址、模型和网络"}
 
     def pick_media(self):
         """选一个媒体文件（视频/音频）用于离线转写。"""
@@ -957,6 +1077,15 @@ class Backend:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _allow_close(self) -> bool:
+        if not self.is_running():
+            return True
+        if self._capture_phase != "stopping":
+            self.stop_meeting()
+        self._capture_phase = "stopping"
+        self._push("capture_state", phase="stopping", text="正在保存会议，请等待收尾完成后关闭窗口")
+        return False
+
     def get_config(self) -> dict:
         return self._cfg
 
@@ -1012,9 +1141,10 @@ def main() -> None:
         f"{APP_NAME} {APP_VERSION}",
         url=str(WEB_DIR / "index.html"),
         js_api=backend,
-        width=900, height=640, min_size=(760, 520),
+        width=1280, height=800, min_size=(900, 600),
     )
     backend._window = window
+    window.events.closing += backend._allow_close
     if selftest:
         # 计时线程放 main()（早于 webview.start）：实测放在 _on_start 回调里的线程
         # 不会被执行到；放这里与官方 auto-close 示例一致。

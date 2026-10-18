@@ -5,7 +5,8 @@ const $ = (id) => document.getElementById(id);
 const state = {
   next: 0, running: false, startedAt: null, hits: 0,
   speakers: new Set(), project: "", scan: null, mediaBase: "",
-  askQueue: [], askOpen: false, ticker: [],
+  askQueue: [], askOpen: false, ticker: [], phase: "idle", follow: true, captionCount: 0,
+  lastCaptionAt: null, screen: {}, starting: false, polling: false, partials: new Map(),
 };
 
 /* ---------- 小工具 ---------- */
@@ -85,12 +86,18 @@ function mdToHtml(md) {
 
 /* ---------- 事件轮询 ---------- */
 async function poll() {
-  let res;
-  try { res = await pywebview.api.poll_events(state.next); }
-  catch (e) { return; }
-  state.next = res.next;
-  for (const ev of res.events) handleEvent(ev);
-  if (res.running !== state.running) setRunning(res.running, res.started_at);
+  if (state.polling) return;
+  state.polling = true;
+  try {
+    const res = await pywebview.api.poll_events(state.next);
+    state.next = res.next;
+    for (const ev of res.events) handleEvent(ev);
+    if (res.phase) state.phase = res.phase;
+    if (res.running !== state.running) setRunning(res.running, res.started_at);
+    if (res.screen) renderScreenStatus(res.screen);
+  } catch (e) {
+    if (state.running) $("captureStatus").textContent = "界面连接暂时中断，正在重试";
+  } finally { state.polling = false; }
 }
 
 const SYS_LINE_RE = /\[rec\]|\[go\]|\[done\]|\[spk\]|\[calibration\]|归档|停止指令|就绪|Traceback|Error|error/i;
@@ -98,6 +105,10 @@ const SYS_LINE_RE = /\[rec\]|\[go\]|\[done\]|\[spk\]|\[calibration\]|归档|停�
 function handleEvent(ev) {
   if (ev.type === "line") {
     state.gotLines = true;
+    state.lastCaptionAt = Date.now();
+    $("asrStatus").textContent = (state.cfg || {}).asr_engine === "xfyun_rtasr" ? "讯飞RTASR持续转写 · 已收到定稿" : "已收到分块识别结果";
+    state.captionCount += 1;
+    $("captionCount").textContent = `${state.captionCount} 句`;
     state.speakers.add(ev.spk);
     $("statSpeakers").textContent = "说话人 " + [...state.speakers].join(" / ");
     pushTicker(`${ev.clock}`, ev.spk, ev.text, "");
@@ -112,12 +123,53 @@ function handleEvent(ev) {
   } else if (ev.type === "ask") {
     state.askQueue.push(ev);
     maybeShowAsk();
+  } else if (ev.type === "partial_line") {
+    if (ev.clear) state.partials.clear();
+    else if (ev.text) state.partials.set(ev.id, ev.text);
+    else state.partials.delete(ev.id);
+    while (state.partials.size > 4) state.partials.delete(state.partials.keys().next().value);
+    $("partialCaption").textContent = [...state.partials.values()].join("\n");
+    $("partialCaption").hidden = !state.partials.size;
+    if (ev.text) { state.lastCaptionAt = Date.now(); $("asrStatus").textContent = "讯飞实时转写中 · 当前句尚未定稿"; }
+  } else if (ev.type === "asr_stream_state") {
+    $("asrStatus").textContent = ev.message || ev.state;
+    if (["error", "reconnecting"].includes(ev.state)) {
+      state.partials.clear(); $("partialCaption").hidden = true;
+      pushTicker("", "系统", ev.message || "实时识别连接异常", "err");
+    }
+  } else if (ev.type === "interest_state") {
+    $("interestStatus").textContent = ev.message || ev.state;
+    $("interestStatus").classList.toggle("warn", ev.state === "error");
+  } else if (ev.type === "recording_warning") {
+    toast(ev.text, 12000);
+    pushTicker("", "系统", ev.text, "err");
+  } else if (ev.type === "capture_state") {
+    state.phase = ev.phase;
+    $("captureStatus").textContent = ev.text || "";
+    setRunning(state.running, null);
+  } else if (ev.type === "asr_state") {
+    $("asrStatus").textContent = ev.error || (ev.processing
+      ? `正在识别 ${ev.seconds} 秒音频…`
+      : `字幕识别耗时 ${ev.latency} 秒${ev.lag > 10 ? ` · 落后 ${Math.round(ev.lag)} 秒` : ""}`);
+  } else if (ev.type === "audio_state") {
+    $("audioLevel").value = Math.min(1, Math.sqrt(ev.rms || 0) * 2);
+    $("audioStatus").textContent = ev.rms > 0.001 ? "音频有输入" : "音频输入较静";
   } else if (ev.type === "started") {
+    state.phase = "loading";
     setRunning(true, Date.now() / 1000);
   } else if (ev.type === "exit") {
+    state.phase = "idle";
     setRunning(false, null);
+    $("captureStatus").textContent = ev.code === 0 ? "会议已结束" : "会议异常结束";
+    $("audioLevel").value = 0;
+    $("audioStatus").textContent = "音频已停止";
+    $("asrStatus").textContent = "字幕已停止";
+    state.partials.clear(); $("partialCaption").hidden = true;
+    $("interestStatus").textContent = "兴趣判断已停止 · " + $("interestStatus").textContent;
     let msg = "会议已结束（引擎退出码 " + ev.code + "）";
-    if (ev.code === 0) msg = "会议已结束（正常收尾，纪要与证据已保存）";
+    if (ev.code === 0) msg = ev.summary && ev.summary.saved
+      ? `会议已结束，已保存 ${ev.summary.clips} 个证据片段`
+      : "会议已结束，本场没有保存证据片段";
     else if (ev.last_log) msg += " · 最后一条：" + ev.last_log.slice(0, 110);
     toast(msg, 9000);
     pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
@@ -137,14 +189,40 @@ function handleEvent(ev) {
 
 function pushTicker(t, spk, text, kind) {
   state.ticker.push({ t, spk, text, kind });
-  if (state.ticker.length > 60) state.ticker.shift();
   const body = $("ticker");
   const div = document.createElement("div");
   div.className = "tk" + (kind ? " " + kind : "");
   div.innerHTML = `<span class="t">${esc(t)}</span><span class="s">${esc(spk)}</span>${esc(text)}`;
   body.appendChild(div);
-  while (body.children.length > 14) body.removeChild(body.firstChild);
-  body.scrollTop = body.scrollHeight;
+  if (state.follow) body.scrollTop = body.scrollHeight;
+}
+$("ticker").addEventListener("scroll", () => {
+  const box = $("ticker");
+  state.follow = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  $("btnFollow").textContent = state.follow ? "跟随最新" : "返回最新字幕";
+});
+$("btnFollow").onclick = () => {
+  state.follow = true;
+  $("ticker").scrollTop = $("ticker").scrollHeight;
+};
+function renderScreenStatus(s) {
+  state.screen = s;
+  const age = s.last_success_ts ? Date.now() / 1000 - s.last_success_ts : Infinity;
+  const live = state.running && state.phase !== "stopping";
+  if (s.preview && $("screenPreview").getAttribute("src") !== s.preview) {
+    $("screenPreview").src = s.preview;
+    $("screenPreview").hidden = false;
+    $("screenEmpty").hidden = true;
+  }
+  let text = live ? "等待屏幕首帧…" : "屏幕采集未运行";
+  if (s.last_success_ts) {
+    const coverage = s.oldest_ts == null ? 0 : Math.min(300, Math.max(0, s.last_success_ts - s.oldest_ts));
+    text = `${live ? "录屏中" : "采集已停止"} · 回溯 ${Math.floor(coverage)} 秒 · ${((s.buffer_bytes || 0) / 1048576).toFixed(1)} MB`;
+    if (live && age > 5) text = "屏幕采集未更新，请检查录屏状态 · " + text;
+  }
+  if (s.error) text = "屏幕采集异常：" + s.error;
+  if (s.limited) text += " · 已触及内存上限，较早画面可能已淘汰";
+  $("screenStatus").textContent = text;
 }
 
 /* ---------- 运行状态 ---------- */
@@ -152,9 +230,12 @@ function setRunning(running, startedAt) {
   state.running = running;
   if (startedAt) state.startedAt = startedAt;
   const pill = $("statusPill");
-  pill.textContent = running ? "● 会议中" : "● 待机";
+  pill.textContent = running ? ({loading: "● 正在准备", ready: "● 会议中", stopping: "● 正在收尾"}[state.phase] || "● 正在准备") : "● 待机";
   pill.classList.toggle("live", running);
-  $("recLabel").textContent = running ? "结束会议" : "开始会议";
+  $("recLabel").textContent = running ? (state.phase === "stopping" ? "正在收尾" : "结束会议") : "开始会议";
+  $("btnRec").disabled = state.starting || (running && state.phase === "stopping");
+  $("btnVar").disabled = !running || state.phase === "stopping";
+  $("interestFocus").disabled = running;
   $("btnRec").classList.toggle("live", running);
   if (!running) {
     $("statTime").textContent = "--";
@@ -163,8 +244,12 @@ function setRunning(running, startedAt) {
 setInterval(() => {
   if (state.running && state.startedAt) {
     const el = Date.now() / 1000 - state.startedAt;
-    $("statTime").textContent = "已听 " + fmtClock(el);
-    // 静默看门狗：90 秒没有一句转写 → 多半是采集源头没声音
+    $("statTime").textContent = "本场 " + fmtClock(el);
+    if (state.lastCaptionAt && Date.now() - state.lastCaptionAt > 45000 && state.phase === "ready") {
+      $("asrStatus").textContent = `距上一条字幕 ${Math.floor((Date.now() - state.lastCaptionAt) / 1000)} 秒（可能是静音，也可能识别落后）`;
+    }
+    renderScreenStatus(state.screen);
+    // 静默看门狗：90 秒没有一句转写 → 检查采集和识别状态
     if (!state.gotLines && !state.silenceHinted && el > 90) {
       state.silenceHinted = true;
       const src = (state.cfg && state.cfg.audio_source) || "both";
@@ -195,27 +280,41 @@ async function answerAsk(text) {
 
 /* ---------- 主页 ---------- */
 $("btnRec").onclick = async () => {
+  if (state.starting) return;
   if (state.running) {
     const r = await pywebview.api.stop_meeting();
     if (!r.ok) toast("停止失败：" + (r.error || ""));
+    else { state.phase = "stopping"; setRunning(true, null); }
     return;
   }
   if (!state.project) { toast("还没有选项目——先去「项目」页选一个文件夹"); switchPage("project"); return; }
-  const r = await pywebview.api.start_meeting(state.project, "go");
-  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
-  const cfg0 = state.cfg || {};
-  if (cfg0.use_llm && (cfg0.llm_provider || "local") === "custom" && !(cfg0.llm_base_url || "").trim()) {
-    toast("提示：勾选了 LLM 语义层，但自定义厂商未填 Base URL——本次不会叠加 LLM", 9000);
-  }
+  state.starting = true;
   state.hits = 0; state.speakers.clear(); state.ticker = [];
-  state.gotLines = false; state.silenceHinted = false;
+  state.gotLines = false; state.silenceHinted = false; state.follow = true;
+  state.captionCount = 0; state.lastCaptionAt = null; state.phase = "loading"; state.screen = {};
+  state.partials.clear(); $("partialCaption").hidden = true;
+  $("interestStatus").textContent = "正在准备兴趣判断…";
   $("ticker").innerHTML = ""; $("statHits").textContent = "命中 0";
-  $("statSpeakers").textContent = "说话人 —";
+  $("captionCount").textContent = "0 句"; $("statSpeakers").textContent = "说话人 —";
+  $("screenPreview").hidden = true; $("screenPreview").removeAttribute("src");
+  $("screenEmpty").hidden = false; $("screenEmpty").textContent = "等待屏幕首帧…";
+  $("captureStatus").textContent = "正在准备会议…";
+  $("btnRec").disabled = true;
+  let r;
+  try {
+    await pywebview.api.set_config({interest_focus: $("interestFocus").value.trim()});
+    r = await pywebview.api.start_meeting(state.project, "go");
+  }
+  catch (e) { r = {ok: false, error: String(e)}; }
+  finally { state.starting = false; $("btnRec").disabled = false; }
+  if (!r.ok) { state.phase = "idle"; $("captureStatus").textContent = "启动失败"; toast("启动失败：" + (r.error || "")); return; }
   setRunning(true, r.started_at);
-  pushTicker("", "系统", "正在启动引擎（首次加载模型约 40 秒）…", "sys");
-  const src = (state.cfg && state.cfg.audio_source) || "both";
-  pushTicker("", "系统", `监听源：${SOURCE_LABEL[src] || src}（设置页可改）——有声音约 8 秒后，这里开始出现转写。`, "sys");
-  toast("会议开始：" + state.project);
+  const cfg0 = state.cfg || {};
+  const streaming = cfg0.asr_engine === "xfyun_rtasr";
+  pushTicker("", "系统", streaming ? "正在连接讯飞RTASR，连接成功后持续显示临时字幕和定稿。" : "正在准备分块语音识别…", "sys");
+  const src = cfg0.audio_source || "both";
+  pushTicker("", "系统", `监听源：${SOURCE_LABEL[src] || src}。专业词只用于纠错；自动取证由API判断，或由你手动VAR。`, "sys");
+  toast("会议正在准备：" + state.project);
 };
 $("btnVar").onclick = async () => {
   const r = await pywebview.api.manual_var();
@@ -351,12 +450,15 @@ async function refreshLibrary() {
 }
 async function showSession(sid) {
   const d = await pywebview.api.session_detail(sid);
-  const clips = d.clips.map((c) => `
-    <div class="clip">
+  $("sessionDetail").querySelectorAll("audio, video").forEach((el) => el.pause());
+  const clips = d.clips.map((c, index) => `
+    <div class="clip" data-clip-index="${index}">
       <div class="head"><span class="layer">${esc(c.layer)}</span><span>${esc(c.evidence)}</span>
         <span class="muted">@${fmtClock(c.at)} · ${c.lines} 句</span></div>
-      ${c.audio_url ? `<audio controls preload="none" src="${esc(c.audio_url)}"></audio>` : ""}
-      ${c.hd_url ? `<video controls preload="none" src="${esc(c.hd_url)}"></video>` : ""}
+      ${c.video_url ? `<video controls preload="metadata" src="${esc(c.video_url)}"></video>` : `
+        ${(c.frames || []).length ? `<img class="replay-screen" alt="与音频同步的屏幕画面" hidden><div class="replay-note muted"></div>` : '<div class="muted">此片段没有可回看的屏幕画面</div>'}
+        ${c.audio_url ? `<audio controls preload="metadata" src="${esc(c.audio_url)}"></audio>` : ""}`}
+      ${c.hd_url ? `<details><summary>旧版命中后补录（独立时间段，无音轨）</summary><video controls preload="none" src="${esc(c.hd_url)}"></video></details>` : ""}
     </div>`).join("");
   $("sessionDetail").innerHTML =
     `<h2>${esc(sid)}</h2>` +
@@ -364,6 +466,23 @@ async function showSession(sid) {
     (clips ? `<h2>证据片段</h2>${clips}` : "") +
     `<details><summary class="muted">厚纪要（VAR 报告原文）</summary><div class="md">${d.reports ? mdToHtml(d.reports) : "<p class='muted'>无</p>"}</div></details>`;
   $("sessionDetail").hidden = false;
+  $("sessionDetail").querySelectorAll(".clip").forEach((box) => {
+    const c = d.clips[Number(box.dataset.clipIndex)];
+    const audio = box.querySelector("audio"), image = box.querySelector(".replay-screen");
+    if (!audio || !image) return;
+    const frames = c.frames || [];
+    const update = () => {
+      const ts = (Number(c.start_ts) || 0) + audio.currentTime;
+      let lo = 0, hi = frames.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (frames[mid].ts <= ts) lo = mid + 1; else hi = mid; }
+      const frame = frames[lo - 1];
+      image.hidden = !frame;
+      box.querySelector(".replay-note").textContent = frame ? `屏幕与音频同步 · ${fmtClock(ts)}` : "此时间段缺少屏幕画面，音频仍可播放";
+      if (frame && image.getAttribute("src") !== frame.url) image.src = frame.url;
+    };
+    ["timeupdate", "seeking", "loadedmetadata"].forEach((event) => audio.addEventListener(event, update));
+    update();
+  });
   $("sessionDetail").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -372,12 +491,15 @@ const PROVIDER_LABEL = { local: "本地模型", custom: "自定义 API" };
 function applyProviderUi(provider) {
   $("cfgProvider").value = provider;
   $("provLocal").hidden = provider !== "local";
-  $("provCustom").hidden = provider !== "custom";
+  $("provCustom").hidden = false;
 }
 function applyAsrUi(engine) {
   $("cfgAsr").value = engine;
-  $("xfyunRow").hidden = engine !== "xfyun";
-  $("xfyunResult").hidden = engine !== "xfyun";
+  $("xfyunRow").hidden = engine === "local";
+  $("xfyunResult").hidden = engine === "local";
+  $("captionHelp").textContent = engine === "xfyun_rtasr"
+    ? "讯飞RTASR临时字幕持续更新，句尾定稿后进入兴趣判断。"
+    : "当前使用分块识别；字幕延迟包含音频块时长与推理耗时。";
 }
 async function refreshLlm() {
   const st = await pywebview.api.llm_status();
@@ -385,14 +507,9 @@ async function refreshLlm() {
     ? `● 运行中（${st.model || "模型已载入"}）`
     : (st.managed ? "○ 启动中…（首次加载约 30-60 秒）" : "○ 未运行");
   const cfg = state.cfg || {};
-  if ((cfg.llm_provider || "local") === "custom") {
-    const ready = !!(cfg.llm_base_url || "").trim();
-    $("llmPill").textContent = ready ? "API ●" : "API ○";
-    $("llmPill").classList.toggle("on", ready);
-  } else {
-    $("llmPill").textContent = st.up ? "LLM ●" : "LLM ○";
-    $("llmPill").classList.toggle("on", !!st.up);
-  }
+  const configured = !!(cfg.llm_base_url || "").trim() && !!(cfg.llm_model || "").trim();
+  $("llmPill").textContent = cfg.interest_mode === "manual" ? "仅手动保存" : (configured ? "兴趣API 已配置" : "兴趣API 未配置");
+  $("llmPill").classList.toggle("on", configured && cfg.interest_mode !== "manual");
   return st;
 }
 $("btnLlmStart").onclick = async () => {
@@ -410,9 +527,11 @@ $("btnLlmStop").onclick = async () => {
   if (!r.ok) toast(r.error || "停止失败");
   refreshLlm();
 };
-$("cfgUseLlm").onchange = async () => {
-  await pywebview.api.set_config({ use_llm: $("cfgUseLlm").checked });
-  toast($("cfgUseLlm").checked ? "开会时将叠加 LLM 语义层" : "已关闭 LLM 语义层");
+$("cfgInterestMode").onchange = async () => {
+  await pywebview.api.set_config({ interest_mode: $("cfgInterestMode").value });
+  state.cfg = await pywebview.api.get_config();
+  refreshLlm();
+  toast("保存方式已设置，下次会议生效；不启用热词或相似度自动保存");
 };
 const SOURCE_LABEL = {
   both: "系统声音 + 麦克风",
@@ -426,10 +545,11 @@ async function loadConfig() {
   $("cfgRepo").value = cfg.repo_dir || "";
   $("cfgDevice").value = cfg.device || "cuda";
   $("cfgGguf").value = cfg.llm_gguf || "";
-  $("cfgUseLlm").checked = !!cfg.use_llm;
+  $("cfgInterestMode").value = cfg.interest_mode || "api";
+  $("interestFocus").value = cfg.interest_focus || "";
   $("cfgSource").value = cfg.audio_source || "both";
   $("cfgXfyunDir").value = cfg.xfyun_dir || "";
-  applyAsrUi(cfg.asr_engine || "local");
+  applyAsrUi(cfg.asr_engine || "xfyun_rtasr");
   $("cfgBaseUrl").value = cfg.llm_base_url || "";
   $("cfgModel").value = cfg.llm_model || "";
   $("cfgApiKey").value = cfg.llm_api_key || "";
@@ -463,9 +583,7 @@ $("cfgAsr").onchange = async () => {
   applyAsrUi($("cfgAsr").value);
   await pywebview.api.set_config({ asr_engine: $("cfgAsr").value });
   state.cfg = await pywebview.api.get_config();
-  toast($("cfgAsr").value === "xfyun"
-    ? "实时转写将走讯飞语音听写（云端；说话人退化为 spk?）"
-    : "实时转写使用本地 FunASR");
+  toast(({xfyun_rtasr: "已选择讯飞RTASR连续转写，下次开会生效", xfyun: "已选择讯飞IAT分块听写备用", local: "已选择本地FunASR分块备用"})[$("cfgAsr").value]);
 };
 $("btnXfyunDir").onclick = async () => {
   const p = await pywebview.api.pick_xfyun_dir();
@@ -473,22 +591,23 @@ $("btnXfyunDir").onclick = async () => {
     $("cfgXfyunDir").value = p;
     await pywebview.api.set_config({ xfyun_dir: p });
     state.cfg = await pywebview.api.get_config();
-    $("xfyunResult").textContent = "文件夹已保存，点「检测」验证凭证与网络。";
+    $("xfyunResult").textContent = "文件夹已保存，点「检测」检查对应服务凭证。";
   }
 };
 $("btnXfyunCheck").onclick = async () => {
   const dir = $("cfgXfyunDir").value.trim();
   await pywebview.api.set_config({ xfyun_dir: dir });
   state.cfg = await pywebview.api.get_config();
-  $("xfyunResult").textContent = "检测中（联网握手约 1-2 秒）…";
+  $("xfyunResult").textContent = "检查配置中（不发送音频）…";
   const r = await pywebview.api.check_xfyun();
-  if (!r.ok && !r.iat && !r.lfasr) {
+  if (!r.ok && !r.rtasr && !r.iat && !r.lfasr) {
     $("xfyunResult").textContent = "✗ " + (r.error || "未找到可用凭证");
     return;
   }
   const mark = (x) => x ? (x.valid ? (x.ok === false ? "✗ " : "✓ ") : "✗ ") : "—";
   const parts = [
-    `${mark(r.iat)}语音听写（实时转写）` + (r.iat && r.iat.error ? `：${r.iat.error}` : ""),
+    `${mark(r.rtasr)}RTASR连续实时转写` + (r.rtasr && r.rtasr.error ? `：${r.rtasr.error}` : ""),
+    `${mark(r.iat)}IAT分块听写备用` + (r.iat && r.iat.error ? `：${r.iat.error}` : ""),
     `${mark(r.lfasr)}录音文件转写（文件转写工具）` + (r.lfasr && r.lfasr.error ? `：${r.lfasr.error}` : ""),
   ];
   if (r.notes && r.notes.length) parts.push("提示：" + r.notes.join("；"));
@@ -579,7 +698,7 @@ function renderUnderstandResult(r) {
   const terms = r.terms || [];
   const parts = [];
   if (r.overview) parts.push(`<div class="muted">一句话理解：${esc(r.overview)}</div>`);
-  parts.push(`<div class="row"><b>候选词</b><span class="muted">数字=开会被听到的预期次数（精确子串口径）；勾选后写入项目词表</span>
+  parts.push(`<div class="row"><b>候选词</b><span class="muted">数字=文档中出现次数；勾选后只用于专业词纠错，不直接触发保存</span>
     <button class="btn btn-primary" id="btnUndWrite">写入项目词表</button></div>`);
   parts.push('<div class="chips und-chips">' + terms.map((t, i) =>
     `<label class="chip und-chip" title="${esc(t.why || "")}"><input type="checkbox" class="und-pick" data-term="${esc(t.term)}" checked> ${esc(t.term)} <span class="muted">x${t.count}</span></label>`

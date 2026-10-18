@@ -20,7 +20,7 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
         if max_tokens <= 0:
             raise ValueError
     except (ValueError, TypeError):
-        print("[llm] 输出上限配置无效，回落离线模板/规则层")
+        print("[llm] 输出上限配置无效，本次生成不可用")
         return None
     body = {
         "model": config.LLM_MODEL,
@@ -30,7 +30,7 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     }
     if config.LLM_THINKING:
         if config.LLM_THINKING not in ("enabled", "disabled"):
-            print("[llm] 思考模式配置无效，回落离线模板/规则层")
+            print("[llm] 思考模式配置无效，本次生成不可用")
             return None
         body["thinking"] = {"type": config.LLM_THINKING}
     req = urllib.request.Request(
@@ -54,7 +54,7 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
             return None
         # A capped response must not be presented as complete meeting minutes.
         if choice.get("finish_reason") == "length":
-            print("[llm] 输出达到上限，回落离线模板/规则层")
+            print("[llm] 输出达到上限，本次结果未采用")
             return None
         content = choice["message"]["content"]
         if not isinstance(content, str):
@@ -62,7 +62,7 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     except (OSError, urllib.error.URLError, ValueError, KeyError, IndexError, TypeError) as exc:
         # Optional enhancement must not prevent local evidence/report delivery.
         # Do not log request headers, prompts, keys or server response bodies.
-        print(f"[llm] 请求不可用（{type(exc).__name__}），回落离线模板/规则层")
+        print(f"[llm] 请求不可用（{type(exc).__name__}），本次结果未采用")
         return None
     # Qwen3 等思考模型会输出 <think>…</think>；抽取类任务不需要，通用剥离
     import re

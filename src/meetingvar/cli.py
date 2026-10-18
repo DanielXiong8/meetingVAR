@@ -104,19 +104,19 @@ def cmd_transcribe(args) -> None:
 
 def cmd_record(args) -> None:
     from .live import record_session
-    from .memory.calibration import load_threshold
     from .memory.speaker_book import SpeakerBook
+    from .memory.interest_context import project_context
+    from .go import load_confirm_terms
 
-    terms = resolve_terms(args)
-    focus = load_memory_docs(Path(args.memory)) if args.memory else None
+    project = Path(args.memory) if args.memory else None
+    terms = load_terms(Path(args.terms)) if args.terms else (load_confirm_terms(project) if project else [])
     session_id = f"live_{time.time_ns()}"
-    threshold = load_threshold(Path(args.memory)) if args.memory else None
-    if threshold is not None:
-        print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
+    context = project_context(project, terms) if project else "未指定项目；仅按用户关注事项和通用重要事件判断"
     book = SpeakerBook.load(config.DATA_DIR / "speakers.json")
     if book.entries:
-        print(f"[spk] 声纹名册：{len(book.entries)} 人（{'、'.join(e['name'] for e in book.entries)}）")
-    summary = record_session(args, session_id, terms, focus, threshold, speaker_book=book)
+        print(f"[spk] 声纹名册：{len(book.entries)} 人")
+    summary = record_session(args, session_id, [], None, None, speaker_book=book,
+                             correction_terms=terms, interest_context=context)
     print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
     if summary.get("transcript_json"):
         print(f"[next] meetingvar digest --session {session_id}")
@@ -393,9 +393,11 @@ def main() -> None:
     rc.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
-    rc.add_argument("--asr", choices=["local", "xfyun"], default="local",
-                    help="识别后端：local=本地 FunASR（含说话人）；xfyun=讯飞语音听写（云端，说话人退化为 spk?）")
-    rc.add_argument("--xfyun-cred", default=None, help="讯飞语音听写凭证 .env 路径（--asr xfyun 时必填）")
+    rc.add_argument("--asr", choices=["local", "xfyun", "xfyun_rtasr"], default="local",
+                    help="local=本地分块；xfyun=IAT分块；xfyun_rtasr=讯飞RTASR连续转写")
+    rc.add_argument("--xfyun-cred", default=None, help="对应讯飞服务凭证文件或目录")
+    rc.add_argument("--interest", choices=["api", "manual"], default="manual",
+                    help="API兴趣事件判断或仅手动保存；不以专业词或相似度直接保存")
 
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)

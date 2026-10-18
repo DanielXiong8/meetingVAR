@@ -1,20 +1,11 @@
-"""meetingvar go <项目路径>：一条命令进入"马上开会"模式。
-
-时序设计（针对"5 分钟后开会"场景）：
-  t+0s    L0 工具层 + L1 jieba 抽取（秒级）→ 立即出可用词表
-  t+5s    录音开始（不等任何模型）——开会不等人
-  t+~3min 本地小模型后台抽完 → 热更新词表与兴趣画像（正在进行的会议即刻生效）
-用户全程只敲一条命令。
-"""
+"""Open a project meeting: confirmed terminology correction and API event capture."""
 from __future__ import annotations
 
 import argparse
-import threading
 import time
 from pathlib import Path
 
-from . import config
-from .cli import load_memory_docs, load_terms
+from .cli import load_terms
 
 
 def load_confirm_terms(project: Path) -> list[str]:
@@ -27,68 +18,19 @@ def cmd_go(args) -> None:
     from .report.generate import digest as digest_
 
     from .live import record_session
-    from .monitor.hotwords import InterestScorer
-    from .memory.calibration import load_threshold
+    from .memory.interest_context import project_context
 
     project = Path(args.project)
     memory_dir = project if project.is_dir() else project.parent
-    repo_dir = project if (project / ".git").exists() or any(project.glob("*.py")) else None
     session_id = f"go_{time.time_ns()}"
-
-    # ---- t+0：快抽取（工具层 + jieba，秒级） ----
-    terms: dict[str, list[str]] = {}
-    if args.no_repo is False and repo_dir:
-        from .memory.repo_extract import repo_terms
-
-        r, _cand = repo_terms(repo_dir)
-        for w, s in r.items():
-            terms.setdefault(w, []).extend(s)
-        print(f"[go] L0 工具层: {len(r)} 词")
-    from .memory.extract import extract_terms
-
-    dterms = extract_terms(memory_dir)
-    for w, s in dterms.items():
-        terms.setdefault(w, []).extend(s)
-    print(f"[go] L1 jieba: 共 {len(terms)} 词 — 立即可用")
-    # 项目确认词表（全库理解/人工确认写入的 #!keep 词）：优先级最高，永远并入
-    kept = load_confirm_terms(project)
-    for w in kept:
-        terms.setdefault(w, ["确认词"])
-    if kept:
-        print(f"[go] 项目确认词表: {len(kept)} 词（全库理解/人工确认，本次必然生效）")
-    wordlist = list(terms)
-    if not wordlist:
-        print("[go] 警告：项目里没抽到词，本次只有手动 VAR（回车）兜底")
-
-    focus = load_memory_docs(memory_dir)
-    l2_threshold = load_threshold(memory_dir)
-    print(f"[calibration] 项目 L2 阈值: {l2_threshold:.2f}")
-
-    # 后台增强只在采集资源成功初始化后启动。
-    def on_session(session):
-        if not args.llm:
-            return
-
-        def slow_extract():
-            from .memory.extract import llm_extract
-            result = llm_extract(memory_dir)
-            if not result:
-                print("[go] 语义层不可用，本次以快词表监听")
-                return
-            llm_terms, persons = result
-            new_words = [word for word in llm_terms if word not in terms]
-            for word in new_words:
-                terms[word] = llm_terms[word]
-            # 纠错词表和监听词表同步更新；不重复添加已有监听词。
-            session.terms.extend(new_words)
-            session.monitor.terms.extend(word for word in llm_terms if word not in session.monitor.terms)
-            if focus:
-                session.scorer = InterestScorer(focus + list(llm_terms), threshold=l2_threshold)
-            for person in persons:
-                print(f"  [go+] 人物: {person.get('name')} — {person.get('role', '?')}")
-            print(f"[go+] 语义层热更新完成: +{len(new_words)} 词，本场即刻生效")
-
-        threading.Thread(target=slow_extract, daemon=True).start()
+    kept = load_confirm_terms(memory_dir)
+    print(f"[go] 专业词纠错: {len(kept)} 个确认词；不执行结巴/相似度自动保存")
+    if getattr(args, "llm", False):
+        args.interest = "api"
+    if not hasattr(args, "interest"):
+        args.interest = "manual"
+    print(f"[go] 兴趣判断: {'API事件判断' if args.interest == 'api' else '仅手动保存'}")
+    context = project_context(memory_dir, kept)
 
     # 声纹名册：按项目存放（<项目>/meetingvar/speakers.json）——同一个项目里的常用人
     # 第一次点过名，下次开会自动识别。
@@ -99,8 +41,8 @@ def cmd_go(args) -> None:
     if book.entries:
         print(f"[spk] 声纹名册：{len(book.entries)} 人（{'、'.join(e['name'] for e in book.entries)}），新说话人将先比对名册")
 
-    summary = record_session(args, session_id, wordlist, focus, l2_threshold, on_session,
-                             speaker_book=book)
+    summary = record_session(args, session_id, [], None, None, speaker_book=book,
+                             correction_terms=kept, interest_context=context)
     print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
 
     # 项目归档：纪要自动进 <项目>/meetingvar/minutes/，供跨会话热词库演化
@@ -121,7 +63,7 @@ def cmd_go(args) -> None:
 
 
 def register(sub) -> None:
-    g = sub.add_parser("go", help="一条命令开会：拖入项目路径，秒级起监听，语义层后台增强")
+    g = sub.add_parser("go", help="项目会议：专业词纠错、API兴趣判断或手动取证")
     g.add_argument("project", help="项目文件夹（代码+文档混放也行）")
     g.add_argument("--no-repo", action="store_true", help="跳过代码符号抽取")
     g.add_argument("--no-screen", action="store_true")
@@ -130,10 +72,12 @@ def register(sub) -> None:
                    help="采集源：both=系统声音+麦克风（默认）/ loopback=仅系统声音 / mic=仅麦克风")
     g.add_argument("--mic-device", type=int, help="麦克风设备编号；缺省跟随系统默认麦克风")
     g.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算）")
-    g.add_argument("--llm", action="store_true", help="后台叠加本地/云端小模型语义抽取并热更新")
+    g.add_argument("--llm", action="store_true", help="兼容选项：启用API兴趣判断，不再扩展自动触发词表")
+    g.add_argument("--interest", choices=["api", "manual"], default="manual",
+                   help="api=大模型判断兴趣事件；manual=仅手动保存；专业词始终只用于纠错")
     g.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     g.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
-    g.add_argument("--asr", choices=["local", "xfyun"], default="local",
-                   help="识别后端：local=本地 FunASR（含说话人）；xfyun=讯飞语音听写（云端，说话人退化为 spk?）")
-    g.add_argument("--xfyun-cred", default=None, help="讯飞语音听写凭证 .env 路径（--asr xfyun 时必填）")
+    g.add_argument("--asr", choices=["local", "xfyun", "xfyun_rtasr"], default="local",
+                   help="local=本地分块；xfyun=IAT分块；xfyun_rtasr=讯飞RTASR连续转写")
+    g.add_argument("--xfyun-cred", default=None, help="对应讯飞服务凭证文件或目录")

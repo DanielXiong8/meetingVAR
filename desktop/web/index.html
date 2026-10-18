@@ -10,7 +10,7 @@
 <header class="topbar">
   <div class="brand"><span class="logodot"></span> meetingVAR <span class="ver" id="ver"></span></div>
   <div class="topbar-right">
-    <span class="llm-pill" id="llmPill" title="本地 LLM 服务（选词人/语义层）">LLM ○</span>
+    <span class="llm-pill" id="llmPill" title="兴趣API的配置状态；实际调用状态见主页">兴趣API 未配置</span>
     <span class="status-pill" id="statusPill">● 待机</span>
   </div>
 </header>
@@ -44,9 +44,29 @@
         <span id="statHits">命中 0</span>
         <span id="statSpeakers">说话人 —</span>
       </div>
-      <div class="card ticker">
-        <div class="ticker-title">最近听到 <span class="muted">（转写实时流，仅本机）</span></div>
-        <div id="ticker" class="ticker-body"></div>
+      <div class="capture-strip" role="status">
+        <span id="captureStatus">尚未开始采集</span>
+        <span id="audioStatus">音频 —</span><meter id="audioLevel" min="0" max="1" value="0" aria-label="混合音频电平"></meter>
+        <span id="asrStatus">字幕 —</span>
+      </div>
+      <div class="card interest-card">
+        <label for="interestFocus"><b>本场关注事项</b> <span class="muted">可留空，按重要决策、分工、风险和新进展判断</span></label>
+        <textarea id="interestFocus" rows="2" maxlength="6000" placeholder="例如：架构是否定稿、任务由谁负责、老师最终采用哪种定义"></textarea>
+        <div id="interestStatus" class="muted" role="status">API兴趣判断未运行；专业词不再直接触发保存</div>
+      </div>
+      <div class="meeting-workspace">
+        <div class="card ticker">
+          <div class="ticker-title"><b>实时字幕</b><span id="captionCount" class="muted">0 句</span><button id="btnFollow" class="btn">跟随最新</button></div>
+          <div id="ticker" class="ticker-body" role="log" aria-label="会议字幕，可滚动回看"></div>
+          <div id="partialCaption" class="partial-caption" aria-live="polite" hidden></div>
+          <div id="captionHelp" class="muted">讯飞RTASR临时字幕持续更新，句尾定稿后进入兴趣判断。</div>
+        </div>
+        <div class="card screen-card">
+          <div class="ticker-title"><b>当前录制画面</b></div>
+          <div class="screen-preview"><img id="screenPreview" alt="当前录制屏幕预览" hidden><span id="screenEmpty">开始会议后显示预览</span></div>
+          <div id="screenStatus" class="muted">轻量录屏 · 目标 5 帧/秒 · 最宽 1600 像素</div>
+          <div class="muted">采集系统默认屏幕。只保存命中片段，回溯目标 5 分钟；实际覆盖和内存限制会显示在此处。</div>
+        </div>
       </div>
     </section>
 
@@ -112,17 +132,24 @@
       <h3 class="set-h">识别引擎（实时转写）</h3>
       <label class="field"><span>引擎</span>
         <select id="cfgAsr" class="input">
-          <option value="local">本地 FunASR（推荐：离线可跑，带说话人分离）</option>
-          <option value="xfyun">讯飞语音听写（云端：联网即用，无说话人分离→全场 spk?）</option>
+          <option value="xfyun_rtasr">讯飞 RTASR（推荐：持续连接，实时临时字幕＋句尾定稿）</option>
+          <option value="xfyun">讯飞 IAT（分块听写备用，不是连续实时转写）</option>
+          <option value="local">本地 FunASR（离线分块备用，质量与延迟需按设备验证）</option>
         </select></label>
       <div class="row" id="xfyunRow">
-        <input id="cfgXfyunDir" class="input" placeholder="讯飞控制台下载的文件夹（内含 语音听写 / 录音文件转写 子目录）">
+        <input id="cfgXfyunDir" class="input" placeholder="讯飞服务文件夹（内含 实时语音转写 / 语音听写 / 录音文件转写）">
         <button id="btnXfyunDir" class="btn">选择…</button>
         <button id="btnXfyunCheck" class="btn">检测</button>
       </div>
-      <div id="xfyunResult" class="muted">讯飞文件夹选好后点「检测」：认领凭证并联网探活（密钥只读不显示）。</div>
+      <div id="xfyunResult" class="muted">RTASR使用“实时语音转写”服务凭证；检测只检查配置，不发送音频。开会后音频持续发送到讯飞，当前不自动识别人名或弹出点名。</div>
 
-      <h3 class="set-h">模型服务（LLM：选词人 / 语义层 / 纪要）</h3>
+      <h3 class="set-h">自动保存与API兴趣判断</h3>
+      <label class="field"><span>保存方式</span><select id="cfgInterestMode" class="input">
+        <option value="api">API判断重要事件＋手动VAR</option>
+        <option value="manual">仅手动VAR（不调用兴趣API）</option>
+      </select></label>
+      <div class="muted">API判断使用下方自定义地址和模型。最近定稿转写、关注事项、确认词及已保存的项目阅读摘要会发送到该API；只提到一个词不会直接保存。API失败时提示，不退回规则触发。</div>
+      <h3 class="set-h">项目理解模型（本地可选）与自定义API</h3>
       <label class="field"><span>厂商</span>
         <select id="cfgProvider" class="input">
           <option value="local">本地模型（内置 llama.cpp 服务，离线免费）</option>
@@ -144,9 +171,9 @@
           <input id="cfgModel" class="input" placeholder="deepseek-chat"></label>
         <label class="field"><span>API Key（只存本机配置目录，不随纪要/仓库外发）</span>
           <input id="cfgApiKey" class="input" type="password" placeholder="sk-…"></label>
-        <div class="row"><button id="btnTestLlm" class="btn">测试连接</button><span id="llmTestResult" class="muted"></span></div>
+        <div class="row"><button id="btnTestLlm" class="btn">测试生成（少量API用量）</button><span id="llmTestResult" class="muted"></span></div>
       </div>
-      <label class="checkrow"><input type="checkbox" id="cfgUseLlm"> 开会时启用 LLM 语义层（本地厂商需服务在线）</label>
+      <div class="muted">专业词表只用于保守纠错；自动保存只由API事件判断或手动VAR触发。</div>
 
       <div class="row">
         <button id="btnTestEngine" class="btn">测试引擎</button>
