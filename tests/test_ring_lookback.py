@@ -8,7 +8,7 @@
 被测承诺：
   1. 每格时间戳与其音频长度严格一致（ts 间隔 1.0s ⇔ 音频 32000 字节）；
   2. 触发时保存 [trigger-LOOKBACK, trigger] 已经到达的数据（不含未来数据），
-     格对齐下界 = trigger-LOOKBACK，上界 = floor(trigger)-1；
+     窗口两端按采样点裁剪，不足一秒的两端也保留；
   3. 无重复拼接、无缺口、无越界（标记音频逐半秒解码后必须连续递增）；
   4. 缓冲区容量 = RING_SECONDS 格，旧数据被正确淘汰（不会保留过早数据）。
 """
@@ -81,15 +81,13 @@ class RingLookbackTests(unittest.TestCase):
     def _expected(trig: float) -> tuple[list[int], int]:
         """固定语义下的期望标记序列（半秒粒度）与期望采样数。
 
-        片段 = [trigger-LOOKBACK, trigger] 内已到达的 1s 整格 + 不足 1s 的尾块；
-        下界按格对齐上取整（ceil(trigger-LOOKBACK)），尾块只贡献末半个/不足半秒。
+        片段 = [trigger-LOOKBACK, trigger] 内已到达的全部采样点；
+        非整秒下界也精确裁剪，不把半秒有效证据丢掉。
         """
-        first = max(0, math.ceil(trig - LOOKBACK - 1e-9))
+        first = max(0.0, trig - LOOKBACK)
         levels: list[int] = []
-        for k in range(first, math.floor(trig)):
-            levels.extend([k, k])
-        if trig - math.floor(trig) > 1e-9:
-            levels.append(math.floor(trig))  # 尾块（解码只含完整半块）
+        for half in range(int(round(first * 2)), int(round(trig * 2))):
+            levels.append(half // 2)
         n_samples = int(round((trig - first) * SAMPLES_PER_SECOND))
         return levels, n_samples
 
@@ -126,7 +124,7 @@ class RingLookbackTests(unittest.TestCase):
                     _c, wav = self._clip(s, clip_id)
                     halves, n_samples = decode_marker_halves(wav)
                     expected, n_expected = self._expected(trig)
-                    # 期望：只保存触发前已到达的数据；下界 = trigger-LOOKBACK（格对齐上取整）
+                    # 期望：按采样点保存触发前已到达的数据。
                     self.assertEqual(halves, expected, "音频标记序列不连续（重复/缺口/越界）或窗口边界不符")
                     # 音频长度与时间戳相互一致
                     self.assertEqual(n_samples, n_expected)
@@ -165,6 +163,28 @@ class RingLookbackTests(unittest.TestCase):
         _c, wav = self._clip(s, clip_id)
         halves, _n = decode_marker_halves(wav)
         assert_contiguous_levels(self, halves, 301, 600)
+
+    def test_gap_keeps_original_timestamps_and_marks_missing_audio_with_silence(self):
+        from array import array
+        from meetingvar.pool.store import Pool
+        import wave
+        install_fake_asr(pipeline_mod, FakeASR())
+        session = Session("gap", terms=[], echo=False, device="cpu")
+        session.ingest_pcm(array("h", [1000] * 8000).tobytes(), T0)
+        session.ingest_pcm(array("h", [2000] * 8000).tobytes(), T0 + 1.0)
+        session.trigger_manual()
+        clip = Pool("gap").list_clips()[0]
+        self.assertEqual((clip["audio"]["start_ts"], clip["audio"]["end_ts"]), (0.0, 1.5))
+        with wave.open(clip["audio"]["path"], "rb") as wav:
+            samples = array("h", wav.readframes(wav.getnframes()))
+        self.assertEqual(samples[::8000].tolist(), [1000, 0, 2000])
+
+    def test_overlapping_input_is_rejected(self):
+        install_fake_asr(pipeline_mod, FakeASR())
+        session = Session("overlap_input", terms=[], echo=False, device="cpu")
+        session.ingest_pcm(bytes(32000), T0)
+        with self.assertRaisesRegex(ValueError, "重叠或倒退"):
+            session.ingest_pcm(bytes(32000), T0 + 0.5)
 
 
 if __name__ == "__main__":

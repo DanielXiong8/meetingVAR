@@ -110,7 +110,8 @@ def _thin_no_llm(transcript: list[dict], terms_hit: dict[str, int]) -> str:
         lines.extend(f"- [{_fmt_ts(x['ts'])}] {x['speaker']}: {x['text']}" for x in chapter)
         lines.append("")
 
-    known = {w for w in (terms_hit or {})}
+    # A detected technical term is not evidence of a person's identity.
+    known = set()
     import json as _json
     persons_file = config.DATA_DIR / "persons.json"
     if persons_file.exists():
@@ -160,8 +161,6 @@ def digest(session_id: str, use_llm: bool = False) -> Path | None:
     pool = Path(config.POOL_DIR / session_id)
     for clip_file in sorted(pool.glob("*.json")):
         c = json.loads(clip_file.read_text(encoding="utf-8"))
-        if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
-            continue
         if "trigger" not in c:  # 跳过 transcript.json / summary.json 等非片段文件
             continue
         tr = "\n".join(f"[{_fmt_ts(l['ts'])}] {l['speaker']}: {l['text']}" for l in c["transcript"]) or "（回溯窗内无转写句）"

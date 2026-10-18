@@ -1,0 +1,215 @@
+/* meetingVAR 桌面壳样式 —— oCam 气质：紧凑、克制、一个主角（录制键） */
+:root {
+  --bg: #eef0f3;
+  --top: #2b3440;
+  --top-fg: #e8ecf1;
+  --card: #ffffff;
+  --fg: #1f2733;
+  --muted: #6b7684;
+  --line: #dde2e8;
+  --accent: #e0432f;
+  --accent-dark: #c23723;
+  --ok: #2f9e63;
+  --blue: #2f6fed;
+}
+* { box-sizing: border-box; }
+/* hidden 属性必须永远生效：作者样式里的 display:flex 等会覆盖 UA 的 [hidden]{display:none}，
+   点名弹窗曾因此"按钮点了没反应/回车关不掉"（实测坑，勿删 !important） */
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px; color: var(--fg); background: var(--bg);
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+/* ---------- 顶栏 ---------- */
+.topbar {
+  height: 44px; flex: 0 0 44px; background: var(--top); color: var(--top-fg);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 14px;
+  user-select: none;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .3px; }
+.logodot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.ver { font-weight: 400; color: #93a0af; font-size: 12px; }
+.status-pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,.12); color: #c8d2dc;
+}
+.status-pill.live { background: rgba(224,67,47,.25); color: #ffb8ad; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.llm-pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,.08); color: #93a0af;
+}
+.llm-pill.on { background: rgba(47,158,99,.3); color: #b7e6c9; }
+/* ---------- 布局 ---------- */
+.app { flex: 1 1 auto; display: flex; min-height: 0; }
+.side { width: 148px; flex: 0 0 148px; padding: 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.navbtn {
+  text-align: left; padding: 9px 12px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--fg); font: inherit; cursor: pointer;
+}
+.navbtn:hover { background: rgba(0,0,0,.05); }
+.navbtn.active { background: var(--card); box-shadow: 0 1px 2px rgba(20,30,40,.08); font-weight: 600; }
+main { flex: 1 1 auto; min-width: 0; padding: 12px 12px 16px 4px; overflow-y: auto; }
+/* 右栏：项目文件树（工作区居中；参照 ZCode 的侧栏信息结构） */
+.rightpanel {
+  width: 336px; flex: 0 0 336px; margin: 12px 14px 16px 2px;
+  background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(20,30,40,.08);
+  display: flex; flex-direction: column; min-height: 0; padding: 10px 6px 10px 12px;
+}
+.rightpanel .tree-body { flex: 1 1 auto; overflow: auto; font-size: 13px; line-height: 1.5; min-height: 60px; }
+.rp-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 0 4px 2px; }
+.rp-refresh { margin-left: auto; padding: 1px 9px; font-size: 13px; line-height: 1.3; }
+.rp-proj { font-size: 11.5px; padding: 0 4px 8px; word-break: break-all; }
+@media (max-width: 1000px) { .rightpanel { display: none; } }
+/* 会议库：项目分组 */
+.lib-groups { display: flex; flex-direction: column; gap: 6px; }
+.lib-group { background: var(--card); border-radius: 10px; box-shadow: 0 1px 2px rgba(20,30,40,.06); overflow: hidden; }
+.lib-proj { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; }
+.lib-proj:hover { background: #f7f8fa; }
+.lib-proj.open { background: #f2f4f7; }
+.lib-name { font-weight: 600; }
+.lib-path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.lib-meta { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
+.lib-sessions { border-top: 1px solid var(--line); }
+.sess-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 34px; cursor: pointer; font-size: 12.5px; }
+.sess-row:hover { background: #f7f8fa; }
+.sess-row .sid { font-variant-numeric: tabular-nums; }
+.sess-row .meta { margin-left: auto; }
+.set-h { margin: 16px 0 6px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+.checkrow { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; cursor: pointer; }
+.page { display: none; }
+.page.active { display: block; }
+/* ---------- 通用 ---------- */
+.card { background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(20,30,40,.08); padding: 14px; }
+.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.muted { color: var(--muted); font-size: 12px; }
+.input {
+  font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--fg); min-width: 0; flex: 1 1 220px;
+}
+/* 纵向布局里 input 不能按 220px 基准增长（否则弹窗/表单里被撑成大块） */
+.modal-card .input, .field > .input { flex: 0 0 auto; height: 36px; }
+.btn {
+  font: inherit; padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--fg); cursor: pointer;
+}
+.btn:hover { background: #f7f8fa; }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--top); color: #fff; border-color: var(--top); }
+.btn-primary:hover { background: #37424f; }
+/* ---------- 主页 ---------- */
+.projectcard { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.pc-label { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.pc-path { font-weight: 600; word-break: break-all; }
+.recrow { display: flex; align-items: center; gap: 22px; padding: 6px 2px 10px; }
+.recbtn {
+  width: 104px; height: 104px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 700;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  box-shadow: 0 6px 18px rgba(224,67,47,.35);
+}
+.recbtn:hover { background: var(--accent-dark); }
+.recbtn .recdot { width: 22px; height: 22px; border-radius: 50%; background: #fff; }
+.recbtn.live { background: #333c47; box-shadow: 0 6px 18px rgba(30,40,50,.35); }
+.recbtn.live .recdot { border-radius: 4px; width: 18px; height: 18px; animation: pulse 1.6s infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.recside { display: flex; flex-direction: column; gap: 8px; }
+.statusline {
+  display: flex; gap: 22px; padding: 8px 2px 12px; color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.statusline span { background: var(--card); border-radius: 8px; padding: 6px 12px; box-shadow: 0 1px 2px rgba(20,30,40,.06); }
+.ticker-title { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.ticker-title b { color: var(--fg); font-size: 15px; }
+.ticker-title .btn { margin-left: auto; padding: 4px 8px; font-size: 12px; }
+.ticker-body { height: clamp(240px, 42vh, 520px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 4px 12px; margin-bottom: 8px; }
+.tk { font-size: 16px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.capture-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; font-size: 12px; }
+.capture-strip meter { width: 76px; }
+.interest-card { margin-bottom: 12px; }
+.interest-card textarea { display: block; width: 100%; resize: vertical; min-height: 58px; max-height: 140px; margin: 8px 0; padding: 8px 10px; font: inherit; border: 1px solid var(--line); border-radius: 8px; }
+.partial-caption { padding: 8px 10px; margin-bottom: 8px; background: #edf4ff; border-left: 3px solid var(--blue); white-space: pre-wrap; font-size: 16px; line-height: 1.6; max-height: 130px; overflow: auto; }
+.partial-caption::before { content: "正在说 · "; color: var(--muted); font-size: 12px; }
+.warn { color: #ad421f; }
+.meeting-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(210px, 1fr); gap: 12px; }
+.screen-preview { aspect-ratio: 16 / 10; background: #17212d; color: #a4b5c5; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 10px; }
+.screen-preview img { width: 100%; height: 100%; object-fit: contain; }
+.screen-card .muted { line-height: 1.7; margin-top: 6px; }
+.screen-card { align-self: start; }
+.replay-screen { width: 100%; max-height: 420px; object-fit: contain; background: #17212d; border-radius: 8px; }
+@media (max-width: 1250px) { .meeting-workspace { grid-template-columns: 1fr; } .screen-preview { max-height: 220px; } }
+@media (min-width: 1001px) and (max-width: 1450px) { .rightpanel { width: 240px; flex-basis: 240px; } }
+.tk .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.tk .s { font-weight: 600; margin-right: 6px; }
+.tk.hit { background: #fdeceA; border-radius: 6px; padding: 2px 6px; }
+.tk.sys { color: var(--muted); font-size: 12.5px; }
+.tk.err { color: var(--accent); font-size: 12.5px; background: #fdeceA; border-radius: 6px; padding: 2px 6px; }
+.tk .s { color: var(--muted); font-weight: 600; }
+/* ---------- 项目页 ---------- */
+.path { color: var(--muted); word-break: break-all; }
+.scan { margin: 4px 0; }
+.scan h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+/* ---------- 文件树（右栏共用：VSCode 式） ---------- */
+.tree-row { display: flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+.tree-dir { cursor: pointer; }
+.tree-row:hover { background: #f0f2f6; }
+.tree-ico { flex: 0 0 auto; width: 18px; text-align: center; }
+.tree-name { overflow: hidden; text-overflow: ellipsis; }
+.tree-size { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 10px; font-size: 12.5px;
+}
+.chip b { color: var(--blue); font-weight: 600; }
+/* 全库理解：可勾选的候选词 chip */
+.und-chips { margin-top: 6px; }
+.und-chip { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.und-chip input { margin: 0; accent-color: var(--blue); }
+.und-chip:has(input:checked) { border-color: var(--blue); background: rgba(37, 99, 235, .06); }
+/* 原始抽取折叠区 / 未就绪警示 */
+.rawterms { margin-top: 4px; }
+.rawterms summary { cursor: pointer; font-size: 12.5px; }
+.pick-warn { color: #b45309; margin-top: 4px; }
+/* ---------- 会议库 ---------- */
+.sessions { display: flex; flex-direction: column; gap: 6px; }
+.sess {
+  background: var(--card); border-radius: 10px; padding: 10px 14px; cursor: pointer;
+  display: flex; gap: 14px; align-items: center; box-shadow: 0 1px 2px rgba(20,30,40,.06);
+}
+.sess:hover { outline: 2px solid #cfd7e0; }
+.sess .sid { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sess .meta { color: var(--muted); font-size: 12px; }
+.sess .badge { margin-left: auto; font-size: 12px; color: var(--muted); }
+.detail { margin-top: 12px; }
+.detail h2 { font-size: 15px; margin: 4px 0 8px; }
+.detail pre { white-space: pre-wrap; word-break: break-all; font-family: inherit; margin: 6px 0; }
+.clip {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.clip .head { display: flex; gap: 10px; align-items: center; }
+.clip .layer { font-weight: 700; color: var(--accent); }
+.clip audio { width: 100%; }
+.clip video { width: 100%; max-height: 240px; border-radius: 8px; }
+.md h1, .md h2, .md h3 { font-size: 14.5px; margin: 10px 0 4px; }
+.md ul { margin: 4px 0; padding-left: 20px; }
+.md blockquote { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+/* ---------- 弹窗/Toast ---------- */
+.modal {
+  position: fixed; inset: 0; background: rgba(20,28,38,.45);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-card { width: 360px; display: flex; flex-direction: column; gap: 10px; }
+.modal-title { font-weight: 700; font-size: 15px; }
+.modal-sub { color: var(--muted); font-size: 12.5px; word-break: break-all; }
+.toast {
+  position: fixed; right: 18px; bottom: 18px; max-width: 380px; z-index: 60;
+  background: #22303d; color: #fff; border-radius: 10px; padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(10,20,30,.35); font-size: 13px;
+}
+.field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.field > span { font-size: 12px; color: var(--muted); }

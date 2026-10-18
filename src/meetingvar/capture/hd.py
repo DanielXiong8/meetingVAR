@@ -265,6 +265,18 @@ class HDCapture:
             tail = (r.stderr or b"")[-300:].decode("utf-8", "replace")
             print(f"[hd] 合成失败（ffmpeg rc={r.returncode}）: {tail}；保留原始帧于 {self.session_dir}")
             return
+        # 完整解码验证（队友分支的加固，采纳）：rc=0 且文件非空仍可能不可解码
+        # （moov atom 缺损一类）——解不出来就当失败，源帧绝不删除
+        verify_cmd = [ff, "-v", "error", "-i", str(out), "-f", "null", "-"]
+        try:
+            v = subprocess.run(verify_cmd, capture_output=True, timeout=300)
+        except Exception as e:  # noqa: BLE001
+            print(f"[hd] 解码验证异常（{e}）：保留原始帧于 {self.session_dir}")
+            return
+        if v.returncode != 0:
+            tail = (v.stderr or b"")[-300:].decode("utf-8", "replace")
+            print(f"[hd] 解码验证失败: {tail}；保留原始帧于 {self.session_dir}")
+            return
         for p in self.session_dir.glob("f_*.rgb"):
             p.unlink()
         note = "，已达临时预算提前结束" if self._budget_hit else ""

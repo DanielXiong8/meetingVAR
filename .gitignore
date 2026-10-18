@@ -17,9 +17,16 @@ data/
 # ===== Python =====
 __pycache__/
 *.pyc
+*.egg-info/
 venv/
 .venv/
+.venv-*/
+.tools/
+.runtimes/
 .env
+.env.*
+!.env.example
+.secrets/
 .pytest_cache/
 
 # ===== IDE / 系统 =====
@@ -28,3 +35,10 @@ venv/
 .DS_Store
 Thumbs.db
 ~$*
+
+# ===== 桌面壳构建产物 =====
+/dist/
+/build/
+/dist_installer/
+meetingVAR.spec
+meetingVAR-setup.spec

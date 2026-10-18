@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Literal, Optional
 
-Layer = Literal["L1", "L2", "L3"]  # L1 热词规则 / L2 系统一打分 / L3 手动热键
+Layer = Literal["L1", "L2", "L3"]  # L1/L2 历史规则；L3 手动或API事件（来源由evidence区分）
 ReviewStatus = Literal["pending", "useful", "useless"]
 
 
