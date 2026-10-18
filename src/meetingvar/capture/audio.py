@@ -1,8 +1,8 @@
 """音频采集：系统环回（听"别人说的"）+ 麦克风（听"你说的"）双源。
 
 环形缓冲存 (时间戳, 16k 单声道 PCM bytes)，命中回溯时按时间窗拼装。
-DualCapture 把两路按墙钟时间戳叠进同一窗口（audioop 饱和混音）——
-在线会议：远端声音走环回、你的声音走麦克风，两边都不丢。
+DualCapture 把两路按同一采样时间轴叠进窗口（audioop 饱和混音）；
+正常异步到达时保留快路尾段等待慢路，持续缺路时明确提示并降级。
 """
 from __future__ import annotations
 
@@ -47,6 +47,18 @@ def mix_window(placed: list[tuple[float, bytes]], win_start: float, total_bytes:
         buf = _place_window(data, start, win_start, total_bytes)
         mixed = buf if mixed is None else audioop.add(mixed, buf, 2)
     return mixed if mixed is not None else b"\x00" * total_bytes
+
+
+def _slice_frames(frames: list[tuple[float, bytes]], start_ts: float,
+                  end_ts: float | None = None) -> list[tuple[float, bytes]]:
+    selected = []
+    for timestamp, data in frames:
+        count = len(data) // 2
+        lo = max(0, round((start_ts - timestamp) * config.ASR_RATE))
+        hi = count if end_ts is None else min(count, round((end_ts - timestamp) * config.ASR_RATE))
+        if hi > lo:
+            selected.append((timestamp + lo / config.ASR_RATE, data[lo * 2:hi * 2]))
+    return selected
 
 
 def pick_live_endpoint(pa, probe_seconds: float = 1.5) -> dict:
@@ -111,10 +123,13 @@ class AudioCapture:
             raise
         self._ring: deque[tuple[float, bytes]] = deque(maxlen=ring_seconds * 10)
         self._state = None  # audioop.ratecv 状态
-        self._next_audio_ts: float | None = None
+        self._audio_origin_ts: float | None = None
+        self._captured_samples = 0
+        self._last_audio_end: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self.session_start = time.time()
+        self._session_clock = time.monotonic()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -122,37 +137,73 @@ class AudioCapture:
     def name(self) -> str:
         return self._dev["name"]
 
+    def _append_pcm(self, mono: bytes, captured_at: float) -> None:
+        if len(mono) % 2:
+            raise ValueError("16-bit PCM 必须包含完整采样点")
+        if not mono:
+            return
+        with self._lock:
+            if self._audio_origin_ts is None:
+                start = captured_at - len(mono) / 2 / config.ASR_RATE
+                self._audio_origin_ts = max(start, self._last_audio_end) if self._last_audio_end is not None else start
+                self._captured_samples = 0
+            # Increment integer sample counts, not large Unix floating timestamps.
+            start = self._audio_origin_ts + self._captured_samples / config.ASR_RATE
+            self._ring.append((start, mono))
+            self._captured_samples += len(mono) // 2
+            self._last_audio_end = self._audio_origin_ts + self._captured_samples / config.ASR_RATE
+
     def _loop(self) -> None:
+        interrupted = False
         while not self._stop.is_set():
             try:
-                raw = self._stream.read(self._frames_per_read, exception_on_overflow=False)
+                raw = self._stream.read(self._frames_per_read, exception_on_overflow=True)
             except OSError:
-                time.sleep(0.1)
+                if not interrupted and not self._stop.is_set():
+                    print("[rec] 音频采集发生中断，恢复后将重新对齐时间；缺失部分不会当作已录到", flush=True)
+                interrupted = True
+                self._state = None
+                with self._lock:
+                    self._audio_origin_ts = None
+                self._stop.wait(0.1)
                 continue
             mono, self._state = to_pcm16k(raw, self._channels, self._rate, self._state)
-            with self._lock:
-                duration = len(mono) / 2 / config.ASR_RATE
-                start = self._next_audio_ts
-                if start is None:
-                    start = time.time() - duration
-                self._ring.append((start, mono))
-                self._next_audio_ts = start + duration
+            captured_at = self.session_start + time.monotonic() - self._session_clock
+            self._append_pcm(mono, captured_at)
+            if interrupted:
+                print("[rec] 音频采集已恢复", flush=True)
+                interrupted = False
 
     def frames_since(self, since_ts: float) -> list[tuple[float, bytes]]:
         with self._lock:
-            return [(t, b) for t, b in self._ring if t >= since_ts - 0.5 / config.ASR_RATE]
+            frames = list(self._ring)
+        return _slice_frames(frames, since_ts)
 
     def ingest_since(self, since_ts: float) -> tuple[bytes, float]:
-        """取出自 since_ts 以来的全部音频，返回 (pcm, 起始绝对时间戳)。"""
+        """Read the next contiguous run without consuming a partial boundary block."""
         items = self.frames_since(since_ts)
         if not items:
-            return b"", time.time()
-        return b"".join(b for _, b in items), items[0][0]
+            return b"", since_ts
+        start = items[0][0]
+        samples = 0
+        pieces = []
+        for timestamp, data in items:
+            offset = round((timestamp - start) * config.ASR_RATE)
+            if offset > samples:
+                break  # A real missing interval remains a discontinuity to the caller.
+            skip = max(0, samples - offset)
+            data = data[skip * 2:]
+            if data:
+                pieces.append(data)
+                samples += len(data) // 2
+        return b"".join(pieces), start
 
     def span_pcm(self, start_ts: float, end_ts: float) -> bytes:
         with self._lock:
-            items = [(t, b) for t, b in self._ring if start_ts <= t <= end_ts]
-        return b"".join(b for _, b in items)
+            frames = list(self._ring)
+        items = _slice_frames(frames, start_ts, end_ts)
+        total_bytes = max(0, round((end_ts - start_ts) * config.ASR_RATE)) * 2
+        return mix_window(items, start_ts, total_bytes)
 
     def stop(self) -> None:
         self._stop.set()
@@ -167,8 +218,8 @@ class AudioCapture:
 class DualCapture:
     """系统环回 + 麦克风 双源采集（在线会议：远端走环回、自己走麦克风，两头都录）。
 
-    两路各自线程采集、各自按墙钟锚定时间戳（与 AudioCapture 同一契约）；
-    ingest_since 把两路叠进同一时间窗（饱和混音）。麦克风打不开时如实降级为仅环回。
+    两路各自线程采集，以初始时钟和整数采样数确定时间；
+    ingest_since 按共同可用的结束位置混音。麦克风打不开时如实降级为仅环回。
     """
 
     def __init__(self, loopback_index: int | None = None, mic_index: int | None = None,
@@ -183,6 +234,10 @@ class DualCapture:
         ls = getattr(self._loop, "session_start", time.time())
         ms = getattr(self._mic, "session_start", ls) if self._mic is not None else ls
         self.session_start = min(ls, ms)
+        self._mix_origin: float | None = None
+        self._source_progress: dict[int, dict] = {}
+        self._max_source_lag = 0.35
+        self._stopped = False
 
     @property
     def name(self) -> str:
@@ -191,22 +246,52 @@ class DualCapture:
         return f"系统[{self._loop.name}]（麦克风不可用，已降级）"
 
     def ingest_since(self, since_ts: float) -> tuple[bytes, float]:
-        # 用子源的 ingest_since（与单源同一契约；测试沙箱的虚拟采集也只实现这一个）
         caps = [c for c in (self._loop, self._mic) if c is not None]
         placed: list[tuple[float, bytes]] = []
-        end = since_ts
-        for c in caps:
-            data, start = c.ingest_since(since_ts)
+        ends = []
+        waiting = False
+        now = time.monotonic()
+        for index, cap in enumerate(caps):
+            progress = self._source_progress.setdefault(index, {"end": None, "at": now, "stalled": False})
+            data, start = cap.ingest_since(since_ts)
             if data:
+                end = start + len(data) / 2 / config.ASR_RATE
                 placed.append((start, data))
-                end = max(end, start + len(data) / 2 / config.ASR_RATE)
-        if not placed:
-            return b"", time.time()
-        total_bytes = int((end - since_ts) * config.ASR_RATE) * 2
-        mixed = mix_window(placed, since_ts, total_bytes)
-        return mixed, min(start for start, _ in placed)
+                ends.append(end)
+                if progress["end"] is None or end > progress["end"] + 0.5 / config.ASR_RATE:
+                    progress.update(end=end, at=now)
+                    if progress["stalled"]:
+                        print(f"[rec] {'系统' if index == 0 else '麦克风'}音频输入恢复", flush=True)
+                    progress["stalled"] = False
+            elif not self._stopped:
+                if now - progress["at"] < self._max_source_lag:
+                    waiting = True
+                elif not progress["stalled"]:
+                    print(f"[rec] {'系统' if index == 0 else '麦克风'}音频暂缺，继续保留另一来源；缺失区间将补静音", flush=True)
+                    progress["stalled"] = True
+        if not placed or waiting:
+            return b"", since_ts
+        first = min(start for start, _ in placed)
+        if self._mix_origin is None:
+            self._mix_origin = max(since_ts, first)
+        # One grid defines both the bytes and their timestamp. Faster tails stay
+        # in each source ring until the other source reaches the same watermark.
+        lo = max(round((since_ts - self._mix_origin) * config.ASR_RATE),
+                 round((first - self._mix_origin) * config.ASR_RATE))
+        watermark = min(ends)
+        hi = round((watermark - self._mix_origin) * config.ASR_RATE)
+        if hi <= lo:
+            return b"", since_ts
+        start = self._mix_origin + lo / config.ASR_RATE
+        mixed = mix_window(placed, start, (hi - lo) * 2)
+        return mixed, start
 
     def stop(self) -> None:
-        self._loop.stop()
-        if self._mic is not None:
-            self._mic.stop()
+        try:
+            self._loop.stop()
+        finally:
+            try:
+                if self._mic is not None:
+                    self._mic.stop()
+            finally:
+                self._stopped = True

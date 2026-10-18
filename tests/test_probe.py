@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -14,8 +15,14 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "desktop"))
 
-from meetingvar.memory import probe  # noqa: E402
+# No real cwd/.env is opened, including when this module runs on its own.
+with mock.patch("meetingvar.env.load_local_env"):
+    from meetingvar import config
+    from meetingvar import llm
+    from meetingvar.memory import probe
+import engine_bridge
 
 BODY = "温水说了一句话。" * 150  # 1200 字
 DOC_A = "第一卷 序\n" + BODY + "\n第一败 转学生\n" + BODY + "\n特典 短篇\n" + BODY
@@ -23,7 +30,23 @@ DOC_A = "第一卷 序\n" + BODY + "\n第一败 转学生\n" + BODY + "\n特典 
 
 class ProbeTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="mv_probe_"))
+        temporary = tempfile.TemporaryDirectory(prefix="mv_probe_")
+        self.addCleanup(temporary.cleanup)
+        self.tmp = Path(temporary.name)
+        settings = mock.patch.multiple(config, LLM_BASE_URL="https://example.invalid/v1",
+                                       LLM_MODEL="synthetic-test", LLM_API_KEY="test-only-secret",
+                                       LLM_MAX_TOKENS="4096", LLM_CONTEXT_TOKENS="16384",
+                                       LLM_THINKING="", create=True)
+        settings.start()
+        self.addCleanup(settings.stop)
+        chunk_env = mock.patch.dict(os.environ, {"MEETINGVAR_LLM_CHUNK_CHARS": "6000"})
+        chunk_env.start()
+        self.addCleanup(chunk_env.stop)
+        for function in ("urlopen", "build_opener"):
+            blocker = mock.patch("meetingvar.llm.urllib.request." + function,
+                                 side_effect=AssertionError("unexpected network operation"))
+            blocker.start()
+            self.addCleanup(blocker.stop)
         (self.tmp / "a.txt").write_text(DOC_A, encoding="utf-8")
         # 副本只在尾部多两句（真实场景：副本与正本前 2 万字逐字节相同）——前缀包含/前缀全等必须抓到
         (self.tmp / "b_copy.txt").write_text(DOC_A + "\n补记：尾声。\n", encoding="utf-8")
@@ -98,23 +121,28 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(len(out["events"]), 2)
         self.assertEqual(out["events"][1]["quote"], "", "引文不在块内→清空但保留事件")
 
+    @staticmethod
+    def _reply(content):
+        return {"ok": True, "content": content, "error": None, "error_code": None,
+                "retryable": False, "finish_reason": "stop", "usage": {}}
+
     def _fake_chat(self, calls: list):
         def fake(prompt, temperature=0.3, timeout=900):
             calls.append(prompt)
             if "标题清单" in prompt:
-                return "这是一套测试文档集。"
-            return json.dumps({
+                return self._reply("这是一套测试文档集。")
+            return self._reply(json.dumps({
                 "persons": [{"name": "温水", "role": "主角"}, {"name": "查无此人", "role": "编造"}],
                 "keywords": [{"term": "温水", "why": "主角名"}, {"term": "编造词", "why": "不在原文"}],
                 "events": [{"what": "一句话事件", "quote": "温水说了一句话。"}],
-            }, ensure_ascii=False)
+            }, ensure_ascii=False))
         return fake
 
     def test_understand_merge_cache_and_verify(self) -> None:
         import meetingvar.llm as llm_mod
 
         calls: list = []
-        with mock.patch.object(llm_mod, "chat", self._fake_chat(calls)):
+        with mock.patch.object(llm_mod, "chat_result", self._fake_chat(calls)):
             r1 = probe.understand(self.tmp, chunk_chars=800)
         self.assertTrue(r1["ok"], r1.get("error"))
         self.assertGreaterEqual(r1["chunks_read"], 2)
@@ -129,7 +157,7 @@ class ProbeTests(unittest.TestCase):
 
         # 第二遍：块全走缓存（只剩 overview 一次调用），且覆盖率不变
         calls2: list = []
-        with mock.patch.object(llm_mod, "chat", self._fake_chat(calls2)):
+        with mock.patch.object(llm_mod, "chat_result", self._fake_chat(calls2)):
             r2 = probe.understand(self.tmp, chunk_chars=800)
         self.assertEqual(r2["cache_hits"], r2["chunks_read"])
         self.assertEqual(len(calls2), 1, f"缓存命中后只应剩概述调用（实际 {len(calls2)} 次）")
@@ -139,7 +167,7 @@ class ProbeTests(unittest.TestCase):
     def test_understand_max_chunks_partial_coverage(self) -> None:
         import meetingvar.llm as llm_mod
 
-        with mock.patch.object(llm_mod, "chat", self._fake_chat([])):
+        with mock.patch.object(llm_mod, "chat_result", self._fake_chat([])):
             r = probe.understand(self.tmp, max_chunks=1, chunk_chars=600)
         self.assertEqual(r["chunks_read"], 1)
         self.assertLess(r["coverage_pct"], 100.0)
@@ -147,10 +175,213 @@ class ProbeTests(unittest.TestCase):
     def test_understand_llm_down_is_honest(self) -> None:
         import meetingvar.llm as llm_mod
 
-        with mock.patch.object(llm_mod, "chat", lambda *a, **k: None):
+        with mock.patch.object(llm_mod, "chat_result", return_value=llm.error_result("network")):
             r = probe.understand(self.tmp, chunk_chars=800)
         self.assertFalse(r["ok"])
-        self.assertIn("模型无输出", r["error"] or "")
+        self.assertFalse(r["complete"])
+        self.assertEqual(r["error_code"], "network")
+        self.assertIn("读取失败", r["error"] or "")
+
+    def test_plan_and_execution_share_budget_for_mixed_text(self):
+        docs = [("nested/混合.txt", "第一卷\n" + "温水🙂ABC " * 2500 + "\n尾声\n" + "Z" * 1000)]
+        for context, output in ((8192, 2048), (16384, 4096), (32768, 4096)):
+            with self.subTest(context=context), mock.patch.multiple(
+                    config, LLM_CONTEXT_TOKENS=str(context), LLM_MAX_TOKENS=str(output)), \
+                    mock.patch.object(probe, "load_corpus", return_value=(docs, [])):
+                budget = llm.token_budget()
+                planned = probe.plan(self.tmp)
+                calls = []
+                with mock.patch.object(llm, "chat_result", self._fake_chat(calls)):
+                    result = probe.understand(self.tmp, overview=False)
+                self.assertTrue(result["complete"])
+                self.assertEqual(result["coverage_pct"], 100.0)
+                self.assertEqual(result["chunks_total"], len(planned["chunks"]))
+                self.assertEqual(len(calls), result["chunks_total"])
+                self.assertTrue(all(budget.fits(prompt) for prompt in calls))
+                self.assertTrue(all(ch["chars"] <= 6000 for ch in planned["chunks"]))
+                self.assertEqual(planned["budget"]["method"], "utf8_bytes_upper_bound")
+                self.assertTrue(any("不是精确" in w for w in result["warnings"]))
+                chunks = probe.split_chunks(docs, budget=budget)
+                self.assertEqual("".join(ch["text"] for ch in chunks), docs[0][1])
+                self.assertEqual(sum(len(ch["text"]) for ch in chunks), len(docs[0][1]))
+
+    def test_chunk_cap_override_and_budget_rejection_are_offline(self):
+        with mock.patch.dict(os.environ, {"MEETINGVAR_LLM_CHUNK_CHARS": "300"}):
+            planned = probe.plan(self.tmp)
+            self.assertTrue(all(c["chars"] <= 300 for c in planned["chunks"]))
+        for key, value, code in (("MEETINGVAR_LLM_CHUNK_CHARS", "0", "invalid_config"),
+                                 ("MEETINGVAR_LLM_CHUNK_CHARS", "no", "invalid_config")):
+            with mock.patch.dict(os.environ, {key: value}):
+                self.assertEqual(probe.plan(self.tmp)["error_code"], code)
+                self.assertEqual(probe.understand(self.tmp)["error_code"], code)
+        with mock.patch.object(config, "LLM_CONTEXT_TOKENS", "4096"):
+            result = engine_bridge.cmd_understand_plan(self.tmp)
+            self.assertEqual(result["error_code"], "context_budget")
+            self.assertNotIn("没有可读", result["error"])
+
+    def test_invalid_schema_does_not_enter_cache(self):
+        bad = ('{}', '[]', '{"persons":[null],"keywords":[],"events":[]}',
+               '{"persons":{},"keywords":[],"events":[]}',
+               '{"persons":[],"keywords":[{"term":1,"why":"x"}],"events":[]}',
+               'explanation {"persons":[],"keywords":[],"events":[]}',
+               '{"persons":[],"persons":[],"keywords":[],"events":[]}')
+        for text in bad:
+            with self.subTest(text=text), mock.patch.object(llm, "chat_result", return_value=self._reply(text)):
+                result = probe.understand(self.tmp, overview=False)
+                self.assertEqual(result["error_code"], "invalid_json")
+                self.assertEqual(result["chunks_read"], 0)
+                self.assertFalse(result["complete"])
+                self.assertEqual(list(probe._cache_dir(self.tmp).glob("*.json")), [])
+
+    def test_valid_empty_arrays_are_successful_reading(self):
+        with mock.patch.object(llm, "chat_result", return_value=self._reply(
+                '{"persons":[],"keywords":[],"events":[]}')):
+            result = probe.understand(self.tmp)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["terms"], [])
+        self.assertEqual(result["coverage_pct"], 100.0)
+
+    def test_second_chunk_failure_keeps_first_cache_and_truthful_progress(self):
+        calls, progress = [], []
+        good = self._fake_chat(calls)
+
+        def fail_second(prompt, **kwargs):
+            if calls:
+                return llm.error_result("auth")
+            return good(prompt, **kwargs)
+
+        with mock.patch.object(llm, "chat_result", fail_second):
+            result = probe.understand(self.tmp, chunk_chars=800, overview=False, progress=progress.append)
+        self.assertEqual(result["chunks_read"], 1)
+        self.assertEqual(result["error_code"], "auth")
+        self.assertFalse(result["complete"])
+        self.assertTrue(result["terms"])
+        self.assertTrue(progress[0].startswith("处理中"))
+        self.assertEqual(sum(p.startswith("已读") for p in progress), 1)
+        self.assertEqual(sum(p.startswith("处理中") for p in progress), 2)
+        self.assertEqual(len(list(probe._cache_dir(self.tmp).glob("*.json"))), 1)
+        resumed = []
+        with mock.patch.object(llm, "chat_result", self._fake_chat(resumed)):
+            result = probe.understand(self.tmp, chunk_chars=800, overview=False)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["cache_hits"], 1)
+        self.assertEqual(len(resumed), result["chunks_total"] - 1)
+
+    def test_empty_overview_is_a_warning_not_a_failed_reading(self):
+        fake = self._fake_chat([])
+
+        def empty_overview(prompt, **kwargs):
+            return llm.error_result("empty_content") if "标题清单" in prompt else fake(prompt, **kwargs)
+
+        with mock.patch.object(llm, "chat_result", empty_overview):
+            result = probe.understand(self.tmp)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["complete"])
+        self.assertIsNone(result["error_code"])
+        self.assertEqual(result["overview"], "")
+        self.assertTrue(any("概述未生成（empty_content）" in w for w in result["warnings"]))
+
+    def test_cache_isolates_endpoint_full_model_budget_and_thinking(self):
+        baseline = {"LLM_BASE_URL": "https://example.invalid/v1", "LLM_MODEL": "same-prefix-long-name-A",
+                    "LLM_MAX_TOKENS": "4096", "LLM_CONTEXT_TOKENS": "16384", "LLM_THINKING": ""}
+        variants = ({}, {"LLM_BASE_URL": "https://other.invalid/v1"},
+                    {"LLM_MODEL": "same-prefix-long-name-B"}, {"LLM_MAX_TOKENS": "2048"},
+                    {"LLM_CONTEXT_TOKENS": "32768"}, {"LLM_THINKING": "disabled"})
+        for variant in variants:
+            with self.subTest(variant=variant), mock.patch.multiple(config, **(baseline | variant)):
+                calls = []
+                with mock.patch.object(llm, "chat_result", self._fake_chat(calls)):
+                    result = probe.understand(self.tmp, overview=False)
+                self.assertTrue(result["complete"])
+                self.assertEqual(result["cache_hits"], 0)
+                self.assertTrue(calls)
+                with mock.patch.object(llm, "chat_result", side_effect=AssertionError("cache miss")):
+                    reused = probe.understand(self.tmp, overview=False)
+                self.assertEqual(reused["cache_hits"], reused["chunks_total"])
+
+    def test_cache_prompt_and_relative_document_identity(self):
+        for name, version in (("a/same.txt", "v2"), ("b/same.txt", "v2"), ("b/same.txt", "v3")):
+            with self.subTest(name=name, version=version), \
+                    mock.patch.object(probe, "load_corpus", return_value=([(name, DOC_A)], [])), \
+                    mock.patch.object(probe, "PROMPT_VERSION", version), \
+                    mock.patch.object(llm, "chat_result", self._fake_chat([])):
+                result = probe.understand(self.tmp, overview=False)
+                self.assertEqual(result["cache_hits"], 0)
+                self.assertTrue(result["complete"])
+        nested = self.tmp / "nested"
+        nested.mkdir()
+        (nested / "a.txt").write_text("a distinct short synthetic document", encoding="utf-8")
+        docs, _ = probe.load_corpus(self.tmp)
+        self.assertIn("nested/a.txt", [name for name, _ in docs])
+
+    def test_old_cache_is_retained_and_corrupt_v2_is_recomputed(self):
+        legacy = probe._cache_dir(self.tmp).parent / "legacy_model.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(b"legacy-sentinel")
+        with mock.patch.object(llm, "chat_result", self._fake_chat([])):
+            first = probe.understand(self.tmp, overview=False)
+        self.assertEqual(first["cache_hits"], 0)
+        self.assertEqual(legacy.read_bytes(), b"legacy-sentinel")
+        cache = next(probe._cache_dir(self.tmp).glob("*.json"))
+        envelope = json.loads(cache.read_text(encoding="utf-8"))
+        envelope["result"] = ["bad shape"]
+        cache.write_text(json.dumps(envelope), encoding="utf-8")
+        calls = []
+        with mock.patch.object(llm, "chat_result", self._fake_chat(calls)):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertTrue(result["complete"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["cache_hits"], result["chunks_total"] - 1)
+        self.assertTrue(any("结构无效" in w for w in result["warnings"]))
+
+    def test_cache_revalidates_text_evidence(self):
+        with mock.patch.object(llm, "chat_result", self._fake_chat([])):
+            probe.understand(self.tmp, overview=False)
+        for cache in probe._cache_dir(self.tmp).glob("*.json"):
+            envelope = json.loads(cache.read_text(encoding="utf-8"))
+            envelope["result"]["keywords"].append({"term": "缓存编造词", "why": "bad"})
+            cache.write_text(json.dumps(envelope), encoding="utf-8")
+        with mock.patch.object(llm, "chat_result", side_effect=AssertionError("unexpected generation")):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertNotIn("缓存编造词", [item["term"] for item in result["terms"]])
+        self.assertEqual(result["cache_hits"], result["chunks_total"])
+
+    def test_bridge_preserves_context_on_failure_partial_and_sample(self):
+        out = self.tmp / "meetingvar" / "interest_context.json"
+        out.parent.mkdir()
+        old = b'{"overview":"last successful context"}'
+        out.write_bytes(old)
+        for ok, complete, sample in ((False, False, 0), (True, False, 0), (True, True, 1)):
+            with self.subTest(ok=ok, complete=complete, sample=sample), \
+                    mock.patch.object(probe, "understand", return_value={"ok": ok, "complete": complete}):
+                engine_bridge.cmd_understand(self.tmp, sample)
+                self.assertEqual(out.read_bytes(), old)
+        out.unlink()
+        with mock.patch.object(probe, "understand", return_value={"ok": True, "complete": True}):
+            engine_bridge.cmd_understand(self.tmp, 1)
+        self.assertFalse(out.exists(), "sample should not publish even when no prior context exists")
+
+    def test_bridge_complete_context_is_atomic_and_replace_failure_preserves_old(self):
+        out = self.tmp / "meetingvar" / "interest_context.json"
+        out.parent.mkdir()
+        old = b'{"overview":"old"}'
+        out.write_bytes(old)
+        completed = {"ok": True, "complete": True, "overview": "new", "terms": [],
+                     "coverage_pct": 100.0, "error": None, "error_code": None, "warnings": []}
+        with mock.patch.object(probe, "understand", return_value=dict(completed)), \
+                mock.patch.object(probe.os, "replace", side_effect=OSError("sensitive path")):
+            result = engine_bridge.cmd_understand(self.tmp)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "context_write_failed")
+        self.assertNotIn("sensitive", json.dumps(result))
+        self.assertEqual(out.read_bytes(), old)
+        self.assertEqual(list(out.parent.glob("*.tmp")), [])
+        with mock.patch.object(probe, "understand", return_value=dict(completed)):
+            result = engine_bridge.cmd_understand(self.tmp)
+        self.assertTrue(result["ok"])
+        self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["overview"], "new")
+        self.assertEqual(list(out.parent.glob("*.tmp")), [])
 
     def test_write_terms_and_go_pickup(self) -> None:
         """确认词写 <项目>/meetingvar/terms.txt（#!keep）→ go 载入函数必须能读到。"""

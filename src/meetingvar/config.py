@@ -69,7 +69,8 @@ TERMS_FILE = DATA_DIR / "terms.txt"  # 运行期术语表（可由项目记忆�
 LLM_BASE_URL = os.environ.get("MEETINGVAR_LLM_BASE_URL", "")
 LLM_API_KEY = os.environ.get("MEETINGVAR_LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("MEETINGVAR_LLM_MODEL", "")
-LLM_MAX_TOKENS = os.environ.get("MEETINGVAR_LLM_MAX_TOKENS", "2048")
+LLM_MAX_TOKENS = os.environ.get("MEETINGVAR_LLM_MAX_TOKENS", "4096")
+LLM_CONTEXT_TOKENS = os.environ.get("MEETINGVAR_LLM_CONTEXT_TOKENS", "16384")
 # Provider-specific extension: leave empty for generic/local compatible servers.
 LLM_THINKING = os.environ.get("MEETINGVAR_LLM_THINKING", "").strip().lower()
 

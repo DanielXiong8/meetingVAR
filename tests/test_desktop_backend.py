@@ -220,7 +220,7 @@ class BackendTests(unittest.TestCase):
             self.assertIn("Base URL", str(ctx.exception))
             info = self.b._provider_info()
             self.assertFalse(info["ready"])
-            self.assertIn("未配置", info["egress"])
+            self.assertIn("未配置", info["error"])
             # 本地服务也没起 → 同样明确报错
             self.b._cfg["llm_provider"] = "local"
             with self.assertRaises(ValueError) as ctx2:
@@ -233,6 +233,8 @@ class BackendTests(unittest.TestCase):
         env = self.b._llm_env()
         self.assertEqual(env["MEETINGVAR_LLM_BASE_URL"], "https://api.example.com/v1")
         self.assertEqual(env["MEETINGVAR_LLM_MODEL"], "m1")
+        self.assertFalse(self.b._provider_info()["ready"], "填写配置不等于生成验证通过")
+        self.b._llm_verified.add(self.b._llm_fingerprint(env))
         self.assertTrue(self.b._provider_info()["ready"])
 
     def test_understand_start_blocked_when_provider_not_ready(self) -> None:

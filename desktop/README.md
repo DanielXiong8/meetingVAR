@@ -1,4 +1,8 @@
-# meetingVAR 桌面壳 v0.1.2
+# meetingVAR 桌面壳 v0.1.3
+
+## 0.1.3：按硬件配置本地服务与统一API诊断
+
+本地服务新增原生GPU后端，CPU备用明确关闭 `logits_all`，避免32K上下文触发18.5GiB数组申请。启动按钮验证实际生成，失败返回明确原因；API测试与项目读取共用客户端和参数，按上下文预算分块，失败不覆盖成功摘要。配置、实测和部署边界见 [本地模型与API服务说明](../docs/LOCAL_MODEL_0.1.3.md)。本轮未修改 `desktop/web/**`。
 
 ## 0.1.2：API兴趣判断与讯飞RTASR
 
@@ -13,7 +17,7 @@
 - 项目全库理解完成后保存 `meetingvar/interest_context.json`；会中复用该摘要。未完成阅读时只提供已确认词和用户关注事项，不声称读懂全部项目。
 
 会议采集控制台、项目页与会议库。UI 启动独立 CLI 引擎，使用结构化事件显示字幕和采集状态。
-构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.1.2.exe`（安装包，自制、免管理员）。
+构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.1.3.exe`（安装包，自制、免管理员）。
 
 ## 字幕与轻量录屏
 
@@ -50,21 +54,21 @@
 | `web/` | 前端三件套（index/style/app.js）：主页 / 项目页 / 会议库 / 设置 / 点名弹窗 / 命中 toast |
 | `assets/make_icon.py` | 生成 icon.ico（多尺寸）+ logo.png |
 | `build/build_exe.bat` | 打包 `dist\meetingVAR.exe`（PyInstaller，需 D:\env\ui-venv） |
-| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.1.2.exe`（内嵌上面的 exe） |
+| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.1.3.exe`（内嵌上面的 exe） |
 | `build/setup_app.py` | 安装器/卸载器三合一：GUI 向导 + `--silent --dir X` + `--uninstall` |
 
 ## 构建
 
 ```bat
 desktop\build\build_exe.bat      :: dist\meetingVAR.exe
-desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.1.2.exe
+desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.1.3.exe
 ```
 
 安装/卸载（免管理员，装到 %LOCALAPPDATA%\Programs\meetingVAR，建桌面+开始菜单快捷方式）：
 
 ```bat
-meetingVAR-setup-0.1.2.exe                          :: GUI 向导
-meetingVAR-setup-0.1.2.exe --silent --dir D:\apps\mv :: 静默
+meetingVAR-setup-0.1.3.exe                          :: GUI 向导
+meetingVAR-setup-0.1.3.exe --silent --dir D:\apps\mv :: 静默
 "%LOCALAPPDATA%\Programs\meetingVAR\uninstall.exe" --uninstall
 ```
 

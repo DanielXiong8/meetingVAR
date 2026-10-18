@@ -200,12 +200,15 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
             emit("capture_state", phase="stopping", text="正在处理尾段、兴趣判断和保存证据")
             stop_audio()
             if normal_shutdown:
-                try:
-                    pcm, since = audio.ingest_since(last_ts)
-                except KeyboardInterrupt:
-                    pcm = b""
-                if pcm:
+                while True:
+                    try:
+                        pcm, since = audio.ingest_since(last_ts)
+                    except KeyboardInterrupt:
+                        pcm = b""
+                    if not pcm:
+                        break
                     ingest(pcm, since)
+                    last_ts = since + len(pcm) / 2 / config.ASR_RATE
                 if stream is not None:
                     receive_stream(stream.finish(timeout=10))
                     emit("partial_line", id="", text="", clear=True)

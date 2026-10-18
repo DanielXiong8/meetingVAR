@@ -32,7 +32,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -63,7 +63,15 @@ CONFIG_DEFAULTS = {
     "device": "cuda",
     "last_project": "",
     "projects": [],          # 已知项目（会议归档分组用；start_meeting 时维护）
-    "llm_gguf": "",          # 本地 4B GGUF 路径（LLM 服务启动用；自动探测）
+    "llm_gguf": "",
+    "llm_backend": "auto",
+    "llm_server_exe": "",
+    "llm_context_tokens": 16384,
+    "llm_gpu_layers": -1,
+    "llm_device": "",
+    "llm_reading_max_tokens": 4096,
+    "llm_api_context_tokens": 32768,
+    "llm_thinking": "",
     "use_llm": False,        # 旧版配置兼容，实时兴趣由 interest_mode 控制
     "interest_mode": "api",
     "interest_focus": "",
@@ -140,6 +148,20 @@ class Backend:
         self._current_project = ""
         self._last_log = ""
         self._llm_proc: subprocess.Popen | None = None
+        self._llm_launch: dict = {}
+        self._llm_error = ""
+        self._llm_log_offset = 0
+        self._llm_start_lock = threading.Lock()
+        self._llm_verified: set[str] = set()
+        self._llm_verified_at: dict[str, float] = {}
+        try:
+            validations = json.loads((CONFIG_DIR / "llm_validation.json").read_text(encoding="utf-8"))
+            self._llm_verified_at = {key: stamp for key, stamp in validations.items()
+                                     if isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key)
+                                     and isinstance(stamp, (int, float)) and 0 <= time.time() - stamp < 86400}
+            self._llm_verified.update(self._llm_verified_at)
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
         # 文件转写任务（后台线程 + 进度轮询）
         self._tf: dict = {"running": False, "done": False, "ok": False,
                           "file": "", "progress": "", "out": "", "error": ""}
@@ -270,46 +292,64 @@ class Backend:
         env.update({"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         return env
 
-    def _llm_env(self) -> dict:
-        """按设置页厂商构造引擎侧 LLM 环境变量；未就绪抛 ValueError（带可行动提示）。
-
-        真机教训：全库理解/开会都想当然地拿"配置里的厂商"，但自定义厂商 base_url 为空
-        或本地服务没起时，引擎侧 MEETINGVAR_LLM_* 就是空的 → 子进程只会报"模型无输出"。
-        统一在这里给出人话错误，UI 直接展示。
-        """
-        provider = self._cfg.get("llm_provider") or "local"
+    def _llm_env(self, provider: str | None = None, purpose: str = "reading") -> dict:
+        """Use the same effective provider settings for validation and real requests."""
+        from urllib.parse import urlsplit
+        provider = provider or self._cfg.get("llm_provider") or "local"
         if provider == "custom":
-            base = (self._cfg.get("llm_base_url") or "").strip()
+            base = (self._cfg.get("llm_base_url") or "").strip().rstrip("/")
+            model = (self._cfg.get("llm_model") or "").strip()
             if not base:
-                raise ValueError("当前厂商是「自定义 API」但没填 Base URL（设置页 → 模型服务），或切回「本地模型」")
-            return {
-                "MEETINGVAR_LLM_BASE_URL": base.rstrip("/"),
-                "MEETINGVAR_LLM_API_KEY": (self._cfg.get("llm_api_key") or "").strip() or "sk-none",
-                "MEETINGVAR_LLM_MODEL": (self._cfg.get("llm_model") or "").strip() or "custom",
-            }
-        st = self.llm_status()
-        if not st.get("up"):
-            raise ValueError("本地模型服务未启动（设置页 → 模型服务 → 启动服务），或切到「自定义 API」")
-        return {
-            "MEETINGVAR_LLM_BASE_URL": f"http://127.0.0.1:{LLM_PORT}/v1",
-            "MEETINGVAR_LLM_API_KEY": "local",
-            "MEETINGVAR_LLM_MODEL": st.get("model") or "local",
-        }
+                raise ValueError("自定义 API 未配置 Base URL，请在设置页填写")
+            parsed = urlsplit(base)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query:
+                raise ValueError("Base URL须为HTTP(S)服务地址，不能包含凭据或查询参数")
+            if not model:
+                raise ValueError("自定义 API 未配置模型名，请填写厂商实际提供的模型ID")
+            key = (self._cfg.get("llm_api_key") or "").strip()
+            context = self._cfg.get("llm_api_context_tokens", 32768)
+        elif provider == "local":
+            st = self.llm_status()
+            if not st.get("up"):
+                raise ValueError(st.get("error") or "本地模型服务未启动，请点启动服务，或切到自定义API")
+            base, model, key = f"http://127.0.0.1:{LLM_PORT}/v1", st.get("model", ""), "local"
+            context = st.get("context_tokens") or self._cfg.get("llm_context_tokens", 16384)
+        else:
+            raise ValueError("未知模型厂商")
+        try:
+            context = int(context)
+            output = 1600 if purpose == "interest" else int(self._cfg.get("llm_reading_max_tokens", 4096))
+        except (TypeError, ValueError):
+            raise ValueError("模型上下文或输出预算须为整数") from None
+        if context < 4096 or context > 1048576 or output < 128:
+            raise ValueError("模型上下文或输出预算超出支持范围")
+        output = min(output, context // 4)
+        return {"MEETINGVAR_LLM_BASE_URL": base, "MEETINGVAR_LLM_API_KEY": key,
+                "MEETINGVAR_LLM_MODEL": model, "MEETINGVAR_LLM_MAX_TOKENS": str(output),
+                "MEETINGVAR_LLM_CONTEXT_TOKENS": str(context), "MEETINGVAR_LLM_CHUNK_CHARS": "6000",
+                "MEETINGVAR_LLM_THINKING": (self._cfg.get("llm_thinking") or "") if provider == "custom" else ""}
+
+    @staticmethod
+    def _llm_fingerprint(env: dict) -> str:
+        import hashlib
+        values = {key: value for key, value in env.items() if key.startswith("MEETINGVAR_LLM_")}
+        return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
     def _provider_info(self) -> dict:
-        """给 UI 的厂商状态（不抛异常）：label/egress/ready/error 一起算好。"""
         provider = self._cfg.get("llm_provider") or "local"
         label = "自定义 API" if provider == "custom" else "本地模型"
+        configured, ready, error = False, False, ""
         try:
-            self._llm_env()
-            ready, error = True, ""
+            env = self._llm_env()
+            configured = True
+            ready = self._llm_fingerprint(env) in self._llm_verified
+            if not ready:
+                error = "已配置但尚未验证生成；请在设置页测试API，或启动并验证本地服务"
         except ValueError as exc:
-            ready, error = False, str(exc)
-        if provider == "custom":
-            egress = "块文本将发送到自定义 API（内容出机）" if ready else "自定义 API 未配置（不会出网，但也不能跑）"
-        else:
-            egress = "本地模型=零出网" if ready else "本地模型服务未启动"
-        return {"provider": provider, "label": label, "egress": egress, "ready": ready, "error": error}
+            error = str(exc)
+        egress = "项目文本将发送到自定义 API" if provider == "custom" else "项目文本仅发送到本机模型服务"
+        return {"provider": provider, "label": label, "egress": egress,
+                "configured": configured, "ready": ready, "verified": ready, "error": error}
 
     _VAR_RE = re.compile(r">>> VAR!")
     _LINE_RE = re.compile(r"^\s*\[(\d{1,2}:\d{2}:\d{2})\]\s*(\S+):\s*(.+)$")
@@ -504,9 +544,10 @@ class Backend:
                     "MEETINGVAR_OVERLAP": "3", "MEETINGVAR_MIN_TEXT_CHARS": "1" if engine == "xfyun_rtasr" else "2",
                     "MEETINGVAR_INTEREST_FOCUS": (self._cfg.get("interest_focus") or "")[:6000]})
         if interest == "api":
-            env.update({"MEETINGVAR_LLM_BASE_URL": base.rstrip("/"), "MEETINGVAR_LLM_MODEL": model,
-                        "MEETINGVAR_LLM_API_KEY": self._cfg.get("llm_api_key") or "",
-                        "MEETINGVAR_LLM_MAX_TOKENS": "1600", "MEETINGVAR_LLM_THINKING": ""})
+            try:
+                env.update(self._llm_env(provider="custom", purpose="interest"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
         self._screen_state = {}
         self._meeting_summary = {}
         self._capture_phase = "loading"
@@ -668,45 +709,87 @@ class Backend:
         return detail
 
     # ---- 本地 LLM 服务管理（llama.cpp，127.0.0.1:LLM_PORT）----
+    def _local_startup_error(self) -> str:
+        from local_llm import safe_startup_error
+        try:
+            with LLM_LOG_FILE.open("rb") as stream:
+                size = stream.seek(0, 2)
+                stream.seek(max(self._llm_log_offset, size - 16384))
+                text = stream.read(16384).decode("utf-8", "replace")
+            return safe_startup_error(text)
+        except OSError:
+            return "本地模型进程已退出，无法读取启动日志"
+
     def llm_status(self) -> dict:
         import urllib.request
-
         managed = self._llm_proc is not None and self._llm_proc.poll() is None
+        result = {"up": False, "model": "", "managed": managed,
+                  "gguf": self._cfg.get("llm_gguf", ""), "state": "loading" if managed else "stopped",
+                  "backend": self._llm_launch.get("backend", ""), "error": self._llm_error}
+        if self._llm_proc is not None and not managed:
+            self._llm_error = self._llm_error or self._local_startup_error()
+            result.update(state="error", error=self._llm_error)
         try:
-            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 本机服务不走代理
-            with op.open(f"http://127.0.0.1:{LLM_PORT}/v1/models", timeout=2) as r:
-                data = json.loads(r.read().decode("utf-8", "replace"))
-            mid = (data.get("data") or [{}])[0].get("id", "")
-            return {"up": True, "model": Path(str(mid)).name, "managed": managed,
-                    "gguf": self._cfg.get("llm_gguf", "")}
-        except Exception:  # noqa: BLE001
-            return {"up": False, "model": "", "managed": managed, "gguf": self._cfg.get("llm_gguf", "")}
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with op.open(f"http://127.0.0.1:{LLM_PORT}/v1/models", timeout=1) as response:
+                data = json.loads(response.read())
+            model = (data.get("data") or [{}])[0].get("id", "")
+            if not isinstance(model, str) or not model:
+                return result
+            context = self._llm_launch.get("context_tokens", min(int(self._cfg.get("llm_context_tokens", 16384)), 8192))
+            if not self._llm_launch:
+                try:
+                    with op.open(f"http://127.0.0.1:{LLM_PORT}/props", timeout=1) as response:
+                        props = json.loads(response.read())
+                    context = int(props.get("default_generation_settings", {}).get("n_ctx") or context)
+                except (OSError, ValueError, TypeError):
+                    pass
+            result.update(up=True, model=model, display_model=Path(model).name, state="ready", error="", context_tokens=context)
+            return result
+        except (OSError, ValueError, TypeError, IndexError):
+            return result
 
     def llm_start(self) -> dict:
-        st = self.llm_status()
-        if st["up"]:
-            return {"ok": True, "already": True, "model": st["model"]}
-        py = self._cfg.get("engine_python") or ""
-        gguf = self._cfg.get("llm_gguf") or ""
-        if not py or not Path(py).exists():
-            return {"ok": False, "error": "未配置引擎 Python"}
-        if not gguf or not Path(gguf).exists():
-            return {"ok": False, "error": "未找到 GGUF 模型（设置页可手动填路径）"}
+        from local_llm import build_launch
+        if not self._llm_start_lock.acquire(blocking=False):
+            return {"ok": True, "starting": True, "note": "已有启动请求正在处理"}
         try:
+            state = self.llm_status()
+            if state["up"]:
+                result = self._test_provider("local")
+                result.update(already=True, model=state["model"])
+                return result
+            if state["managed"]:
+                return {"ok": True, "starting": True}
+            try:
+                launch = build_launch(self._cfg, LLM_PORT)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            logf = open(LLM_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115 — 进程存活期持有
-        except OSError:
-            logf = subprocess.DEVNULL
-        try:
-            self._llm_proc = subprocess.Popen(
-                [py, "-m", "llama_cpp.server", "--model", gguf, "--n_ctx", "32768", "--port", str(LLM_PORT)],
-                cwd=self._cfg.get("repo_dir") or None, stdout=logf, stderr=subprocess.STDOUT,
-                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
-            )
-        except OSError as exc:
-            return {"ok": False, "error": f"启动失败: {exc}"}
-        log(f"[ui] LLM 服务启动中 pid={self._llm_proc.pid}（模型 {Path(gguf).name}）")
-        return {"ok": True, "starting": True}
+            self._llm_log_offset = LLM_LOG_FILE.stat().st_size if LLM_LOG_FILE.exists() else 0
+            self._llm_error = ""
+            self._llm_launch = launch
+            try:
+                with LLM_LOG_FILE.open("a", encoding="utf-8") as logf:
+                    self._llm_proc = subprocess.Popen(launch["cmd"], cwd=self._cfg.get("repo_dir") or None,
+                        stdout=logf, stderr=subprocess.STDOUT, env=self._engine_env(), creationflags=_SPAWN_FLAGS)
+            except OSError:
+                self._llm_error = "本地模型进程启动失败，请检查推理后端和文件权限"
+                return {"ok": False, "error": self._llm_error}
+            log(f"[ui] LLM 服务启动中 pid={self._llm_proc.pid} backend={launch['backend']} ctx={launch['context_tokens']}")
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline:
+                state = self.llm_status()
+                if state["up"]:
+                    result = self._test_provider("local")
+                    result.update(model=state["model"], backend=launch["backend"], context_tokens=launch["context_tokens"])
+                    return result
+                if not state["managed"]:
+                    return {"ok": False, "error": state.get("error") or "本地模型启动后异常退出"}
+                time.sleep(0.25)
+            return {"ok": True, "starting": True, "note": "模型仍在加载，尚未通过生成验证"}
+        finally:
+            self._llm_start_lock.release()
 
     def llm_stop(self) -> dict:
         st = self.llm_status()
@@ -716,6 +799,12 @@ class Backend:
             return {"ok": False, "error": "该服务不是本应用启动的（可能在别的终端里），未终止它"}
         try:
             self._llm_proc.terminate()
+            try:
+                self._llm_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error": "本地服务正在停止，请稍后检查状态"}
+            self._llm_proc = None
+            self._llm_error = ""
             log("[ui] LLM 服务已终止")
             return {"ok": True}
         except OSError as exc:
@@ -747,37 +836,44 @@ class Backend:
         except ValueError:
             return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
 
-    def test_llm(self) -> dict:
-        """Test the configured interest API with a short generation request."""
-        import urllib.error
-        import urllib.request
-
-        base = (self._cfg.get("llm_base_url") or "").strip().rstrip("/")
-        if not base:
-            return {"ok": False, "provider": "custom", "error": "未填写 Base URL"}
-        model = (self._cfg.get("llm_model") or "").strip()
-        if not model:
-            return {"ok": False, "provider": "custom", "error": "未填写模型名"}
-        url = base + "/chat/completions"
-        body = {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}],
-                "max_tokens": 128, "temperature": 0}
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {(self._cfg.get('llm_api_key') or '').strip()}"})
+    def _test_provider(self, provider: str) -> dict:
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).is_file():
+            return {"ok": False, "error_code": "configuration", "error": "未配置引擎Python"}
         try:
-            from urllib.parse import urlparse
-            local = urlparse(base).hostname in {"127.0.0.1", "localhost", "::1"}
-            op = urllib.request.build_opener(urllib.request.ProxyHandler({})) if local else urllib.request.build_opener()
-            with op.open(req, timeout=30) as r:
-                data = json.loads(r.read().decode("utf-8", "replace"))
-            content = data["choices"][0]["message"]["content"]
-            if not isinstance(content, str) or not content.strip():
-                return {"ok": False, "error": "API没有返回有效生成文本"}
-            return {"ok": True, "provider": "custom", "note": "已完成一次实际生成测试", "models": [model]}
-        except urllib.error.HTTPError as exc:
-            return {"ok": False, "provider": "custom", "error": f"HTTP {exc.code}（鉴权或路径问题）"}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "provider": "custom", "error": f"生成测试失败（{type(exc).__name__}），请核对地址、模型和网络"}
+            effective = self._llm_env(provider=provider, purpose="reading")
+        except ValueError as exc:
+            return {"ok": False, "error_code": "configuration", "error": str(exc)}
+        env = self._engine_env()
+        env.update(effective)
+        try:
+            process = subprocess.run([py, str(BRIDGE_PY), "test_llm"], cwd=self._cfg.get("repo_dir") or None,
+                env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=150, creationflags=_SPAWN_FLAGS)
+            lines = [line for line in process.stdout.splitlines() if line.startswith("{")]
+            result = json.loads(lines[-1]) if lines else {"ok": False, "error_code": "empty_response", "error": "测试进程没有返回结果"}
+        except subprocess.TimeoutExpired:
+            result = {"ok": False, "error_code": "timeout", "error": "生成验证超时，尚未证明服务可用"}
+        except (OSError, ValueError, TypeError):
+            result = {"ok": False, "error_code": "invalid_response", "error": "生成验证失败或返回格式无效"}
+        result["provider"] = provider
+        fingerprint = self._llm_fingerprint(effective)
+        if result.get("ok") is True:
+            self._llm_verified.add(fingerprint)
+            self._llm_verified_at[fingerprint] = time.time()
+            result.update(note="已通过实际JSON生成验证", models=[effective["MEETINGVAR_LLM_MODEL"]])
+        else:
+            self._llm_verified.discard(fingerprint)
+            self._llm_verified_at.pop(fingerprint, None)
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            (CONFIG_DIR / "llm_validation.json").write_text(json.dumps(self._llm_verified_at), encoding="utf-8")
+        except OSError:
+            pass
+        return result
+
+    def test_llm(self) -> dict:
+        return self._test_provider("custom")
 
     def pick_media(self):
         """选一个媒体文件（视频/音频）用于离线转写。"""
@@ -864,11 +960,16 @@ class Backend:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
         try:
+            env = self._engine_env()
+            env.update(self._llm_env())
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), **self._provider_info()}
+        try:
             r = subprocess.run(
                 [py, str(BRIDGE_PY), "understand_plan", folder],
                 cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=120,
-                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+                env=env, creationflags=_SPAWN_FLAGS,
             )
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "预估超时（>120s）"}
@@ -891,6 +992,9 @@ class Backend:
             return {"ok": False, "error": "未配置引擎 Python"}
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
+        info = self._provider_info()
+        if not info["ready"]:
+            return {"ok": False, "error": info["error"], "error_code": "not_verified"}
         self._und = {"running": True, "done": False, "ok": False, "folder": folder,
                      "progress": "启动…", "result": {}, "error": "", "max_chunks": max_chunks}
         cmd = [py, str(BRIDGE_PY), "understand", folder] + ([str(max_chunks)] if max_chunks else [])
@@ -933,14 +1037,15 @@ class Backend:
             try:
                 data = json.loads(final)
                 self._und.update({"ok": bool(data.get("ok")), "result": data,
-                                  "error": data.get("error") or "",
+                                  "error": data.get("error") or "", "error_code": data.get("error_code"),
+                                  "warnings": data.get("warnings") or [],
                                   "progress": "完成" if data.get("ok") else "中断"})
             except ValueError:
                 self._und["error"] = "结果解析失败"
         elif not self._und.get("error"):
             rc = proc.returncode
-            self._und["error"] = ("已取消（已完成块有缓存，下次续跑不重复）" if rc not in (0, None)
-                                  else "引擎退出但无结果")
+            self._und["error"] = ("已取消（成功块缓存保留）" if self._und.get("cancelled")
+                                  else f"引擎异常退出（代码{rc}），未返回诊断结果")
         self._und["running"] = False
         self._und["done"] = True
         self._und_proc = None
@@ -956,6 +1061,7 @@ class Backend:
         if proc is None or proc.poll() is not None:
             return {"ok": False, "error": "没有在跑的任务"}
         try:
+            self._und["cancelled"] = True
             proc.terminate()
             return {"ok": True}
         except OSError as exc:
@@ -1099,6 +1205,9 @@ class Backend:
             elif isinstance(default, list):
                 if isinstance(val, list):
                     self._cfg[k] = [str(x) for x in val]
+            elif isinstance(default, int):
+                if isinstance(val, int) and not isinstance(val, bool):
+                    self._cfg[k] = val
             elif isinstance(val, str):
                 self._cfg[k] = val
         save_config(self._cfg)

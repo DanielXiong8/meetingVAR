@@ -126,7 +126,7 @@ class LiveReliabilityTests(unittest.TestCase):
         capture = Mock(session_start=1000.0)
         capture.name = "virtual"
         capture.ingest_since.side_effect = [
-            (bytes(32000), 1000.0), KeyboardInterrupt, (bytes(8000), 1001.0),
+            (bytes(32000), 1000.0), KeyboardInterrupt, (bytes(8000), 1001.0), (b"", 1001.25),
         ]
         self.args.no_screen = True
         with patch("meetingvar.capture.audio.AudioCapture", return_value=capture), \
@@ -134,6 +134,25 @@ class LiveReliabilityTests(unittest.TestCase):
              patch("builtins.input", side_effect=EOFError):
             record_session(self.args, session.session_id, [], None, None)
         self.assertEqual(session._last_flush_ts, 1001.25)
+        capture.stop.assert_called_once()
+
+    def test_shutdown_drains_multiple_audio_runs_after_a_gap(self):
+        from meetingvar.pipeline import Session
+        session = Session("final_gap", [], echo=False, device="cpu")
+        session.asr = FakeASR()
+        capture = Mock(session_start=1000.0)
+        capture.name = "virtual"
+        capture.ingest_since.side_effect = [
+            (bytes(32000), 1000.0), KeyboardInterrupt,
+            (bytes(8000), 1001.0), (bytes(8000), 1001.5), (b"", 1001.75),
+        ]
+        self.args.no_screen = True
+        with patch("meetingvar.capture.audio.AudioCapture", return_value=capture), \
+             patch("meetingvar.pipeline.Session", return_value=session), \
+             patch("builtins.input", side_effect=EOFError):
+            record_session(self.args, session.session_id, [], None, None)
+        self.assertEqual(session._last_flush_ts, 1001.75)
+        self.assertEqual(capture.ingest_since.call_count, 5)
         capture.stop.assert_called_once()
 
     def test_conflicting_screen_options_fail_before_opening_devices(self):

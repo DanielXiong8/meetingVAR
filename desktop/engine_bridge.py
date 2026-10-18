@@ -1,11 +1,12 @@
-"""引擎侧只读预览桥：由桌面壳用"引擎 Python"调用，stdout 只输出一行 JSON。
+"""Engine subprocess bridge: progress lines followed by one final JSON object.
 
-职责（全部只读，不写任何文件、不触发保存链路）：
-- preview <folder>：扫描项目文件夹 → 文档清单 / 抽取词表（L1 jieba）/ 仓库符号（可选）/ 人物名单；
-- check：引擎环境自检。
+Preview/planning inspect a project, test_llm uses only a fixed synthetic prompt,
+and full successful understanding atomically publishes its verified context.
 
-用法（由 ui 后端自动拼命令，勿手工改路径）：
-    <engine_python> engine_bridge.py preview "D:\\项目\\xxx"
+Usage (the desktop backend supplies the effective MEETINGVAR_LLM_* environment):
+    <engine_python> engine_bridge.py test_llm
+    <engine_python> engine_bridge.py understand_plan <folder>
+    <engine_python> engine_bridge.py understand <folder> [max_chunks]
 """
 from __future__ import annotations
 
@@ -309,15 +310,32 @@ def cmd_transcribe_file(media: Path, xfyun_dir: Path, out_path: Path | None) -> 
     }
 
 
+def cmd_test_llm() -> dict:
+    """One synthetic generation with the same client and environment as reading.
+
+    No project text is used. The subprocess receives the effective provider
+    settings through MEETINGVAR_LLM_* environment variables.
+    """
+    from meetingvar import config
+    from meetingvar.llm import chat_result, error_result, parse_json_object
+
+    reply = chat_result('Return exactly this JSON object: {"ok":true}. '
+                        'Do not include markdown or any other text.',
+                        temperature=0.2, timeout=120)
+    if reply["ok"]:
+        data = parse_json_object(reply["content"])
+        if data is None or set(data) != {"ok"} or data["ok"] is not True:
+            reply = error_result("invalid_json", finish_reason=reply["finish_reason"], usage=reply["usage"])
+    # Generated content is unnecessary for this test and must not leak through
+    # the bridge protocol, even when a service returns an unexpected answer.
+    return {**{k: v for k, v in reply.items() if k != "content"}, "model": config.LLM_MODEL}
+
+
 def cmd_understand_plan(folder: Path) -> dict:
-    """零 LLM 预估：字数/块数/本地耗时估算（UI 在开始前展示，用户据此选档）。"""
+    """Offline budget plan; retain configuration failures returned by the planner."""
     from meetingvar.memory.probe import plan
 
-    p = plan(Path(folder))
-    p["ok"] = bool(p["chunks"])
-    if not p["chunks"]:
-        p["error"] = "没有可读文本文件（.md/.txt/.docx）"
-    return p
+    return plan(Path(folder))
 
 
 def cmd_understand(folder: Path, max_chunks: int = 0) -> dict:
@@ -325,17 +343,23 @@ def cmd_understand(folder: Path, max_chunks: int = 0) -> dict:
 
     厂商无关：MEETINGVAR_LLM_* 指向本地模型=零出网；指向自定义 API=块文本出网。
     """
-    from meetingvar.memory.probe import understand
+    from meetingvar.memory.probe import atomic_write_json, understand
 
     def progress(msg: str) -> None:
         print(f"[progress] {msg}", flush=True)
 
     r = understand(Path(folder), max_chunks=max_chunks or None, progress=progress)
-    from meetingvar.memory.interest_context import context_from_result
-    out = Path(folder) / "meetingvar" / "interest_context.json"
-    if not max_chunks or not out.exists():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(context_from_result(r), ensure_ascii=False, indent=2), encoding="utf-8")
+    # A failed run or an explicitly requested sample never publishes context,
+    # even if that sample happens to cover every chunk of a small project.
+    if r.get("ok") and r.get("complete") and max_chunks == 0:
+        from meetingvar.memory.interest_context import context_from_result
+
+        out = Path(folder) / "meetingvar" / "interest_context.json"
+        try:
+            atomic_write_json(out, context_from_result(r))
+        except OSError:
+            r.update(ok=False, error_code="context_write_failed",
+                     error="理解结果未能写入，已有项目上下文已保留")
     return r
 
 
@@ -372,6 +396,8 @@ def main() -> None:
             xfyun_dir = Path(sys.argv[3])
             out_path = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
             payload = cmd_transcribe_file(media, xfyun_dir, out_path)
+        elif cmd == "test_llm":
+            payload = cmd_test_llm()
         elif cmd == "understand_plan":
             payload = cmd_understand_plan(Path(sys.argv[2]))
         elif cmd == "understand":
@@ -382,7 +408,11 @@ def main() -> None:
         else:
             payload = {"ok": False, "error": f"unknown command: {cmd}"}
     except Exception as exc:  # noqa: BLE001
-        payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if cmd in {"test_llm", "understand", "understand_plan"}:
+            payload = {"ok": False, "error_code": "internal_error", "complete": False,
+                       "warnings": [], "error": "模型任务未能完成；内部异常详情未向输出公开"}
+        else:
+            payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     print(json.dumps(payload, ensure_ascii=False))
 
 
