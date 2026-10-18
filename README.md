@@ -1,6 +1,6 @@
 # meetingVAR
 
-> **桌面开发基线：`feat/desktop-ui` · 0.1.2**。已接入讯飞 RTASR 连续字幕、API 兴趣事件判断与轻量同步录屏；专业词只用于纠错。UI 并行开发先读 [UI 交接与接口契约](docs/UI_HANDOFF_0.1.2.md)，从该分支最新提交创建个人分支。安装与运行边界见 [桌面说明](desktop/README.md)。下方早期 CLI 架构保留作历史参考，实时行为以这两份说明为准。
+> **当前开发基线：`main` → `feat/local-model-audio-fix` · 0.1.3**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断与轻量同步录屏；本分支新增本地 GPU 推理、API 失败分类和双源音频时间轴修复。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，UI 并行开发读 [UI 交接与接口契约](docs/UI_HANDOFF_0.1.2.md)。下方早期 CLI 架构保留作历史参考。
 
 > record your meeting like VAR referee —— 不是记下一切，是保住对你重要的每一刻。
 
