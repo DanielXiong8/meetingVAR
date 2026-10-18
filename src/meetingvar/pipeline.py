@@ -3,6 +3,8 @@
 live（AudioCapture 喂流）与 replay（wav 回放喂流）共用同一套逻辑。
 时间轴：内部统一用绝对时间戳（live=真实时钟；replay=模拟基点+偏移），
 写入片段池和 transcript.json 时转换为会议内相对秒数，遵守 pool_schema 契约。
+说话人：句级 CAM++ 声纹经会话级在线聚类（transcribe/speaker.py）映射为
+全场稳定的 spk0/spk1/…；无声纹时退回块内编号（FunASR 局部聚类，仅兜底）。
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from .monitor.hotwords import HotwordMonitor, InterestScorer, ManualVAR
 from .pool.store import Pool
 from .transcribe.asr import ASR
 from .transcribe.correct import correct
+from .transcribe.speaker import OnlineSpeakerCluster
 
 LOOKBACK_SECONDS = config.LOOKBACK_SECONDS  # 命中回溯窗（config 可调，env MEETINGVAR_LOOKBACK）
 _PCM_BYTES_PER_SECOND = config.ASR_RATE * 2  # 接口约定：16bit 单声道 PCM，1 秒 = 32000 字节
@@ -33,6 +36,7 @@ class Session:
         echo: bool = True,
         correction_terms: list[str] | None = None,
         l2_threshold: float | None = None,
+        speaker_book=None,
     ):
         self.session_id = session_id
         self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
@@ -44,6 +48,14 @@ class Session:
         self.monitor = HotwordMonitor(terms)
         self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs else None
         self.manual = ManualVAR()
+        # 会话级说话人聚类：跨块维持声纹质心 → 全场稳定的 spk0/spk1/…
+        self.speaker_cluster = OnlineSpeakerCluster(threshold=config.SPEAKER_SIM_THRESHOLD)
+        # 说话人点名：新说话人先与声纹名册比对（认得出自动命名），认不出排入点名队列，
+        # 用户在终端输入名字后追溯改名本场转写与已存片段，并更新名册（跨会话）。
+        self.speaker_book = speaker_book
+        self.speaker_names: dict[str, str] = {}
+        self._questions: deque[dict] = deque()
+        self._question_current: dict | None = None
         self.screen_capture = screen_capture
         self.echo = echo
         self.hd = None  # 高清补录层（--hd 时由 cli 装配）
@@ -148,16 +160,32 @@ class Session:
                 continue
             orig_text = seg["text"]
             fixed, fixes = correct(orig_text, self.correction_terms)
-            line = {"ts": start_ts + seg["start"], "speaker": seg["speaker"], "text": fixed}
+            line_ts = start_ts + seg["start"]
             # Overlapping ASR windows can repeat a sentence. Do not duplicate
             # that sentence (or its triggers); later occurrences remain valid.
-            if any(abs(old["ts"] - line["ts"]) <= 0.5 and old["text"] == fixed
+            if any(abs(old["ts"] - line_ts) <= 0.5 and old["text"] == fixed
                    for old in reversed(self.transcript)
                    if old["ts"] >= start_ts - 0.5):
                 continue
+            # 说话人：有句级声纹（emb）走会话级聚类——跨块全局编号 spk0/spk1/…；
+            # 声纹模式开启但该句太短（<0.25s 不给声纹下结论）→ 标 spk?（宁标未知，
+            # 不得退回块内局部编号——那正是"全场 spk0"的病根）；
+            # 声纹整体未启用（降级模式）→ 沿用块内编号。
+            # 分配放在去重之后：被去重丢弃的句子不参与声纹质心更新。
+            emb = seg.get("emb")
+            if emb is not None:
+                n_before = self.speaker_cluster.n_speakers
+                speaker = self.speaker_cluster.assign(emb, float(seg["end"]) - float(seg["start"]))
+                if self.speaker_cluster.n_speakers > n_before:
+                    self._on_new_speaker(speaker, fixed, line_ts)
+                speaker = self.speaker_names.get(speaker, speaker)  # 已点名的直接显示名字
+            elif getattr(self.asr, "with_embeddings", False):
+                speaker = "spk?"
+            else:
+                speaker = seg.get("speaker", "spk?")
+            line = {"ts": line_ts, "speaker": speaker, "text": fixed}
             # 改写记录在去重检查之后：被去重丢弃的行不得进纠错清单/改写日志
             if fixes:
-                line_ts = line["ts"]
                 for r in fixes:
                     r["ts"] = line_ts
                     r["termset_id"] = self.termset_id
@@ -195,6 +223,87 @@ class Session:
         ts = self._last_flush_ts if self._last_flush_ts is not None else time.time()
         self._make_clip("L3", "manual_hotkey", ts)
         return self.clips[-1]["clip_id"] if self.clips else None
+
+    # ---- 说话人点名 ----
+    def _on_new_speaker(self, spk_id: str, sample: str, ts: float) -> None:
+        """新声纹簇诞生：先试声纹名册自动识别；认不出才排入点名队列。"""
+        auto, sim = None, -1.0
+        idx = int(spk_id[3:]) if spk_id[3:].isdigit() else -1
+        if self.speaker_book is not None and idx >= 0 and idx < self.speaker_cluster.n_speakers:
+            auto, sim = self.speaker_book.match(
+                self.speaker_cluster.centroid_of(idx), config.SPEAKER_BOOK_SIM
+            )
+        if auto:
+            self.speaker_names[spk_id] = auto
+            # 自动识别成功也把本场质心并进名册：声音随时间/设备漂移时质心跟着走
+            if self.speaker_book is not None and idx >= 0:
+                self.speaker_book.add(auto, self.speaker_cluster.centroid_of(idx))
+            if self.echo:
+                print(f"  [spk] 声纹自动识别：{spk_id} ↔「{auto}」（相似度 {sim:.2f}，来自声纹名册）")
+            return
+        self._questions.append({"spk": spk_id, "sample": sample, "ts": ts, "printed": False})
+
+    def next_question_prompt(self) -> str | None:
+        """主循环调用：有新说话人待点名时返回提示文本（每个只返回一次），否则 None。"""
+        if self._question_current is None and self._questions:
+            self._question_current = self._questions.popleft()
+        q = self._question_current
+        if q is None or q.get("printed"):
+            return None
+        q["printed"] = True
+        when = time.strftime("%H:%M:%S", time.localtime(q["ts"]))
+        return (
+            f"[spk] 检测到新说话人 {q['spk']}（{when} 起）——刚才说：「{q['sample'][:40]}」\n"
+            "      他是谁？输入名字并回车（直接回车＝跳过；名字会记入声纹名册供下次自动识别）: "
+        )
+
+    def pending_questions_count(self) -> int:
+        """待点名 + 正在等待回答的说话人数。"""
+        return len(self._questions) + (1 if self._question_current is not None else 0)
+
+    def submit_answer(self, line: str) -> str | None:
+        """终端输入行归属：有点名待答 → 作为名字；否则返回 None（调用方按手动 VAR 处理）。"""
+        q = self._question_current
+        if q is None:
+            return None
+        self._question_current = None
+        name = (line or "").strip()
+        if not name:
+            return f"[spk] {q['spk']} 跳过命名"
+        self.name_speaker(q["spk"], name)
+        return f"[spk] {q['spk']} → {name}（已写入本场转写与声纹名册）"
+
+    def name_speaker(self, spk_id: str, name: str) -> None:
+        """把名字绑定到说话人：追溯改名本场转写与已落盘片段，并更新声纹名册。"""
+        name = (name or "").strip()[:24]
+        if not spk_id or not name:
+            return
+        self.speaker_names[spk_id] = name
+        for line in self.transcript:
+            if line.get("speaker") == spk_id:
+                line["speaker"] = name
+        idx = int(spk_id[3:]) if spk_id[3:].isdigit() else -1
+        if self.speaker_book is not None and 0 <= idx < self.speaker_cluster.n_speakers:
+            self.speaker_book.add(name, self.speaker_cluster.centroid_of(idx))
+        self._rename_in_stored_clips(spk_id, name)
+
+    def _rename_in_stored_clips(self, spk_id: str, name: str) -> None:
+        """已创建的片段 JSON 同步改名（薄/厚纪要与证据保持一致）。"""
+        for clip in self.clips:
+            path = config.POOL_DIR / self.session_id / f"{clip['clip_id']}.json"
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                changed = False
+                for line in data.get("transcript", []):
+                    if line.get("speaker") == spk_id:
+                        line["speaker"] = name
+                        changed = True
+                if changed:
+                    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except (OSError, ValueError):
+                continue  # 改名是增强项，单个片段损坏不中断
 
     # ---- 命中转正 ----
     def _relative_ts(self, ts: float) -> float:
@@ -267,6 +376,10 @@ class Session:
         # 草稿转写随进程内存一起消失——"没事故就什么都不落盘"（README 设计红线 2）。
         # 命中会话（G1c）才落盘：片段 + 全场转写文本（薄纪要所需）+ summary。
         if not self.clips:
+            # 声纹名册是用户主动提供的数据（点名应答才写入），不受"零落盘"约束——
+            # 零命中会话也照常保存名册，下次开会才能自动识别。
+            if self.speaker_book is not None:
+                self.speaker_book.save()
             return {
                 "session_id": self.session_id,
                 "lines": len(self.transcript),
@@ -274,6 +387,7 @@ class Session:
                 "corrections": self.corrections,
                 "transcript_json": None,
                 "hd_dir": None,
+                "speakers": dict(self.speaker_names),
             }
         out = config.POOL_DIR / self.session_id / "transcript.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -287,6 +401,8 @@ class Session:
             encoding="utf-8",
         )
         hd_dir = str(self.hd.session_dir) if self.hd is not None and self.hd.session_dir else None
+        if self.speaker_book is not None:
+            self.speaker_book.save()
         summary = {
             "session_id": self.session_id,
             "lines": len(transcript),
@@ -295,6 +411,7 @@ class Session:
             "rewrite_count": len(self.rewrite_log),
             "transcript_json": str(out),
             "hd_dir": hd_dir,
+            "speakers": dict(self.speaker_names),
         }
         (out.parent / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary

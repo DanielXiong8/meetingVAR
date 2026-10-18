@@ -45,6 +45,17 @@ LOOKBACK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_LOOKBACK", "300"
 HOTWORD_DEBOUNCE_SECONDS = 300  # 同一热词 5 分钟内不重复触发
 L2_SIM_THRESHOLD = 0.25         # TF-IDF 兴趣相似度触发阈值（v0 拍脑袋值，用反馈校准）
 
+# ---- 说话人（会话级在线声纹聚类）----
+# 句级 CAM++ 声纹的余弦相似度阈值：≥ 归入既有说话人，不够像且句子够长 → 新说话人。
+# v0 在 90s 换人样本上校准（test2 会议 14:00 起，换人点 ~34s，参照讯飞 LFASR 分人）：
+# 安全窗口 0.40–0.60（异人 cos 最大 0.348；≥0.65 开始把同一人拆多号），取中值 0.50。
+# 真实会议数据积累后再调。env 可覆盖。
+SPEAKER_SIM_THRESHOLD = float(__import__("os").environ.get("MEETINGVAR_SPEAKER_SIM", "0.50"))
+
+# 声纹名册（跨会话）自动识别阈值：比场内聚类阈值更严——错认人名比多问一次代价大，
+# 认不出就把"他是谁"问出来，绝不硬套名字。env 可覆盖。
+SPEAKER_BOOK_SIM = float(__import__("os").environ.get("MEETINGVAR_SPEAKER_BOOK_SIM", "0.60"))
+
 # ---- 路径 ----
 DATA_DIR = Path("data")
 POOL_DIR = DATA_DIR / "pool"

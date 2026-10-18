@@ -102,6 +102,7 @@ def cmd_transcribe(args) -> None:
 def cmd_record(args) -> None:
     from .live import record_session
     from .memory.calibration import load_threshold
+    from .memory.speaker_book import SpeakerBook
 
     terms = resolve_terms(args)
     focus = load_memory_docs(Path(args.memory)) if args.memory else None
@@ -109,7 +110,10 @@ def cmd_record(args) -> None:
     threshold = load_threshold(Path(args.memory)) if args.memory else None
     if threshold is not None:
         print(f"[calibration] 项目 L2 阈值: {threshold:.2f}")
-    summary = record_session(args, session_id, terms, focus, threshold)
+    book = SpeakerBook.load(config.DATA_DIR / "speakers.json")
+    if book.entries:
+        print(f"[spk] 声纹名册：{len(book.entries)} 人（{'、'.join(e['name'] for e in book.entries)}）")
+    summary = record_session(args, session_id, terms, focus, threshold, speaker_book=book)
     print(f"[done] session={session_id} / {summary['lines']} 句 / {summary['clips']} 片段 / 纠错 {len(summary['corrections'])} 处")
     if summary.get("transcript_json"):
         print(f"[next] meetingvar digest --session {session_id}")
@@ -368,6 +372,7 @@ def main() -> None:
     rc.add_argument("--no-screen", action="store_true")
     rc.add_argument("--audio-device", type=int, help="devices 列出的环回端点编号；默认跟随系统输出")
     rc.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算，实测约 13-20fps）")
+    rc.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
     rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
 
