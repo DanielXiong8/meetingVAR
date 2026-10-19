@@ -124,6 +124,52 @@ def cmd_record(args) -> None:
         print("[rec] 本场零命中：草稿转写已丢弃，未保存会议记录")
 
 
+def cmd_agent_actions(args) -> None:
+    """会后行动项 Agent：只读核对原句 → 审批 → 写入项目事实记忆。"""
+    import json as _json
+
+    from .agent.postmeeting import PostMeetingAgent, load_transcript
+
+    transcript_path = config.POOL_DIR / args.session / "transcript.json"
+    if not transcript_path.exists():
+        raise SystemExit(f"[agent] 没有找到会话转写: {transcript_path}")
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[agent] 项目文件夹无效: {project}")
+    transcript = load_transcript(transcript_path)
+    if args.json and not (args.yes or args.dry_run):
+        raise SystemExit("[agent] --json 需要配合 --yes 或 --dry-run，避免在无人值守时等待审批")
+
+    def approve(action, evidence):
+        print("\n[候选行动项]")
+        print(f"  任务: {action['title']}")
+        print(f"  负责人: {action['owner'] or '未指定'} · 截止: {action['due'] or '未指定'}")
+        for turn in evidence:
+            print(f"  证据 [{turn['id']}] {turn['speaker']}: {turn['text'][:160]}")
+        try:
+            return input("保存到项目记忆？[y/N] ").strip().lower() in {"y", "yes"}
+        except EOFError:
+            return False
+
+    agent = PostMeetingAgent(
+        session_id=args.session, transcript=transcript, project_root=project,
+        approval=(lambda action, evidence: True) if (args.yes or args.dry_run) else approve,
+        dry_run=args.dry_run, max_chars=args.max_chars,
+    )
+    report = agent.run()
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True)
+    else:
+        print(f"[agent] ok={report['ok']} 候选={report['candidates']} 核对={report['verified']} "
+              f"批准={report['approved']} 写入={report['written']} 跳过={report['skipped']} "
+              f"分块={report['chunks']} 任务={report['task_id']}")
+        for error in report["errors"]:
+            print(f"  [error] {error}")
+        print(f"[agent] 轨迹: {agent.trace.path}")
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
 def cmd_digest(args) -> None:
     from .report.generate import digest
 
@@ -399,6 +445,14 @@ def main() -> None:
     rc.add_argument("--interest", choices=["api", "manual"], default="manual",
                     help="API兴趣事件判断或仅手动保存；不以专业词或相似度直接保存")
 
+    ag = sub.add_parser("agent-actions", help="会后行动项 Agent：核对原句、审批后写入项目记忆")
+    ag.add_argument("--session", required=True, help="已保存的会话 ID")
+    ag.add_argument("--project", required=True, help="把行动项写入该项目的 agent_memory")
+    ag.add_argument("--dry-run", action="store_true", help="只核对和展示，不写项目记忆")
+    ag.add_argument("--yes", action="store_true", help="自动批准所有候选（适合脚本；人工使用请省略）")
+    ag.add_argument("--json", action="store_true", help="输出单行 JSON 报告")
+    ag.add_argument("--max-chars", type=int, default=12000, help="每次模型调用的转写字符上限")
+
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
@@ -457,7 +511,8 @@ def main() -> None:
     args = ap.parse_args()
     {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
      "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
-     "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench}[args.cmd](args)
+     "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench,
+     "agent-actions": cmd_agent_actions}[args.cmd](args)
 
 
 def cmd_understand(args) -> None:

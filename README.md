@@ -2,6 +2,8 @@
 
 > **当前开发基线：`main` → `feat/local-model-audio-fix` · 0.1.3**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断与轻量同步录屏；本分支新增本地 GPU 推理、API 失败分类和双源音频时间轴修复。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，UI 并行开发读 [UI 交接与接口契约](docs/UI_HANDOFF_0.1.2.md)。下方早期 CLI 架构保留作历史参考。
 
+> **Agent Phase 0**：工具契约/审批、任务检查点、项目事实记忆、Trace 和会后行动项 CLI 已加入 `agent/`，使用 `meetingvar agent-actions`。设计与边界见 [Agent Runtime](docs/AGENT_RUNTIME.md)。
+
 > record your meeting like VAR referee —— 不是记下一切，是保住对你重要的每一刻。
 
 > **定位（2026-10-08 修订，采纳外部评审）**：面向复杂工作会议的**个人证据层**——

@@ -31,8 +31,8 @@ class _StubHandler(BaseHTTPRequestHandler):
         pass
 
 
-# 端口避开 test_llm_extract 的 11433（两者同跑时先 shutdown 也会 TIME_WAIT 冲突）
-_PORT = 11533
+# Use an ephemeral port: fixed ports caused flaky collisions in the full suite.
+_PORT = 0
 
 
 class CurateTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class CurateTests(unittest.TestCase):
         cls.srv = HTTPServer(("127.0.0.1", _PORT), _StubHandler)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls._old = config.LLM_BASE_URL, config.LLM_MODEL, config.LLM_API_KEY
-        config.LLM_BASE_URL = f"http://127.0.0.1:{_PORT}/v1"
+        config.LLM_BASE_URL = f"http://127.0.0.1:{cls.srv.server_port}/v1"
         config.LLM_MODEL = "stub"
         config.LLM_API_KEY = "sk-stub"
 
