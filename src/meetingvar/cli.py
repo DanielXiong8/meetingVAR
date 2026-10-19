@@ -170,6 +170,94 @@ def cmd_agent_actions(args) -> None:
         raise SystemExit(1)
 
 
+def cmd_agent_ask(args) -> None:
+    """只读项目记忆问答：本地检索事实，模型只依据事实回答并给引用。"""
+    import json as _json
+
+    from .agent.recall import MemoryQAAgent
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[agent] 项目文件夹无效: {project}")
+    agent = MemoryQAAgent(project_root=project, question=args.question, limit=args.limit)
+    report = agent.run()
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True)
+    else:
+        print(report["answer"])
+        if report["sources"]:
+            print("\n[引用]")
+            for source in report["sources"]:
+                print(f"  [{source['name']}] ({source['type']}, score={source['score']})")
+        for error in report.get("errors", []):
+            print(f"  [warning] {error}")
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def cmd_agent_focus(args) -> None:
+    """会前关注清单：读项目材料，提出可判断的事件式关注点，审批后保存。"""
+    import json as _json
+
+    from .agent.focus import FocusAgent
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[agent] 项目文件夹无效: {project}")
+    if args.json and not (args.yes or args.dry_run):
+        raise SystemExit("[agent] --json 需要配合 --yes 或 --dry-run")
+
+    def approve(items):
+        print("\n[建议关注清单]")
+        for index, item in enumerate(items, 1):
+            print(f"  {index}. {item['title']} — {item['why']}")
+        try:
+            return input("保存为会前关注清单？[y/N] ").strip().lower() in {"y", "yes"}
+        except EOFError:
+            return False
+
+    agent = FocusAgent(project_root=project, dry_run=args.dry_run,
+                       approval=(lambda items: True) if (args.yes or args.dry_run) else approve,
+                       max_chars=args.max_chars)
+    report = agent.run()
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True)
+    else:
+        for item in report["items"]:
+            print(f"  - {item['title']}：{item['why']}")
+        print(f"[agent] ok={report['ok']} saved={report['saved']} path={report['path']}")
+        for error in report.get("errors", []):
+            print(f"  [error] {error}")
+    if not report["ok"]:
+        raise SystemExit(1)
+
+
+def cmd_agent_memory(args) -> None:
+    """查看/检索项目 Agent 事实记忆。"""
+    import json as _json
+
+    from .agent.memory import FactStore
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[agent] 项目文件夹无效: {project}")
+    store = FactStore(project)
+    facts = store.search(args.query, limit=args.limit) if args.query else store.list_facts(limit=args.limit)
+    if args.json:
+        payload = [{"name": f.get("name", ""), "description": f.get("description", ""),
+                    "type": f.get("metadata", {}).get("type", ""),
+                    "origin_meeting": f.get("metadata", {}).get("origin_meeting", ""),
+                    "updated_at": f.get("metadata", {}).get("updated_at", "")} for f in facts]
+        print(_json.dumps(payload, ensure_ascii=False), flush=True)
+        return
+    if not facts:
+        print("[agent] 暂无匹配的项目事实")
+        return
+    for fact in facts:
+        print(f"- [{fact.get('metadata', {}).get('type', '?')}] {fact.get('name', '')} — "
+              f"{fact.get('description', '')}")
+
+
 def cmd_digest(args) -> None:
     from .report.generate import digest
 
@@ -453,6 +541,25 @@ def main() -> None:
     ag.add_argument("--json", action="store_true", help="输出单行 JSON 报告")
     ag.add_argument("--max-chars", type=int, default=12000, help="每次模型调用的转写字符上限")
 
+    aq = sub.add_parser("agent-ask", help="只读项目记忆问答（带事实引用）")
+    aq.add_argument("--project", required=True)
+    aq.add_argument("--question", required=True)
+    aq.add_argument("--limit", type=int, default=8)
+    aq.add_argument("--json", action="store_true")
+
+    af = sub.add_parser("agent-focus", help="会前关注清单：读项目材料、审批后保存")
+    af.add_argument("--project", required=True)
+    af.add_argument("--dry-run", action="store_true")
+    af.add_argument("--yes", action="store_true")
+    af.add_argument("--json", action="store_true")
+    af.add_argument("--max-chars", type=int, default=12000)
+
+    am = sub.add_parser("agent-memory", help="查看/检索项目 Agent 事实记忆")
+    am.add_argument("--project", required=True)
+    am.add_argument("--query", default=None)
+    am.add_argument("--limit", type=int, default=20)
+    am.add_argument("--json", action="store_true")
+
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
@@ -512,7 +619,8 @@ def main() -> None:
     {"replay": cmd_replay, "transcribe": cmd_transcribe, "record": cmd_record, "digest": cmd_digest,
      "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
      "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench,
-     "agent-actions": cmd_agent_actions}[args.cmd](args)
+     "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
+     "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory}[args.cmd](args)
 
 
 def cmd_understand(args) -> None:

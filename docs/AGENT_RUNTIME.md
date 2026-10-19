@@ -1,4 +1,4 @@
-# meetingVAR Agent Runtime（Phase 0 + 会后行动项）
+# meetingVAR Agent Runtime（Phase 0 + 本地 Agent 闭环）
 
 本模块借鉴 ZCode（Apache-2.0）的**受控 Agent 运行时**思想，但不复制其编码 IDE 工具。实现保持独立、纯标准库、可离线测试。
 
@@ -33,20 +33,34 @@
 
 本地 append-only JSONL，按大小轮转。只记录工具名、参数摘要、状态、耗时、错误码和结果长度；不记录提示词、转写正文或密钥。敏感字段名自动 `[redacted]`。
 
-### 5. 会后行动项 Agent（`agent/postmeeting.py`）
+### 5. 会后会议事实提取（`agent/postmeeting.py`）
 
 流程：
 
 ```text
 读取 transcript.json（turn_1...）
-→ 按字符预算分块，模型提取候选行动项与 evidence_turn_ids
+→ 按字符预算分块，模型提取候选事实与 evidence_turn_ids
 → 本地校验 ID/字段，合并重复标题
 → get_transcript_window 只读核对原句
 → 用户审批（--yes 可自动化，--dry-run 只核对）
-→ create_action_item 幂等写入项目记忆
+→ create_meeting_fact 幂等写入项目记忆
 ```
 
-模型只提出候选和证据 ID；**原句由本地工具回填**，不信任模型复述。审批拒绝、证据不存在、LLM 失败都不会写入。
+支持五类事实：`action-item`、`decision`、`commitment`、`risk`、`open-question`。模型只提出候选和证据 ID；**原句由本地工具回填**，不信任模型复述。审批拒绝、证据不存在、LLM 失败都不会写入。
+
+### 6. 项目记忆问答（`agent/recall.py`）
+
+`agent-ask` 先本地检索项目事实（关键词/中文二元组评分），只把命中的事实交给模型；模型回答必须用 `[事实名称]` 引用，未提供的引用会被标记。无事实时不调用模型。
+
+### 7. 会前关注清单（`agent/focus.py`）
+
+`agent-focus` 读取项目可读材料，生成 3–8 条“可判断是否发生”的关注点，审批后保存到：
+
+```text
+<项目>/meetingvar/agent_memory/focus.json
+```
+
+下一次 `go` 的项目上下文会读取它，API 兴趣判断可据此理解“本场该关注什么”。`--dry-run` 不落盘。
 
 ## 使用
 
@@ -54,6 +68,11 @@
 meetingvar agent-actions --session go_xxx --project "D:\项目\某项目" --dry-run
 meetingvar agent-actions --session go_xxx --project "D:\项目\某项目"       # 逐条审批
 meetingvar agent-actions --session go_xxx --project "D:\项目\某项目" --yes --json
+
+meetingvar agent-ask --project "D:\项目\某项目" --question "第二方案定了吗？" --json
+meetingvar agent-focus --project "D:\项目\某项目" --dry-run
+meetingvar agent-focus --project "D:\项目\某项目" --yes
+meetingvar agent-memory --project "D:\项目\某项目" --query "第二方案"
 ```
 
 写入位置：
@@ -61,15 +80,16 @@ meetingvar agent-actions --session go_xxx --project "D:\项目\某项目" --yes 
 ```text
 <项目>/meetingvar/agent_memory/MEMORY.md
 <项目>/meetingvar/agent_memory/facts/*.md
+<项目>/meetingvar/agent_memory/focus.json
 <项目>/meetingvar/agent_memory/trace/<session>.jsonl
 <项目>/meetingvar/agent_memory/trace/tasks/*.json
 ```
 
-运行需要 `transcript.json`（有命中片段保存的会话）和已配置的 `MEETINGVAR_LLM_*`。`--json` 必须配合 `--yes` 或 `--dry-run`，避免无人值守时等待输入。
+运行需要 `transcript.json`（会后事实提取）和已配置的 `MEETINGVAR_LLM_*`。`--json` 必须配合 `--yes` 或 `--dry-run`，避免无人值守时等待输入。
 
 ## 验证
 
-- 22项专项测试：Schema 拒绝、审批失败/拒绝、超时、幂等缓存、Trace 脱敏、状态检查点、步骤预算、事实原子写/索引重建/路径穿越、行动项证据核对、审批拒绝、dry-run、LLM失败不写、CLI。
+- 31项专项测试：Schema 拒绝、审批失败/拒绝、超时、幂等缓存、Trace 脱敏、状态检查点、步骤预算、事实原子写/索引重建/路径清洗、五类事实核对、审批拒绝、dry-run、LLM失败不写、记忆问答引用、会前关注清单、上下文裁剪、CLI。
 - 真实外部API合成会议演练：2个候选、2个经证据核对并写入项目事实，`MEMORY.md` 与证据原句生成；这是合成内容，不含真实会议，也不代表行动项质量已验收。
 - 未调用真实模型或网络；测试使用纯假 LLM/临时目录（上面单独的真实API演练除外）。
 

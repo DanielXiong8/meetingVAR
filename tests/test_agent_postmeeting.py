@@ -95,6 +95,28 @@ class PostMeetingTests(unittest.TestCase):
         self.assertEqual(report["written"], 0)
         self.assertFalse(agent.fact_store.facts_dir.exists())
 
+    def test_all_fact_types_are_extracted_and_verified(self):
+        payload = {
+            "actions": [self.action],
+            "decisions": [{"title": "采用第二方案", "rationale": "第一方案风险高",
+                           "evidence_turn_ids": ["turn_2"], "confidence": 0.8}],
+            "commitments": [{"title": "周五交付", "owner": "小林", "due": "周五",
+                             "evidence_turn_ids": ["turn_3"], "confidence": 0.9}],
+            "risks": [{"title": "时间不足", "severity": "medium",
+                       "evidence_turn_ids": ["turn_3"], "confidence": 0.6}],
+            "open_questions": [{"title": "是否增加测试", "evidence_turn_ids": ["turn_1"],
+                                "confidence": 0.5}],
+        }
+        agent = self.agent(llm=lambda prompt: {"ok": True, "content": json.dumps(payload)})
+        report = agent.run()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["written"], 5)
+        self.assertEqual(report["written_by_type"], {
+            "action-item": 1, "decision": 1, "commitment": 1, "risk": 1, "open-question": 1})
+        facts = agent.fact_store.list_facts()
+        types = sorted(fact["metadata"]["type"] for fact in facts)
+        self.assertEqual(types, ["action-item", "commitment", "decision", "open-question", "risk"])
+
     def test_llm_failure_writes_nothing_and_marks_failed(self):
         agent = self.agent(llm=lambda prompt: {"ok": False, "error_code": "truncated"})
         report = agent.run()
