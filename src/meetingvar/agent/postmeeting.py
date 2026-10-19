@@ -256,6 +256,130 @@ class PostMeetingAgent:
             raise RuntimeError(str(reply.get("error_code") or "llm_failed"))
         return _parse_payload(reply.get("content", ""), {t["id"] for t in self.transcript})
 
+    @staticmethod
+    def _normalize_item(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        fact_type = item.get("fact_type")
+        if fact_type not in set(_CATEGORIES.values()):
+            return None
+        title = item.get("title")
+        ids = item.get("evidence_turn_ids")
+        confidence = item.get("confidence")
+        if not isinstance(title, str) or not title.strip() or len(title) > _MAX_TITLE:
+            return None
+        if not isinstance(ids, list) or not ids or len(ids) > 10:
+            return None
+        if any(not isinstance(tid, str) for tid in ids):
+            return None
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            return None
+        if not (0 <= float(confidence) <= 1):
+            return None
+        fields = {}
+        for key in ("owner", "due", "rationale", "severity"):
+            value = item.get(key, "")
+            if not isinstance(value, str):
+                return None
+            fields[key] = value.strip()[:500]
+        return {"fact_type": fact_type, "title": title.strip(), "owner": fields["owner"],
+                "due": fields["due"], "rationale": fields["rationale"],
+                "severity": fields["severity"], "confidence": float(confidence),
+                "evidence_turn_ids": list(dict.fromkeys(ids))}
+
+    def preview(self) -> dict:
+        """Extract and verify candidates without writing any fact."""
+        task = self.runtime.create("postmeeting_preview", {"session_id": self.session_id})
+        self.runtime.start(task)
+        report = {"ok": False, "session_id": self.session_id, "items": [],
+                  "candidates": 0, "verified": 0, "chunks": 0, "task_id": task.task_id,
+                  "errors": []}
+        try:
+            chunks = _chunks(self.transcript, self.max_chars)
+            report["chunks"] = len(chunks)
+            candidates = []
+            for chunk in chunks:
+                candidates.extend(self._call_llm(_prompt(chunk)))
+            candidates = _merge(candidates)[:30]
+            report["candidates"] = len(candidates)
+        except Exception as exc:
+            report["errors"].append({"stage": "extract", "code": type(exc).__name__})
+            self.runtime.fail(task, "extract_failed")
+            return report
+        context = ToolContext(session_id=self.session_id, project_root=self.project_root,
+                              transcript=self.transcript, fact_store=self.fact_store,
+                              dry_run=True)
+        for item in candidates:
+            verified = self.runtime.run_tool(
+                task, self.registry, "get_transcript_window",
+                {"turn_ids": item["evidence_turn_ids"]}, context=context, fail_fast=False)
+            if not verified.get("ok"):
+                report["errors"].append({"stage": "verify", "code": verified.get("error_code")})
+                continue
+            evidence = verified["result"].value
+            preview = dict(item)
+            preview["evidence_text"] = "\n".join(
+                f"[{turn['id']}] {turn['speaker']}: {turn['text']}" for turn in evidence)
+            report["items"].append(preview)
+            report["verified"] += 1
+        report["ok"] = True
+        self.runtime.complete(task, {"candidates": report["candidates"], "verified": report["verified"]})
+        return report
+
+    def save_items(self, items: list[dict]) -> dict:
+        """Write selected, already-previewed items; each citation is re-verified."""
+        task = self.runtime.create("postmeeting_save", {"session_id": self.session_id})
+        self.runtime.start(task)
+        report = {"ok": False, "session_id": self.session_id, "written": 0,
+                  "skipped": 0, "written_by_type": {}, "task_id": task.task_id, "errors": []}
+        context = ToolContext(session_id=self.session_id, project_root=self.project_root,
+                              transcript=self.transcript, fact_store=self.fact_store,
+                              dry_run=self.dry_run)
+        for raw in items:
+            item = self._normalize_item(raw)
+            if item is None:
+                report["skipped"] += 1
+                report["errors"].append({"stage": "validate", "code": "invalid_item"})
+                continue
+            verified = self.runtime.run_tool(
+                task, self.registry, "get_transcript_window",
+                {"turn_ids": item["evidence_turn_ids"]}, context=context, fail_fast=False)
+            if not verified.get("ok"):
+                report["skipped"] += 1
+                report["errors"].append({"stage": "verify", "code": verified.get("error_code")})
+                continue
+            evidence = verified["result"].value
+            evidence_text = "\n".join(
+                f"[{turn['id']}] {turn['speaker']}: {turn['text']}" for turn in evidence)
+            if len(evidence_text) > 6000:
+                evidence_text = evidence_text[:6000] + "\n…[truncated]"
+            created = self.runtime.run_tool(
+                task, self.registry, "create_meeting_fact",
+                {"fact_type": item["fact_type"], "title": item["title"],
+                 "owner": item["owner"], "due": item["due"],
+                 "rationale": item["rationale"], "severity": item["severity"],
+                 "confidence": item["confidence"],
+                 "evidence_turn_ids": item["evidence_turn_ids"],
+                 "evidence_text": evidence_text},
+                context=context, approval=lambda request: True,
+                idempotency_key=f"{self.session_id}:{item['fact_type']}:{item['title'].casefold()}",
+                fail_fast=False)
+            if created.get("ok"):
+                if not self.dry_run:
+                    report["written"] += 1
+                    report["written_by_type"][item["fact_type"]] = (
+                        report["written_by_type"].get(item["fact_type"], 0) + 1)
+            else:
+                report["skipped"] += 1
+                report["errors"].append({"stage": "write", "code": created.get("error_code")})
+        write_failed = any(error.get("stage") in {"write", "validate"} for error in report["errors"])
+        report["ok"] = not write_failed
+        if write_failed:
+            self.runtime.fail(task, "save_failed")
+        else:
+            self.runtime.complete(task, {"written": report["written"]})
+        return report
+
     def run(self) -> dict:
         task = self.runtime.create("postmeeting_meeting_facts", {"session_id": self.session_id})
         self.runtime.start(task)

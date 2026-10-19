@@ -110,6 +110,17 @@ class FocusTests(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertEqual(report["errors"][0]["code"], "no_readable_material")
 
+    def test_preview_then_save_selected_items(self):
+        agent = self.agent()
+        preview = agent.preview()
+        self.assertTrue(preview["ok"], preview)
+        self.assertFalse((self.project / "meetingvar" / "agent_memory" / "focus.json").exists())
+        saved = agent.save_items(preview["items"][:2], preview["sources"])
+        self.assertTrue(saved["ok"], saved)
+        self.assertTrue(saved["saved"])
+        data = json.loads((self.project / "meetingvar" / "agent_memory" / "focus.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["items"]), 2)
+
     def test_large_model_reading_does_not_truncate_focus_json(self):
         meetingvar = self.project / "meetingvar"
         meetingvar.mkdir(exist_ok=True)

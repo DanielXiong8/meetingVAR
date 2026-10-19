@@ -379,6 +379,116 @@ def cmd_write_terms(folder: Path, terms_file: Path) -> dict:
     return {"ok": True, "out": str(out), "count": len(terms)}
 
 
+def cmd_agent_status(folder: Path) -> dict:
+    import json as _json
+
+    from meetingvar.agent.memory import FactStore
+
+    store = FactStore(folder)
+    facts = store.list_facts(limit=500)
+    focus_path = folder / "meetingvar" / "agent_memory" / "focus.json"
+    focus = []
+    focus_sources = []
+    focus_updated = ""
+    if focus_path.exists():
+        try:
+            data = _json.loads(focus_path.read_text(encoding="utf-8"))
+            focus = data.get("items", []) if isinstance(data, dict) else []
+            focus_sources = data.get("sources", []) if isinstance(data, dict) else []
+            focus_updated = data.get("updated_at", "") if isinstance(data, dict) else ""
+        except (OSError, ValueError):
+            focus = []
+    counts = {}
+    for fact in facts:
+        kind = fact.get("metadata", {}).get("type", "unknown")
+        counts[kind] = counts.get(kind, 0) + 1
+    return {"ok": True, "folder": str(folder), "facts": len(facts), "by_type": counts,
+            "focus": focus, "focus_sources": focus_sources, "focus_updated": focus_updated,
+            "memory_index": str(store.index_path)}
+
+
+def cmd_agent_focus_preview(folder: Path) -> dict:
+    from meetingvar.agent.focus import FocusAgent
+
+    agent = FocusAgent(project_root=folder, dry_run=True, approval=lambda items: True)
+    return agent.preview()
+
+
+def cmd_agent_focus_save(folder: Path, payload_file: Path) -> dict:
+    import json as _json
+
+    from meetingvar.agent.focus import FocusAgent
+
+    try:
+        payload = _json.loads(payload_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "关注清单 JSON 读取失败"}
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    sources = payload.get("sources", []) if isinstance(payload, dict) else []
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "error": "关注清单为空"}
+    agent = FocusAgent(project_root=folder, dry_run=False, approval=lambda items: True)
+    return agent.save_items(items, sources if isinstance(sources, list) else [])
+
+
+def cmd_agent_extract_preview(session: str, folder: Path) -> dict:
+    from meetingvar import config
+    from meetingvar.agent.postmeeting import PostMeetingAgent, load_transcript
+
+    path = config.POOL_DIR / session / "transcript.json"
+    if not path.exists():
+        return {"ok": False, "error": "该会话没有保存的转写"}
+    try:
+        transcript = load_transcript(path)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "转写文件不可读"}
+    return PostMeetingAgent(session_id=session, transcript=transcript, project_root=folder,
+                            dry_run=True, approval=lambda item, evidence: True).preview()
+
+
+def cmd_agent_facts_save(session: str, folder: Path, payload_file: Path) -> dict:
+    import json as _json
+
+    from meetingvar import config
+    from meetingvar.agent.postmeeting import PostMeetingAgent, load_transcript
+
+    path = config.POOL_DIR / session / "transcript.json"
+    if not path.exists():
+        return {"ok": False, "error": "该会话没有保存的转写"}
+    try:
+        items = _json.loads(payload_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "事实 JSON 读取失败"}
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "error": "没有选择任何事实"}
+    try:
+        transcript = load_transcript(path)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "转写文件不可读"}
+    return PostMeetingAgent(session_id=session, transcript=transcript, project_root=folder,
+                            dry_run=False, approval=lambda item, evidence: True).save_items(items)
+
+
+def cmd_agent_ask(folder: Path, question: str) -> dict:
+    from meetingvar.agent.recall import MemoryQAAgent
+
+    return MemoryQAAgent(project_root=folder, question=question).run()
+
+
+def cmd_agent_memory(folder: Path, query: str = "") -> dict:
+    from meetingvar.agent.memory import FactStore
+
+    store = FactStore(folder)
+    facts = store.search(query, limit=50) if query.strip() else store.list_facts(limit=50)
+    return {"ok": True, "facts": [{
+        "name": fact.get("name", ""), "description": fact.get("description", ""),
+        "type": fact.get("metadata", {}).get("type", ""),
+        "origin_meeting": fact.get("metadata", {}).get("origin_meeting", ""),
+        "updated_at": fact.get("metadata", {}).get("updated_at", ""),
+        "body": str(fact.get("body", ""))[:1200],
+    } for fact in facts]}
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(json.dumps({"ok": False, "error": "usage: engine_bridge.py preview <folder> | check"}))
@@ -405,12 +515,26 @@ def main() -> None:
                                      int(sys.argv[3]) if len(sys.argv) > 3 else 0)
         elif cmd == "write_terms":
             payload = cmd_write_terms(Path(sys.argv[2]), Path(sys.argv[3]))
+        elif cmd == "agent_status":
+            payload = cmd_agent_status(Path(sys.argv[2]))
+        elif cmd == "agent_focus_preview":
+            payload = cmd_agent_focus_preview(Path(sys.argv[2]))
+        elif cmd == "agent_focus_save":
+            payload = cmd_agent_focus_save(Path(sys.argv[2]), Path(sys.argv[3]))
+        elif cmd == "agent_extract_preview":
+            payload = cmd_agent_extract_preview(sys.argv[2], Path(sys.argv[3]))
+        elif cmd == "agent_facts_save":
+            payload = cmd_agent_facts_save(sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]))
+        elif cmd == "agent_ask":
+            payload = cmd_agent_ask(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "agent_memory":
+            payload = cmd_agent_memory(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
         else:
             payload = {"ok": False, "error": f"unknown command: {cmd}"}
     except Exception as exc:  # noqa: BLE001
-        if cmd in {"test_llm", "understand", "understand_plan"}:
+        if cmd.startswith("agent_") or cmd in {"test_llm", "understand", "understand_plan"}:
             payload = {"ok": False, "error_code": "internal_error", "complete": False,
-                       "warnings": [], "error": "模型任务未能完成；内部异常详情未向输出公开"}
+                       "warnings": [], "error": "Agent/模型任务未能完成；内部异常详情未向输出公开"}
         else:
             payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     print(json.dumps(payload, ensure_ascii=False))

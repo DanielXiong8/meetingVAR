@@ -21,6 +21,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -32,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.2.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1232,6 +1233,120 @@ class Backend:
             return {"ok": False, "error": f"无输出 rc={r.returncode}: {(r.stderr or '')[-200:]}"}
         except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# ---- Agent 桌面接口（桥接到引擎 Python） ----
+    def _agent_bridge(self, args: list[str], *, use_llm: bool = False, timeout: int = 300) -> dict:
+        py = self._cfg.get("engine_python") or ""
+        repo = self._cfg.get("repo_dir") or ""
+        if not py or not Path(py).is_file():
+            return {"ok": False, "error": "未配置引擎 Python"}
+        env = self._engine_env()
+        if use_llm:
+            try:
+                env.update(self._llm_env(purpose="reading"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        try:
+            process = subprocess.run(
+                [py, str(BRIDGE_PY), *args], cwd=repo, env=env, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                creationflags=_SPAWN_FLAGS,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "Agent 任务超时；可在 CLI 查看/重试"}
+        except OSError:
+            return {"ok": False, "error": "Agent 子进程启动失败"}
+        lines = [line for line in (process.stdout or "").splitlines() if line.startswith("{")]
+        if not lines:
+            return {"ok": False, "error": "Agent 没有返回结构化结果"}
+        try:
+            data = json.loads(lines[-1])
+        except ValueError:
+            return {"ok": False, "error": "Agent 结果无法解析"}
+        return data if isinstance(data, dict) else {"ok": False, "error": "Agent 结果格式无效"}
+
+    @staticmethod
+    def _agent_valid_session(session: str) -> bool:
+        return bool(re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", session or "")) and ".." not in session
+
+    def _agent_payload_file(self, payload) -> Path:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="agent_", suffix=".json", dir=str(CONFIG_DIR))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(payload, stream, ensure_ascii=False)
+            return Path(name)
+        except Exception:
+            try:
+                os.unlink(name)
+            except OSError:
+                pass
+            raise
+
+    def agent_status(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["agent_status", folder], timeout=60)
+
+    def agent_focus_preview(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["agent_focus_preview", folder], use_llm=True, timeout=240)
+
+    def agent_focus_save(self, folder: str, items: list, sources: list | None = None) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(items, list) or not items:
+            return {"ok": False, "error": "没有选择关注点"}
+        payload = self._agent_payload_file({"items": items, "sources": sources or []})
+        try:
+            return self._agent_bridge(["agent_focus_save", folder, str(payload)], timeout=60)
+        finally:
+            try:
+                payload.unlink()
+            except OSError:
+                pass
+
+    def agent_extract_preview(self, session: str, folder: str) -> dict:
+        if not self._agent_valid_session(session):
+            return {"ok": False, "error": "会话 ID 无效"}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["agent_extract_preview", session, folder],
+                                  use_llm=True, timeout=300)
+
+    def agent_facts_save(self, session: str, folder: str, items: list) -> dict:
+        if not self._agent_valid_session(session):
+            return {"ok": False, "error": "会话 ID 无效"}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(items, list) or not items:
+            return {"ok": False, "error": "没有选择事实"}
+        payload = self._agent_payload_file(items)
+        try:
+            return self._agent_bridge(["agent_facts_save", session, folder, str(payload)], timeout=120)
+        finally:
+            try:
+                payload.unlink()
+            except OSError:
+                pass
+
+    def agent_ask(self, folder: str, question: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(question, str) or not question.strip():
+            return {"ok": False, "error": "请输入问题"}
+        return self._agent_bridge(["agent_ask", folder, question.strip()[:800]],
+                                  use_llm=True, timeout=180)
+
+    def agent_memory(self, folder: str, query: str = "") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        args = ["agent_memory", folder]
+        if isinstance(query, str) and query.strip():
+            args.append(query.strip()[:200])
+        return self._agent_bridge(args, timeout=60)
 
 
 def main() -> None:

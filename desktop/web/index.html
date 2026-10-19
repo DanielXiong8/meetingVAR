@@ -20,6 +20,7 @@
     <button class="navbtn active" data-page="home">● 主页</button>
     <button class="navbtn" data-page="project">▤ 项目</button>
     <button class="navbtn" data-page="library">▦ 会议库</button>
+    <button class="navbtn" data-page="agent">◆ Agent</button>
     <button class="navbtn" data-page="settings">⚙ 设置</button>
   </nav>
 
@@ -109,6 +110,55 @@
       </div>
       <div id="libGroups" class="lib-groups"></div>
       <div id="sessionDetail" class="detail card" hidden></div>
+    </section>
+
+    <!-- Agent：会前关注、会后事实、项目记忆问答 -->
+    <section id="page-agent" class="page">
+      <div class="card agent-head">
+        <div>
+          <div class="pc-label">当前项目</div>
+          <div class="pc-path" id="agentProject">（未选择项目）</div>
+        </div>
+        <span id="agentStatusLine" class="muted">打开 Agent 页后加载项目记忆</span>
+      </div>
+
+      <div class="agent-grid">
+        <div class="card">
+          <div class="row"><b>会前关注清单</b>
+            <span class="muted">让 Agent 从项目材料提出可判断的关注点</span>
+            <button id="btnFocusGen" class="btn btn-primary">生成关注清单</button>
+            <button id="btnFocusSave" class="btn" disabled>保存勾选</button>
+          </div>
+          <div id="focusList" class="agent-list muted">暂无关注清单</div>
+        </div>
+
+        <div class="card">
+          <div class="row"><b>会后会议事实</b>
+            <select id="agentSession" class="input agent-session"><option value="">选择已保存会话</option></select>
+            <button id="btnFactsPreview" class="btn btn-primary">预览事实</button>
+            <button id="btnFactsSave" class="btn" disabled>写入勾选</button>
+          </div>
+          <div class="muted">Agent 只提出候选；原句由本地工具核对，勾选后才写入项目记忆。</div>
+          <div id="factsList" class="agent-list muted">选择会话后预览行动项、决策、承诺、风险、未决问题</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row"><b>项目记忆问答</b>
+          <input id="agentQuestion" class="input" placeholder="例如：第二方案定了吗？谁负责周五交付？">
+          <button id="btnAsk" class="btn btn-primary">提问</button>
+        </div>
+        <div class="muted">只依据已经写入项目记忆的事实回答，并列出引用；找不到依据会明确说明。</div>
+        <div id="agentAnswer" class="agent-answer" hidden></div>
+      </div>
+
+      <div class="card">
+        <div class="row"><b>项目记忆</b>
+          <input id="agentMemoryQuery" class="input" placeholder="按关键词检索事实记忆（留空显示最近）">
+          <button id="btnMemory" class="btn">检索</button>
+        </div>
+        <div id="agentMemory" class="agent-list muted">暂无记忆</div>
+      </div>
     </section>
 
     <!-- 设置 -->

@@ -1,4 +1,4 @@
-# meetingVAR 开发资源与分支状态（2026-10-18）
+# meetingVAR 开发资源与分支状态（2026-10-19）
 
 本文用于黑客松结束后的持续开发交接。只记录资源位置、当前状态和已知边界，不包含API密钥、真实会议转写或用户配置内容。
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `3dea655` | 本地 Agent 闭环：工具契约/审批、任务检查点、五类会议事实、项目记忆问答、会前关注清单、Trace。 |
+| `feat/agent-runtime` | `pending` | 本地 Agent 闭环 + 0.2.0 Agent 桌面页：会前关注、会后五类事实、记忆问答/检索。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
@@ -21,15 +21,15 @@
 
 **建议顺序：** 先评审并合入 `feat/local-model-audio-fix`；再由队友把 `integration/28-reconciliation` 合并最新main解决分叉；确认无回归后统一旧分支的清理。删除远端分支会改变协作者环境，本文不自动执行。
 
-新建PR入口：<https://github.com/DanielXiong8/meetingVAR/pull/new/feat/local-model-audio-fix>
+新建PR入口：<https://github.com/DanielXiong8/meetingVAR/pull/new/feat/agent-runtime>
 
 ## 2. 本机代码与运行环境
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/local-model-audio-fix`，工作区干净，版本0.1.3。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，工作区干净，版本0.2.0。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.1.3；安装器版本与快捷方式已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.2.0（含 Agent 页）；安装器版本与快捷方式已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -38,8 +38,9 @@
 
 | 资源 | 位置 | 说明 |
 |---|---|---|
-| 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 各自约65MB，保留EXE、安装器和校验/版本说明；0.1.3为当前版本。 |
-| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议后续确认后归档或清理；不要与0.1.3混淆。 |
+| 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
+| 0.2.0发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.2.0` | 当前版，含 Agent 桌面页、EXE、安装器与旧版备份。 |
+| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.2.0混淆。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -59,10 +60,10 @@
 
 ## 5. 验证快照（2026-10-18 晚）
 
-- 完整Python3.10依赖环境：430项测试、**0跳过、430通过**（68.16秒），`compileall`通过，完整CLI仿真通过（17.05秒）。
-- 最小依赖CI模拟：430项发现，389项通过，41项按依赖跳过，编译通过。
+- 完整Python3.10依赖环境：432项测试、**0跳过、432通过**（68.16秒），`compileall`通过，完整CLI仿真通过（17.05秒）。
+- 最小依赖CI模拟：432项发现，391项通过，41项按依赖跳过，编译通过。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
-- Agent专项：31项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
+- Agent专项：33项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
 - 外部API输出修复：合成80实体块有效；真实API 5/5合成项目块完成、覆盖100%（约12.6秒）；思考关闭后不再被推理 token 截断。详见 `docs/API_OUTPUT_BUDGET_FIX.md`。
 - 以上均为合成/仿真或现有单元测试；真实麦克风、讯飞实际识别质量与长会硬件稳定性仍未验收。
 

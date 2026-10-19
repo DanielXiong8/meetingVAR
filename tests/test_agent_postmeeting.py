@@ -117,6 +117,20 @@ class PostMeetingTests(unittest.TestCase):
         types = sorted(fact["metadata"]["type"] for fact in facts)
         self.assertEqual(types, ["action-item", "commitment", "decision", "open-question", "risk"])
 
+    def test_preview_then_selective_save_writes_only_selected(self):
+        second = {"title": "更新项目文档", "owner": "小林", "due": "",
+                  "evidence_turn_ids": ["turn_1"], "confidence": 0.7}
+        agent = self.agent(actions=[self.action, second])
+        preview = agent.preview()
+        self.assertTrue(preview["ok"], preview)
+        self.assertEqual(len(preview["items"]), 2)
+        self.assertFalse(agent.fact_store.facts_dir.exists())
+        saved = agent.save_items([preview["items"][0]])
+        self.assertTrue(saved["ok"], saved)
+        self.assertEqual(saved["written"], 1)
+        self.assertEqual(len(agent.fact_store.list_facts()), 1)
+        self.assertEqual(agent.fact_store.list_facts()[0]["name"], "周五交付第一版")
+
     def test_llm_failure_writes_nothing_and_marks_failed(self):
         agent = self.agent(llm=lambda prompt: {"ok": False, "error_code": "truncated"})
         report = agent.run()

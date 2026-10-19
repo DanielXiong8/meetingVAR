@@ -124,6 +124,36 @@ class FocusAgent:
             deduped.setdefault(key, item)
         return list(deduped.values())[:8]
 
+    def preview(self) -> dict:
+        """Generate and validate a focus list without saving it."""
+        previous = self.dry_run
+        self.dry_run = True
+        try:
+            return self.run()
+        finally:
+            self.dry_run = previous
+
+    def save_items(self, items: list[dict], sources: list[str] | None = None) -> dict:
+        """Save items already reviewed by the user; schema validation is repeated."""
+        task = self.runtime.create("premeeting_focus_save", {"project": self.project_root.name})
+        self.runtime.start(task)
+        report = {"ok": False, "saved": False, "path": "", "items": items,
+                  "task_id": task.task_id, "errors": []}
+        context = ToolContext(project_root=self.project_root, dry_run=self.dry_run)
+        saved = self.runtime.run_tool(
+            task, self.registry, "save_focus",
+            {"items": items, "sources": list(sources or [])}, context=context,
+            approval=lambda request: True, fail_fast=False)
+        if saved.get("ok"):
+            report["ok"] = True
+            report["saved"] = not self.dry_run
+            report["path"] = saved["result"].value.get("path", "")
+            self.runtime.complete(task, {"items": len(items), "saved": report["saved"]})
+        else:
+            report["errors"].append({"stage": "save", "code": saved.get("error_code")})
+            self.runtime.fail(task, "save_failed")
+        return report
+
     def run(self) -> dict:
         task = self.runtime.create("premeeting_focus", {"project": self.project_root.name})
         self.runtime.start(task)
