@@ -104,7 +104,17 @@ _MAP_SYS = """你是严谨的文本分析员。下面是某个项目（可能是
  "events":[{"what":"这一块里发生了什么关键事","quote":"原文短引（≤30字）"}]}
 硬规则：人名/词必须在这块原文里逐字出现（系统会校验，编造会被丢弃）；没有就输出 []。
 为控制输出长度，persons 最多 8 项、keywords 最多 12 项、events 最多 6 项；只保留最重要的，按重要性排序，不重复。
+引用原文中的英文双引号时改写为中文引号「」；不要在 JSON 字符串内输出未转义的英文双引号。
 不要输出推理过程、解释、代码围栏或额外字段。
+
+【块：<<DOC>> 第 <<OFF>> 字起 · <<LABEL>>】
+<<TEXT>>
+"""
+
+_COMPACT_SYS = """你是严谨的文本分析员。下面是某个项目的一块内容。只输出一个 JSON：
+{"persons":[],"keywords":[{"term":"原文中出现的词","why":"为什么它重要（这一块里的依据）"}],"events":[]}
+硬规则：词必须在这块原文里逐字出现（系统会校验）；最多 5 项，按重要性排序，不重复。
+引用原文中的英文双引号时改写为中文引号「」；不要解释、代码围栏或额外字段。
 
 【块：<<DOC>> 第 <<OFF>> 字起 · <<LABEL>>】
 <<TEXT>>
@@ -119,6 +129,11 @@ _OVERVIEW_SYS = """下面是一个项目的卷/章/文件标题清单。请用�
 
 def _map_prompt(ch: dict) -> str:
     return (_MAP_SYS.replace("<<DOC>>", ch["doc"]).replace("<<OFF>>", str(ch["offset"]))
+            .replace("<<LABEL>>", ch["label"]).replace("<<TEXT>>", ch["text"]))
+
+
+def _compact_prompt(ch: dict) -> str:
+    return (_COMPACT_SYS.replace("<<DOC>>", ch["doc"]).replace("<<OFF>>", str(ch["offset"]))
             .replace("<<LABEL>>", ch["label"]).replace("<<TEXT>>", ch["text"]))
 
 
@@ -231,6 +246,42 @@ def verify_chunk(data: dict, text: str) -> dict:
     return out
 
 
+def _repair_inner_quotes(text: str) -> str:
+    """Escape unescaped quotes inside JSON strings (small-model artifact).
+
+    A quote followed by a JSON delimiter closes the string; any other quote is
+    treated as literal text and escaped. The repaired document must still pass
+    the strict schema check and evidence verification before it is accepted.
+    """
+    out: list[str] = []
+    in_string, escaped = False, False
+    for i, char in enumerate(text):
+        if not in_string:
+            out.append(char)
+            if char == '"':
+                in_string = True
+            continue
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\":
+            out.append(char)
+            escaped = True
+        elif char == '"':
+            j = i + 1
+            while j < len(text) and text[j] in " \t\r\n":
+                j += 1
+            following = text[j] if j < len(text) else ""
+            if following in {",", ":", "}", "]", ""}:
+                out.append('"')
+                in_string = False
+            else:
+                out.append('\\"')
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def _stable_json(raw: str | None) -> dict | None:
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -243,7 +294,25 @@ def _stable_json(raw: str | None) -> dict | None:
     from ..llm import parse_json_object
 
     data = parse_json_object(cleaned)
-    return data if _valid_map(data) else None
+    if _valid_map(data):
+        return data
+    # Some small models close a complete object with one extra quote
+    # ("...}]}") after an otherwise valid response. Accept only that exact
+    # artifact, never arbitrary trailing prose or a second object.
+    if cleaned.startswith("{") and cleaned.endswith('"'):
+        stripped = cleaned[:-1].rstrip()
+        data = parse_json_object(stripped)
+        if _valid_map(data):
+            return data
+        cleaned = stripped
+    # Dense source text often contains ASCII quotes such as "paperless".
+    # Repair only when the result still parses and matches the strict schema.
+    repaired = _repair_inner_quotes(cleaned)
+    if repaired != cleaned:
+        data = parse_json_object(repaired)
+        if _valid_map(data):
+            return data
+    return None
 
 
 def _chunk_key(ch: dict, profile: dict, chunk_chars: int = CHUNK_CHARS) -> str:
@@ -268,7 +337,7 @@ def understand(folder: Path, max_chunks: int | None = None, progress=None,
               "files": [{"name": n, "chars": len(t)} for n, t in docs], "notes": notes,
               "unique_chars": unique, "chunks_total": 0, "chunks_read": 0,
               "covered_chars": 0, "coverage_pct": 0.0, "cache_hits": 0,
-              "overview": "", "terms": [], "persons": [], "events": []}
+              "overview": "", "terms": [], "persons": [], "events": [], "failed_chunks": []}
     if not docs:
         result.update(error="没有可读文本文件（.md/.txt/.docx）", error_code="no_text")
         return result
@@ -313,13 +382,51 @@ def understand(folder: Path, max_chunks: int | None = None, progress=None,
         except (OSError, ValueError):
             warn("块缓存不可读，已重新读取。")
         if verified is None:
-            reply = chat_result(_map_prompt(ch), temperature=0.2, timeout=1800)
-            data = _stable_json(reply["content"]) if reply["ok"] else None
+            prompt = _map_prompt(ch)
+            data, reply = None, None
+            retried = False
+            for attempt in range(3):
+                repaired_prompt = prompt
+                if attempt:
+                    suffix = ("\n\n上一次输出不是合法 JSON。请重新输出：只输出一个 JSON 对象，"
+                              "以 { 开头、以 } 结尾，不要外层引号、代码围栏、解释或额外对象。")
+                    # The chunk splitter may have filled the input budget exactly;
+                    # never turn a formatting retry into a context_budget failure.
+                    if budget.fits(prompt + suffix):
+                        repaired_prompt = prompt + suffix
+                reply = chat_result(repaired_prompt, temperature=0.2 if attempt == 0 else 0.0,
+                                    timeout=1800)
+                if not reply["ok"]:
+                    break
+                data = _stable_json(reply["content"])
+                if data is not None:
+                    if retried:
+                        warn(f"第 {i + 1} 块输出不是合法 JSON，已自动重试并恢复。")
+                    break
+                retried = True
             if data is None:
-                failure = reply if not reply["ok"] else error_result("invalid_json")
-                result.update(error=f"第 {i + 1} 块读取失败：{failure['error']}",
-                              error_code=failure["error_code"])
-                break
+                compact = _compact_prompt(ch)
+                if budget.fits(compact):
+                    compact_reply = chat_result(compact, temperature=0.0, timeout=1800)
+                    if compact_reply["ok"]:
+                        data = _stable_json(compact_reply["content"])
+                        if data is not None:
+                            reply = compact_reply
+                            warn(f"第 {i + 1} 块改用精简模式读取。")
+                if data is None:
+                    failure = reply if not reply["ok"] else error_result("invalid_json")
+                    code = failure["error_code"]
+                    result["failed_chunks"].append({
+                        "chunk": i + 1, "doc": ch["doc"], "offset": ch["offset"],
+                        "error_code": code, "error": failure["error"]})
+                    fatal = code in {"auth", "quota", "model_not_found",
+                                     "invalid_config", "not_configured"}
+                    if fatal:
+                        result.update(error=f"第 {i + 1} 块读取失败：{failure['error']}",
+                                      error_code=code)
+                        break
+                    warn(f"第 {i + 1} 块跳过（{failure['error']}）；继续读取其余块，可重跑续读。")
+                    continue
             verified = verify_chunk(data, ch["text"])
             try:
                 atomic_write_json(cache_file, {"version": CACHE_VERSION, "key": key,
@@ -343,6 +450,16 @@ def understand(folder: Path, max_chunks: int | None = None, progress=None,
             slot["chunks"].append(i)
         events.extend(verified["events"])
 
+    if result["error"] is None and result["failed_chunks"]:
+        first = result["failed_chunks"][0]
+        if result["chunks_read"] == 0:
+            result.update(error=f"第 {first['chunk']} 块读取失败：{first['error']}",
+                          error_code=first["error_code"])
+        else:
+            result.update(
+                error=f"部分完成：{len(result['failed_chunks'])} 块未能读取；"
+                      f"已保留 {result['chunks_read']}/{len(chunks)} 块，可重跑续读",
+                error_code="partial_read")
     if overview and result["error"] is None and keywords:
         names = sorted({ch["doc"] for ch in chunks})
         reply = chat_result(_OVERVIEW_SYS.replace("<<LIST>>", "、".join(names)),

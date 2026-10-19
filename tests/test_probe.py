@@ -233,6 +233,47 @@ class ProbeTests(unittest.TestCase):
                 self.assertFalse(result["complete"])
                 self.assertEqual(list(probe._cache_dir(self.tmp).glob("*.json")), [])
 
+    def test_single_trailing_quote_artifact_is_tolerated(self):
+        payload = json.dumps({
+            "persons": [{"name": "温水", "role": "主角"}],
+            "keywords": [{"term": "温水", "why": "主角名"}],
+            "events": [{"what": "说了一句话", "quote": "温水说了一句话。"}],
+        }, ensure_ascii=False) + '"'
+        with mock.patch.object(llm, "chat_result", return_value=self._reply(payload)):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["complete"])
+
+    def test_unescaped_inner_quotes_are_repaired(self):
+        raw = ('{"persons":[],"keywords":[],"events":[{"what":"课程电子化",'
+               '"quote":"This course attempts to be "paperless" as much as possible!"}]}')
+        docs = [("course.txt", 'This course attempts to be "paperless" as much as possible!')]
+        with mock.patch.object(probe, "load_corpus", return_value=(docs, [])), \
+             mock.patch.object(llm, "chat_result", return_value=self._reply(raw)):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["complete"])
+        self.assertTrue(result["events"][0]["quote"].startswith(
+            'This course attempts to be "paperless"'))
+
+    def test_invalid_json_is_retried_once_before_failing(self):
+        good = json.dumps({"persons": [], "keywords": [],
+                           "events": [{"what": "说了一句话", "quote": "温水说了一句话。"}]},
+                          ensure_ascii=False)
+        calls = []
+
+        def fake(prompt, **kwargs):
+            calls.append(prompt)
+            return self._reply("不是 JSON" if len(calls) == 1 else good)
+
+        with mock.patch.object(probe, "load_corpus", return_value=([("one.txt", "温水说了一句话。")], [])), \
+             mock.patch.object(llm, "chat_result", side_effect=fake):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["complete"])
+        self.assertTrue(any("自动重试" in w for w in result["warnings"]))
+
     def test_valid_empty_arrays_are_successful_reading(self):
         with mock.patch.object(llm, "chat_result", return_value=self._reply(
                 '{"persons":[],"keywords":[],"events":[]}')):
@@ -241,6 +282,43 @@ class ProbeTests(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual(result["terms"], [])
         self.assertEqual(result["coverage_pct"], 100.0)
+
+    def test_persistent_failure_falls_back_to_compact_keywords(self):
+        good = json.dumps({"persons": [], "keywords": [{"term": "温水", "why": "主角名"}],
+                           "events": []}, ensure_ascii=False)
+        calls = []
+
+        def fake(prompt, **kwargs):
+            calls.append(prompt)
+            return self._reply(good if len(calls) == 4 else "不是 JSON")
+
+        with mock.patch.object(probe, "load_corpus", return_value=([("one.txt", "温水说了一句话。")], [])), \
+             mock.patch.object(llm, "chat_result", side_effect=fake):
+            result = probe.understand(self.tmp, overview=False)
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertTrue(result["complete"])
+        self.assertTrue(any("精简模式" in w for w in result["warnings"]))
+
+    def test_recoverable_chunk_failure_continues_and_reports_partial(self):
+        calls = []
+
+        def first_chunk_bad(prompt, **kwargs):
+            calls.append(prompt)
+            if len(calls) <= 4:
+                return self._reply("不是 JSON")
+            return self._reply(json.dumps({
+                "persons": [], "keywords": [{"term": "温水", "why": "主角名"}],
+                "events": [{"what": "说了一句话", "quote": "温水说了一句话。"}],
+            }, ensure_ascii=False))
+
+        with mock.patch.object(llm, "chat_result", first_chunk_bad):
+            result = probe.understand(self.tmp, chunk_chars=800, overview=False)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "partial_read")
+        self.assertTrue(result["failed_chunks"])
+        self.assertGreater(result["chunks_read"], 0)
+        self.assertTrue(result["terms"])
 
     def test_second_chunk_failure_keeps_first_cache_and_truthful_progress(self):
         calls, progress = [], []

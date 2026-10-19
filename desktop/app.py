@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1038,10 +1038,12 @@ class Backend:
         if final:
             try:
                 data = json.loads(final)
-                self._und.update({"ok": bool(data.get("ok")), "result": data,
+                partial = bool(data.get("failed_chunks")) and int(data.get("chunks_read") or 0) > 0
+                self._und.update({"ok": bool(data.get("ok")), "result": data, "partial": partial,
                                   "error": data.get("error") or "", "error_code": data.get("error_code"),
                                   "warnings": data.get("warnings") or [],
-                                  "progress": "完成" if data.get("ok") else "中断"})
+                                  "progress": "完成" if data.get("ok") else
+                                              ("部分完成" if partial else "中断")})
             except ValueError:
                 self._und["error"] = "结果解析失败"
         elif not self._und.get("error"):
@@ -1052,8 +1054,12 @@ class Backend:
         self._und["done"] = True
         self._und_proc = None
         log(f"[ui] 全库理解结束: ok={self._und['ok']} err={self._und['error'] or '-'}")
+        result = self._und.get("result") or {}
         self._push("understand_done", ok=self._und["ok"], error=self._und["error"],
-                   folder=self._und["folder"])
+                   partial=bool(self._und.get("partial")), folder=self._und["folder"],
+                   chunks_read=result.get("chunks_read", 0),
+                   chunks_total=result.get("chunks_total", 0),
+                   coverage_pct=result.get("coverage_pct", 0.0))
 
     def understand_status(self) -> dict:
         return dict(self._und)

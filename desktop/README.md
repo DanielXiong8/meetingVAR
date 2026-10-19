@@ -1,4 +1,8 @@
-# meetingVAR 桌面壳 v0.2.1
+# meetingVAR 桌面壳 v0.2.2
+
+## 0.2.2：全库理解抗损坏输出
+
+本地小模型偶尔给 JSON 末尾多一个引号、在字符串里漏转义英文双引号，或因内容过密把输出顶到长度上限。0.2.2 会先做严格 JSON 校验，再尝试单引号修复、未转义引号修复、最多两次低温重试，最后对该块改用“只提关键词”的精简模式；仍失败才跳过并继续其余块，界面显示部分覆盖率与失败块，不再第一块出错就整场中断。
 
 ## 0.2.1：Agent 桌面页
 
@@ -21,7 +25,7 @@
 - 项目全库理解完成后保存 `meetingvar/interest_context.json`；会中复用该摘要。未完成阅读时只提供已确认词和用户关注事项，不声称读懂全部项目。
 
 会议采集控制台、项目页与会议库。UI 启动独立 CLI 引擎，使用结构化事件显示字幕和采集状态。
-构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.2.1.exe`（安装包，自制、免管理员）。
+构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.2.2.exe`（安装包，自制、免管理员）。
 
 ## 字幕与轻量录屏
 
@@ -58,21 +62,21 @@
 | `web/` | 前端三件套（index/style/app.js）：主页 / 项目页 / 会议库 / 设置 / 点名弹窗 / 命中 toast |
 | `assets/make_icon.py` | 生成 icon.ico（多尺寸）+ logo.png |
 | `build/build_exe.bat` | 打包 `dist\meetingVAR.exe`（PyInstaller，需 D:\env\ui-venv） |
-| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.2.1.exe`（内嵌上面的 exe） |
+| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.2.2.exe`（内嵌上面的 exe） |
 | `build/setup_app.py` | 安装器/卸载器三合一：GUI 向导 + `--silent --dir X` + `--uninstall` |
 
 ## 构建
 
 ```bat
 desktop\build\build_exe.bat      :: dist\meetingVAR.exe
-desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.2.1.exe
+desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.2.2.exe
 ```
 
 安装/卸载（免管理员，装到 %LOCALAPPDATA%\Programs\meetingVAR，建桌面+开始菜单快捷方式）：
 
 ```bat
-meetingVAR-setup-0.2.1.exe                          :: GUI 向导
-meetingVAR-setup-0.2.1.exe --silent --dir D:\apps\mv :: 静默
+meetingVAR-setup-0.2.2.exe                          :: GUI 向导
+meetingVAR-setup-0.2.2.exe --silent --dir D:\apps\mv :: 静默
 "%LOCALAPPDATA%\Programs\meetingVAR\uninstall.exe" --uninstall
 ```
 

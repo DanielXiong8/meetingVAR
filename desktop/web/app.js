@@ -177,6 +177,7 @@ function handleEvent(ev) {
     pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
   } else if (ev.type === "understand_done") {
     if (ev.ok) toast("全库理解完成——回「项目」页勾选候选词并写入词表", 9000);
+    else if (ev.partial) toast(`全库理解部分完成：${ev.chunks_read}/${ev.chunks_total} 块，覆盖 ${ev.coverage_pct}%——候选词已显示，可重跑续读`, 12000);
     else toast("全库理解中断：" + (ev.error || ""), 9000);
   } else if (ev.type === "transcribe_done") {
     if (ev.ok) {
@@ -851,15 +852,19 @@ async function undPoll() {
   if (!st.done) return;
   clearInterval(undTimer); undTimer = null;
   const r = st.result || {};
+  const partial = !st.ok && (r.chunks_read || 0) > 0;
   $("undProgress").textContent = st.ok
     ? `✓ 读毕 ${r.chunks_read}/${r.chunks_total} 块 · 覆盖 ${r.covered_chars}/${r.unique_chars} 字（${r.coverage_pct}%）· 缓存命中 ${r.cache_hits} 块`
-    : `✗ 中断：${st.error || "未知错误"}（已完成块保留，可续跑）`;
-  if (st.ok) renderUnderstandResult(r);
+    : partial
+      ? `⚠ 部分完成 ${r.chunks_read}/${r.chunks_total} 块 · 覆盖 ${r.coverage_pct}% · ${(r.failed_chunks || []).length} 块未读（已完成块保留，可重跑续读）`
+      : `✗ 中断：${st.error || "未知错误"}（已完成块保留，可续跑）`;
+  if (st.ok || partial) renderUnderstandResult(r, partial);
 }
-function renderUnderstandResult(r) {
+function renderUnderstandResult(r, partial = false) {
   const box = $("undResult");
   const terms = r.terms || [];
   const parts = [];
+  if (partial) parts.push(`<div class="muted">部分完成：${(r.failed_chunks || []).length} 块未能读取；候选词只来自已读块，写入前请核对。</div>`);
   if (r.overview) parts.push(`<div class="muted">一句话理解：${esc(r.overview)}</div>`);
   parts.push(`<div class="row"><b>候选词</b><span class="muted">数字=文档中出现次数；勾选后只用于专业词纠错，不直接触发保存</span>
     <button class="btn btn-primary" id="btnUndWrite">写入项目词表</button></div>`);
