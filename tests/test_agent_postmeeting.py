@@ -117,6 +117,31 @@ class PostMeetingTests(unittest.TestCase):
         types = sorted(fact["metadata"]["type"] for fact in facts)
         self.assertEqual(types, ["action-item", "commitment", "decision", "open-question", "risk"])
 
+    def test_extract_retries_shorter_chunks_on_context_budget(self):
+        turns = [{"id": f"turn_{i}", "ts": i, "speaker": "A",
+                  "text": "讨论项目方案与交付。" * 20} for i in range(1, 80)]
+        calls = []
+
+        def llm(prompt):
+            calls.append(len(prompt))
+            if len(prompt) > 7000:
+                return {"ok": False, "error_code": "context_budget", "error": "too large"}
+            return {"ok": True, "content": json.dumps({"actions": [self.action]}, ensure_ascii=False)}
+
+        agent = PostMeetingAgent(session_id="ctx", transcript=turns, project_root=self.project,
+                                 dry_run=True, approval=lambda item, evidence: True,
+                                 llm=llm, max_chars=12000)
+        report = agent.preview()
+        self.assertTrue(report["ok"], report)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertGreater(calls[0], 7000)
+
+    def test_invalid_output_reports_error_code(self):
+        agent = self.agent(llm=lambda prompt: {"ok": True, "content": "not json"})
+        report = agent.preview()
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["error_code"], "invalid_output")
+
     def test_preview_then_selective_save_writes_only_selected(self):
         second = {"title": "更新项目文档", "owner": "小林", "due": "",
                   "evidence_turn_ids": ["turn_1"], "confidence": 0.7}

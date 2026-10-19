@@ -28,6 +28,13 @@ _CATEGORIES = {
 }
 
 
+class PostMeetingError(RuntimeError):
+    def __init__(self, code: str, message: str = ""):
+        self.code = code
+        self.message = message or code
+        super().__init__(self.message)
+
+
 def load_transcript(path: Path) -> list[dict]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     rows = data.get("transcript") if isinstance(data, dict) else data
@@ -251,10 +258,30 @@ class PostMeetingAgent:
             if isinstance(reply, str):
                 reply = {"ok": True, "content": reply, "error_code": None}
         if not isinstance(reply, dict):
-            raise RuntimeError("llm_result_invalid")
+            raise PostMeetingError("invalid_result", "模型返回格式无效")
         if not reply.get("ok"):
-            raise RuntimeError(str(reply.get("error_code") or "llm_failed"))
-        return _parse_payload(reply.get("content", ""), {t["id"] for t in self.transcript})
+            raise PostMeetingError(str(reply.get("error_code") or "llm_failed"),
+                                   str(reply.get("error") or "模型调用失败"))
+        try:
+            return _parse_payload(reply.get("content", ""), {t["id"] for t in self.transcript})
+        except (ValueError, TypeError):
+            raise PostMeetingError("invalid_output", "模型输出不是有效的会议事实 JSON") from None
+
+    def _extract_candidates(self) -> tuple[list[dict], int]:
+        last_error = None
+        for limit in dict.fromkeys(max(1000, min(self.max_chars, n))
+                                   for n in (self.max_chars, 6000, 4000, 3000)):
+            try:
+                chunks = _chunks(self.transcript, limit)
+                candidates = []
+                for chunk in chunks:
+                    candidates.extend(self._call_llm(_prompt(chunk)))
+                return _merge(candidates)[:30], len(chunks)
+            except PostMeetingError as exc:
+                last_error = exc
+                if exc.code not in {"context_budget", "truncated", "invalid_output"}:
+                    break
+        raise last_error or PostMeetingError("extract_failed", "会议事实提取失败")
 
     @staticmethod
     def _normalize_item(item: dict) -> dict | None:
@@ -295,15 +322,14 @@ class PostMeetingAgent:
                   "candidates": 0, "verified": 0, "chunks": 0, "task_id": task.task_id,
                   "errors": []}
         try:
-            chunks = _chunks(self.transcript, self.max_chars)
-            report["chunks"] = len(chunks)
-            candidates = []
-            for chunk in chunks:
-                candidates.extend(self._call_llm(_prompt(chunk)))
-            candidates = _merge(candidates)[:30]
+            candidates, chunk_count = self._extract_candidates()
+            report["chunks"] = chunk_count
             report["candidates"] = len(candidates)
-        except Exception as exc:
-            report["errors"].append({"stage": "extract", "code": type(exc).__name__})
+        except PostMeetingError as exc:
+            report["error_code"] = exc.code
+            report["error"] = exc.message
+            report["errors"].append({"stage": "extract", "code": exc.code,
+                                     "message": exc.message})
             self.runtime.fail(task, "extract_failed")
             return report
         context = ToolContext(session_id=self.session_id, project_root=self.project_root,
@@ -375,6 +401,8 @@ class PostMeetingAgent:
         write_failed = any(error.get("stage") in {"write", "validate"} for error in report["errors"])
         report["ok"] = not write_failed
         if write_failed:
+            report["error_code"] = "save_failed"
+            report["error"] = "部分会议事实未写入，请检查错误码"
             self.runtime.fail(task, "save_failed")
         else:
             self.runtime.complete(task, {"written": report["written"]})
@@ -390,17 +418,16 @@ class PostMeetingAgent:
             "by_type": {}, "written_by_type": {},
         }
         try:
-            chunks = _chunks(self.transcript, self.max_chars)
-            report["chunks"] = len(chunks)
-            candidates = []
-            for chunk in chunks:
-                candidates.extend(self._call_llm(_prompt(chunk)))
-            candidates = _merge(candidates)[:30]
+            candidates, chunk_count = self._extract_candidates()
+            report["chunks"] = chunk_count
             report["candidates"] = len(candidates)
             report["by_type"] = dict(Counter(item["fact_type"] for item in candidates))
             report["ok"] = True
-        except Exception as exc:  # no writes happened; report a safe class
-            report["errors"].append({"stage": "extract", "code": type(exc).__name__})
+        except PostMeetingError as exc:
+            report["error_code"] = exc.code
+            report["error"] = exc.message
+            report["errors"].append({"stage": "extract", "code": exc.code,
+                                     "message": exc.message})
             self.runtime.fail(task, "extract_failed")
             return report
 
@@ -463,6 +490,8 @@ class PostMeetingAgent:
         write_failed = any(error.get("stage") == "write" for error in report["errors"])
         if write_failed:
             report["ok"] = False
+            report["error_code"] = "write_failed"
+            report["error"] = "部分会议事实未写入，请检查错误码"
             self.runtime.fail(task, "write_failed")
         else:
             self.runtime.complete(task, {"candidates": report["candidates"], "written": report["written"]})

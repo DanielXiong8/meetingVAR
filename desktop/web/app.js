@@ -525,7 +525,8 @@ function renderFocus(items, sources) {
 function renderSessions(sessions) {
   const select = $("agentSession");
   const current = select.value;
-  select.innerHTML = '<option value="">选择已保存会话</option>' + (sessions || []).map((s) => {
+  const available = (sessions || []).filter((s) => s.has_transcript);
+  select.innerHTML = '<option value="">选择有转写的会话</option>' + available.map((s) => {
     const when = s.mtime ? new Date(s.mtime * 1000).toLocaleString() : "";
     return `<option value="${agentEsc(s.sid)}">${agentEsc(s.sid)} · ${when}${s.clips != null ? " · " + s.clips + " 片段" : ""}</option>`;
   }).join("");
@@ -632,10 +633,10 @@ $("btnAsk").onclick = async () => {
     const answer = $("agentAnswer");
     answer.hidden = false;
     if (!r || !r.ok) { $("agentStatusLine").textContent = "问答失败"; answer.textContent = "无法回答：" + ((r && r.error) || "未知错误"); return; }
-    $("agentStatusLine").textContent = r.grounded ? "回答完成（引用已校验）" : "回答完成（未通过引用校验）";
+    $("agentStatusLine").textContent = !r.answered ? "项目记忆中没有足够依据" : (r.grounded ? "回答完成（引用已校验）" : "回答完成（未通过引用校验）");
     const cites = (r.sources || []).map((s) => s.name).join("、");
     answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
-      `<div class="cites">依据：${agentEsc(cites || "无")}${r.grounded ? "" : "（未通过事实引用校验）"}</div>`;
+      `<div class="cites">依据：${agentEsc(cites || "无")}${r.answered && !r.grounded ? "（未通过事实引用校验）" : ""}</div>`;
   } finally { setAgentBusy(false); }
 };
 $("btnMemory").onclick = async () => {

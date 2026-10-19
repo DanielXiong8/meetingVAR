@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -647,7 +647,8 @@ class Backend:
                     mtime = d.stat().st_mtime
                 except OSError:
                     mtime = 0
-                out.append({"sid": sid, "lines": lines, "clips": clips, "minutes": minutes, "mtime": mtime})
+                out.append({"sid": sid, "lines": lines, "clips": clips, "minutes": minutes,
+                            "mtime": mtime, "has_transcript": tj.exists()})
         out.sort(key=lambda x: -x["mtime"])
         return out[:100]
 
@@ -874,7 +875,7 @@ class Backend:
         return result
 
     def test_llm(self) -> dict:
-        return self._test_provider("custom")
+        return self._test_provider(self._cfg.get("llm_provider") or "local")
 
     def pick_media(self):
         """选一个媒体文件（视频/音频）用于离线转写。"""

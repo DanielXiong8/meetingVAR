@@ -121,6 +121,31 @@ class FocusTests(unittest.TestCase):
         data = json.loads((self.project / "meetingvar" / "agent_memory" / "focus.json").read_text(encoding="utf-8"))
         self.assertEqual(len(data["items"]), 2)
 
+    def test_focus_retries_shorter_material_on_context_budget(self):
+        (self.project / "long.md").write_text("项目背景。" * 2500, encoding="utf-8")
+        calls = []
+
+        def llm(prompt):
+            calls.append(len(prompt))
+            if len(prompt) > 7000:
+                return {"ok": False, "error_code": "context_budget", "error": "request too large"}
+            return {"ok": True, "content": json.dumps({"focus": self.items}, ensure_ascii=False)}
+
+        report = FocusAgent(project_root=self.project, dry_run=True,
+                            approval=lambda items: True, max_chars=12000, llm=llm).preview()
+        self.assertTrue(report["ok"], report)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertGreater(calls[0], 7000)
+        self.assertLessEqual(calls[-1], 7000)
+
+    def test_focus_invalid_output_reports_error_code(self):
+        report = FocusAgent(project_root=self.project, dry_run=True,
+                            approval=lambda items: True,
+                            llm=lambda prompt: {"ok": True, "content": "not json"}).preview()
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["error_code"], "invalid_output")
+        self.assertTrue(report["error"])
+
     def test_large_model_reading_does_not_truncate_focus_json(self):
         meetingvar = self.project / "meetingvar"
         meetingvar.mkdir(exist_ok=True)

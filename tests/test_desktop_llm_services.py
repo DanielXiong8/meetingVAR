@@ -70,6 +70,19 @@ class ServiceTests(unittest.TestCase):
             reopened = app.Backend()
         self.assertTrue(reopened._provider_info()["ready"])
 
+    def test_validation_follows_the_selected_provider(self):
+        self.backend._cfg["llm_provider"] = "local"
+        response = Mock(stdout=json.dumps({"ok": True, "usage": {"completion_tokens": 4}}), returncode=0)
+        with patch.object(self.backend, "llm_status",
+                          return_value={"up": True, "model": "meetingvar-local", "context_tokens": 16384}), \
+             patch.object(app.subprocess, "run", return_value=response) as run:
+            result = self.backend.test_llm()
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["models"], ["meetingvar-local"])
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["MEETINGVAR_LLM_BASE_URL"], f"http://127.0.0.1:{app.LLM_PORT}/v1")
+        self.assertEqual(env["MEETINGVAR_LLM_MODEL"], "meetingvar-local")
+
     def test_failed_generation_is_not_ready(self):
         response = Mock(stdout=json.dumps({"ok": False, "error_code": "output_truncated", "error": "输出达到上限"}), returncode=1)
         with patch.object(app.subprocess, "run", return_value=response):
