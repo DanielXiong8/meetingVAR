@@ -132,6 +132,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(row["api_key"], "[redacted]")
         self.assertEqual(row["nested"]["token"], "[redacted]")
         self.assertNotIn("secret-value", json.dumps(row, ensure_ascii=False))
+        self.trace.record_llm(model="m", ok=True, latency_ms=12.5,
+                              usage={"prompt_tokens": 100, "completion_tokens": 20,
+                                     "completion_tokens_details": {"reasoning_tokens": 5}})
+        usage_row = self.trace.tail(1)[0]
+        self.assertEqual(usage_row["prompt_tokens"], 100)
+        self.assertEqual(usage_row["completion_tokens"], 20)
+        self.assertEqual(usage_row["reasoning_tokens"], 5)
 
 
 class MemoryTests(unittest.TestCase):

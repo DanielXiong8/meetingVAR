@@ -1,4 +1,8 @@
-# meetingVAR 桌面壳 v0.2.2
+# meetingVAR 桌面壳 v0.3.0
+
+## 0.3.0：企业级 Agent Runtime（ReAct + 工具调用 + 评测）
+
+新增有界 ReAct/Plan-Execute 循环：模型通过原生 function calling 自主选择只读会议工具，观察结果后继续；无原生工具支持时自动切换 JSON action 协议。带 Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace 和断点续跑。桌面 Agent 页新增「Agent 深度检索」。
 
 ## 0.2.2：全库理解抗损坏输出
 
@@ -25,7 +29,7 @@
 - 项目全库理解完成后保存 `meetingvar/interest_context.json`；会中复用该摘要。未完成阅读时只提供已确认词和用户关注事项，不声称读懂全部项目。
 
 会议采集控制台、项目页与会议库。UI 启动独立 CLI 引擎，使用结构化事件显示字幕和采集状态。
-构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.2.2.exe`（安装包，自制、免管理员）。
+构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.3.0.exe`（安装包，自制、免管理员）。
 
 ## 字幕与轻量录屏
 
@@ -62,21 +66,21 @@
 | `web/` | 前端三件套（index/style/app.js）：主页 / 项目页 / 会议库 / 设置 / 点名弹窗 / 命中 toast |
 | `assets/make_icon.py` | 生成 icon.ico（多尺寸）+ logo.png |
 | `build/build_exe.bat` | 打包 `dist\meetingVAR.exe`（PyInstaller，需 D:\env\ui-venv） |
-| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.2.2.exe`（内嵌上面的 exe） |
+| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.3.0.exe`（内嵌上面的 exe） |
 | `build/setup_app.py` | 安装器/卸载器三合一：GUI 向导 + `--silent --dir X` + `--uninstall` |
 
 ## 构建
 
 ```bat
 desktop\build\build_exe.bat      :: dist\meetingVAR.exe
-desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.2.2.exe
+desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.3.0.exe
 ```
 
 安装/卸载（免管理员，装到 %LOCALAPPDATA%\Programs\meetingVAR，建桌面+开始菜单快捷方式）：
 
 ```bat
-meetingVAR-setup-0.2.2.exe                          :: GUI 向导
-meetingVAR-setup-0.2.2.exe --silent --dir D:\apps\mv :: 静默
+meetingVAR-setup-0.3.0.exe                          :: GUI 向导
+meetingVAR-setup-0.3.0.exe --silent --dir D:\apps\mv :: 静默
 "%LOCALAPPDATA%\Programs\meetingVAR\uninstall.exe" --uninstall
 ```
 

@@ -502,7 +502,7 @@ function setAgentBusy(busy, text) {
   const page = $("page-agent");
   if (page) page.classList.toggle("agent-busy", busy);
   if (text) $("agentStatusLine").textContent = text;
-  ["btnFocusGen", "btnFocusSave", "btnFactsPreview", "btnFactsSave", "btnAsk", "btnMemory"]
+  ["btnFocusGen", "btnFocusSave", "btnFactsPreview", "btnFactsSave", "btnAsk", "btnAgentRun", "btnMemory"]
     .forEach((id) => { const el = $(id); if (el) el.disabled = busy || (id.endsWith("Save") && !((id === "btnFocusSave" ? state.agentFocus.length : state.agentFacts.length))); });
 }
 function renderAgentStatus(st) {
@@ -638,6 +638,48 @@ $("btnAsk").onclick = async () => {
     const cites = (r.sources || []).map((s) => s.name).join("、");
     answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
       `<div class="cites">依据：${agentEsc(cites || "无")}${r.answered && !r.grounded ? "（未通过事实引用校验）" : ""}</div>`;
+  } finally { setAgentBusy(false); }
+};
+function renderAgentRun(r) {
+  const plan = (r.plan || []).map((step, i) => `${i + 1}. ${step.goal || ""}${step.tool ? " → " + step.tool : ""}`).join(" · ");
+  $("agentRunPlan").textContent = plan ? "计划：" + plan : "";
+  const obs = r.observations || [];
+  const box = $("agentRunSteps");
+  box.className = obs.length ? "agent-list" : "agent-list muted";
+  box.innerHTML = obs.length ? obs.map((o, i) =>
+    `<div class="agent-item"><span class="agent-type">${i + 1}</span><span class="title">${agentEsc(o.tool)}</span>
+     <div class="meta">${agentEsc(JSON.stringify(o.arguments || {}).slice(0, 500))}</div></div>`).join("")
+    : "没有调用工具";
+  const answer = $("agentRunAnswer");
+  answer.hidden = false;
+  const citations = (r.citations || []).map((c) =>
+    c.kind === "turn" ? `${c.session_id}:${(c.turn_ids || []).join(",")}` : c.name).join("、");
+  const stateText = !r.answered ? "没有足够依据" :
+    r.grounded ? "回答完成（引用已校验）" : "回答完成（引用未通过校验）";
+  answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
+    `<div class="cites">${agentEsc(stateText)}${citations ? " · 依据：" + agentEsc(citations) : ""}</div>`;
+}
+$("btnAgentRun").onclick = async () => {
+  if (!state.project) { toast("先选择项目"); switchPage("project"); return; }
+  const q = $("agentRunQuestion").value.trim();
+  if (!q) { toast("请输入 Agent 问题"); return; }
+  if (state.agentBusy) return;
+  setAgentBusy(true, "Agent 正在规划并调用工具…");
+  try {
+    const r = await pywebview.api.agent_run(state.project, q, 8, "auto");
+    if (!r || (!r.ok && !r.answer)) {
+      $("agentStatusLine").textContent = "Agent 运行失败";
+      toast("Agent 运行失败：" + ((r && (r.error || r.stop_reason)) || "未知错误"), 9000);
+      return;
+    }
+    renderAgentRun(r);
+    $("agentStatusLine").textContent =
+      `Agent ${r.status}/${r.stop_reason} · ${r.steps || 0} 步 · ${r.tool_calls || 0} 次工具 · ` +
+      (r.grounded ? "引用已校验" : "引用未校验");
+    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过校验", 8000);
+  } catch (e) {
+    $("agentStatusLine").textContent = "Agent 运行失败";
+    toast("Agent 运行失败：" + e, 9000);
   } finally { setAgentBusy(false); }
 };
 $("btnMemory").onclick = async () => {

@@ -153,6 +153,18 @@
       </div>
 
       <div class="card">
+        <div class="row"><b>Agent 深度检索</b>
+          <span class="muted">模型自主选择工具：跨会话搜索、读原句、对比、检索项目记忆</span>
+          <input id="agentRunQuestion" class="input" placeholder="例如：上次说周五交付，这次谁改了口？把两次原话找出来">
+          <button id="btnAgentRun" class="btn btn-primary">运行 Agent</button>
+        </div>
+        <div class="muted">有界 ReAct：最多 8 步；只读工具；引用必须来自实际工具返回的 turn/事实。</div>
+        <div id="agentRunPlan" class="muted"></div>
+        <div id="agentRunSteps" class="agent-list muted"></div>
+        <div id="agentRunAnswer" class="agent-answer" hidden></div>
+      </div>
+
+      <div class="card">
         <div class="row"><b>项目记忆</b>
           <input id="agentMemoryQuery" class="input" placeholder="按关键词检索事实记忆（留空显示最近）">
           <button id="btnMemory" class="btn">检索</button>

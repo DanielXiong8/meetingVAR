@@ -40,6 +40,8 @@ class ToolSpec:
     max_output_chars: int = 4000
     idempotent: bool = True
     side_effect_scope: str = "none"  # none / meeting / project / external
+    required_role: str = ""
+    untrusted_output: bool = True
 
     def contract(self) -> dict:
         return {
@@ -51,6 +53,8 @@ class ToolSpec:
             "timeout_s": self.timeout_s,
             "max_output_chars": self.max_output_chars,
             "side_effect_scope": self.side_effect_scope,
+            "required_role": self.required_role,
+            "untrusted_output": self.untrusted_output,
         }
 
 
@@ -61,6 +65,9 @@ class ToolContext:
     transcript: list[dict] = field(default_factory=list)
     fact_store: Any = None
     dry_run: bool = False
+    principal: Any = None
+    approval_broker: Any = None
+    approval_token: str = ""
     extra: dict = field(default_factory=dict)
 
 
@@ -171,6 +178,9 @@ class ToolRegistry:
         selected = names or list(self._specs)
         return [self._specs[name].contract() for name in selected if name in self._specs]
 
+    def specs(self) -> list[ToolSpec]:
+        return list(self._specs.values())
+
     def invoke(self, name: str, args: dict, *, context: ToolContext | None = None,
                approval: Callable[[dict], bool] | None = None,
                idempotency_key: str | None = None) -> ToolResult:
@@ -179,17 +189,27 @@ class ToolRegistry:
             raise ToolValidationError("arguments must be an object")
         validate_arguments(args, spec.input_schema)
         context = context or ToolContext()
+        if context.principal is not None:
+            from .policy import enforce_tool_policy
+            enforce_tool_policy(spec, principal=context.principal,
+                                project_root=context.project_root)
         if spec.requires_approval:
-            if approval is None:
+            if context.approval_broker is not None and context.approval_token:
+                actor_id = getattr(context.principal, "actor_id", "") if context.principal else ""
+                context.approval_broker.consume(
+                    context.approval_token, tool=name, actor_id=actor_id,
+                    args=args, scope=spec.side_effect_scope)
+            elif approval is None:
                 raise ToolError("approval_required", f"{name} requires explicit approval")
-            request = {"name": name, "args": args, "description": spec.description,
-                       "side_effect_scope": spec.side_effect_scope}
-            try:
-                allowed = approval(request)
-            except Exception as exc:  # approval UI failure must fail closed
-                raise ToolError("approval_failed", type(exc).__name__) from None
-            if allowed is not True:
-                raise ToolError("approval_denied", f"{name} was not approved")
+            else:
+                request = {"name": name, "args": args, "description": spec.description,
+                           "side_effect_scope": spec.side_effect_scope}
+                try:
+                    allowed = approval(request)
+                except Exception as exc:  # approval UI failure must fail closed
+                    raise ToolError("approval_failed", type(exc).__name__) from None
+                if allowed is not True:
+                    raise ToolError("approval_denied", f"{name} was not approved")
 
         cache_key = None
         if spec.idempotent and idempotency_key:

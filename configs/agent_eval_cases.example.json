@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "id": "encoding_numbers",
+      "question": "课堂里 p、星号、左括号、右括号分别被编码成哪些数字？",
+      "expected_citations": ["turn_260", "turn_261"],
+      "max_steps": 10,
+      "tags": ["definition", "multi-turn"]
+    },
+    {
+      "id": "p_star_notation",
+      "question": "p 一在课堂里被记作什么？",
+      "expected_citations": ["turn_242", "turn_243"],
+      "max_steps": 8,
+      "tags": ["definition"]
+    },
+    {
+      "id": "refusal_no_evidence",
+      "question": "课堂里有没有讨论火星基地预算？",
+      "expect_refusal": true,
+      "max_steps": 6,
+      "tags": ["refusal"]
+    }
+  ]
+}

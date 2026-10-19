@@ -320,3 +320,123 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     """Backward-compatible optional enhancement: failures still return None."""
     result = chat_result(prompt, temperature=temperature, timeout=timeout)
     return result["content"] if result["ok"] else None
+
+
+def _messages_bytes(messages: list[dict], tools: list[dict] | None = None) -> int:
+    """Conservative UTF-8 byte bound for a multi-turn tool-calling request."""
+    size = 0
+    for message in messages:
+        size += len(str(message.get("role", "")).encode("utf-8")) + 16
+        content = message.get("content")
+        if isinstance(content, str):
+            size += len(content.encode("utf-8"))
+        elif content is not None:
+            size += len(json.dumps(content, ensure_ascii=False).encode("utf-8"))
+        if message.get("tool_calls"):
+            size += len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
+        if message.get("name"):
+            size += len(str(message["name"]).encode("utf-8"))
+    if tools:
+        size += len(json.dumps(tools, ensure_ascii=False).encode("utf-8"))
+    return size
+
+
+def chat_messages(messages: list[dict], *, tools: list[dict] | None = None,
+                  tool_choice: str = "auto", temperature: float = 0.2,
+                  timeout: int = 300, max_tokens: int | None = None,
+                  thinking: str | None = None) -> dict:
+    """One OpenAI-compatible chat turn with optional native function calling.
+
+    The caller owns the loop. This function only validates the request budget,
+    performs one HTTP request and returns the assistant message plus usage. It
+    never prints prompts, responses or credentials.
+    """
+    try:
+        profile = client_profile()
+        context = _positive_int(profile["context_tokens"])
+        effective_max = profile["max_output_tokens"] if max_tokens is None else _positive_int(max_tokens)
+        effective_thinking = profile["thinking"] if thinking is None else str(thinking).strip().lower()
+        if effective_thinking not in {"", "enabled", "disabled"}:
+            raise ClientConfigError()
+        budget = TokenBudget(context, effective_max)
+        if budget.input_limit <= budget.chat_overhead_tokens:
+            raise ClientConfigError()
+    except ClientConfigError as exc:
+        return error_result(exc.error_code)
+    if not isinstance(messages, list) or not messages:
+        return error_result("invalid_config")
+    if _messages_bytes(messages, tools) > budget.input_limit:
+        return error_result("context_budget")
+    body = {"model": profile["model"], "messages": messages,
+            "temperature": temperature, "max_tokens": effective_max}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice
+    if effective_thinking:
+        body["thinking"] = {"type": effective_thinking}
+    try:
+        req = urllib.request.Request(
+            profile["endpoint"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {config.LLM_API_KEY}"})
+        host = urllib.parse.urlsplit(profile["endpoint"]).hostname
+        if host in {"127.0.0.1", "localhost", "::1"}:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            resp = opener.open(req, timeout=timeout)
+        else:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        with resp as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        return _http_failure(exc)
+    except (OSError, urllib.error.URLError, http.client.HTTPException):
+        return error_result("network")
+    except (ValueError, TypeError):
+        return error_result("invalid_config")
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return error_result("invalid_json")
+    if not isinstance(data, dict):
+        return error_result("invalid_json")
+    usage = _safe_usage(data.get("usage"))
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return error_result("invalid_json", usage=usage)
+    choice = choices[0]
+    finish = choice.get("finish_reason")
+    if finish == "length":
+        return error_result("truncated", finish_reason=finish, usage=usage)
+    if finish == "content_filter":
+        return error_result("content_filtered", finish_reason=finish, usage=usage)
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return error_result("invalid_json", finish_reason=finish, usage=usage)
+    tool_calls = []
+    raw_calls = message.get("tool_calls")
+    if raw_calls is not None:
+        if not isinstance(raw_calls, list):
+            return error_result("invalid_json", finish_reason=finish, usage=usage)
+        for index, call in enumerate(raw_calls[:12]):
+            if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                continue
+            function = call["function"]
+            name, arguments = function.get("name"), function.get("arguments")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments or {}, ensure_ascii=False)
+            tool_calls.append({"id": str(call.get("id") or f"call_{index}"),
+                               "type": "function",
+                               "function": {"name": name, "arguments": arguments}})
+    content = _final_text(message.get("content")) if "content" in message else ""
+    if content is None:
+        return error_result("invalid_json", finish_reason=finish, usage=usage)
+    if not tool_calls and not content:
+        return error_result("empty_content", finish_reason=finish, usage=usage)
+    return {"ok": True, "content": content or "", "message": {
+                "role": "assistant", "content": content or None,
+                "tool_calls": tool_calls},
+            "tool_calls": tool_calls, "error_code": None, "error": None,
+            "retryable": False, "finish_reason": finish, "usage": usage,
+            "native_tools": bool(raw_calls)}

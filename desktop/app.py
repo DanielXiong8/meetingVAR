@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.3.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1346,6 +1346,28 @@ class Backend:
             return {"ok": False, "error": "请输入问题"}
         return self._agent_bridge(["agent_ask", folder, question.strip()[:800]],
                                   use_llm=True, timeout=180)
+
+    def agent_run(self, folder: str, question: str, max_steps: int = 8,
+                  mode: str = "auto") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(question, str) or not question.strip():
+            return {"ok": False, "error": "请输入问题"}
+        try:
+            steps = max(1, min(12, int(max_steps)))
+        except (TypeError, ValueError):
+            steps = 8
+        mode = mode if mode in {"auto", "native", "json"} else "auto"
+        return self._agent_bridge(["agent_run", folder, question.strip()[:1000],
+                                   str(steps), mode], use_llm=True, timeout=300)
+
+    def agent_resume(self, folder: str, task_id: str, max_steps: int = 8) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not self._agent_valid_session(task_id):
+            return {"ok": False, "error": "任务 ID 无效"}
+        return self._agent_bridge(["agent_resume", folder, task_id, str(max_steps), "auto"],
+                                  use_llm=True, timeout=300)
 
     def agent_memory(self, folder: str, query: str = "") -> dict:
         if not folder or not Path(folder).is_dir():

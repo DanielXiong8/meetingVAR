@@ -117,6 +117,23 @@ class AgentRuntime:
         task.status = TaskStatus.RUNNING.value
         self._save(task)
 
+    def resume(self, task_id: str) -> TaskState:
+        """Reopen a persisted task for a new attempt; completed tasks are immutable."""
+        task = self.load(task_id)
+        if task.status == TaskStatus.COMPLETED.value:
+            raise ValueError("completed task cannot be resumed")
+        task.status = TaskStatus.RUNNING.value
+        task.last_error = ""
+        self._save(task)
+        if self.trace:
+            self.trace.record("task_resumed", task_id=task.task_id, kind=task.kind,
+                              step=task.step)
+        return task
+
+    def checkpoint(self, task: TaskState, **metadata) -> None:
+        task.metadata.update(metadata)
+        self._save(task)
+
     def run_tool(self, task: TaskState, registry: ToolRegistry, name: str, args: dict, *,
                  context: ToolContext | None = None,
                  approval=None, idempotency_key: str | None = None,

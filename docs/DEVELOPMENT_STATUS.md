@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.2.2。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.3.0。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.2.2；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.3.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.0/0.2.1/0.2.2发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.2.*` | 0.2.2 为当前版，含 Agent 页与全库理解容错；0.2.0/0.2.1 保留旧版。 |
-| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.2.2混淆。 |
+| 0.2.0/0.2.1/0.2.2/0.3.0发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.2.*` 与 `meetingvar_release_0.3.0` | 0.3.0 为当前版，含企业级 Agent Runtime v2；0.2.x 保留旧版。 |
+| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.3.0混淆。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -58,15 +58,19 @@
 
 课堂实验产物在工作区 `C:\Users\Lenovo\.zcode\workspace\default`：`test3_judge_argmax_2130-2330.mp4`（约343MB）、转写、裁判JSONL及报告。原始课堂媒体不随源码包分发。
 
-## 5. 验证快照（2026-10-19 晚，0.2.2）
+## 5. 验证快照（2026-10-19 深夜，0.3.0）
 
-- 完整Python3.10依赖环境：442项测试、**0跳过、442通过**（108.80秒），`compileall`通过，完整CLI仿真通过（28.58秒）。
-- 最小依赖CI模拟：442项发现，401项通过，41项按依赖跳过，编译通过。
+- 完整Python3.10依赖环境：452项测试、**0跳过、452通过**（63.45秒），`compileall`通过，完整CLI仿真通过（14.41秒）。
+- 最小依赖CI模拟：452项发现，411项通过，41项按依赖跳过，编译通过。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
+- Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
 - Agent专项：37项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
 - 0.2.1真实窗口复测：本地模型生成并保存关注清单、19个有转写会话过滤、0事实问答、会后0候选与模型停机错误提示、设置页本地/自定义厂商验证、短会开始/结束（RTASR连接、8句字幕、录屏缓冲约7.8MB、零命中丢弃）均通过。详见 `docs/BUGFIX_0.2.1.md`。
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
+- 0.3.0真实 UI：Agent 深度检索 4 步/3 次工具，回答“p 一被记作 p + 星号”，引用 `t3_base_A:turn_242`，引用已校验；本地模型原生 tool calling 生效。
+- 0.3.0黄金集（本地 Qwen3-4B 16K，3 题）：accuracy 1.0、grounded 0.667、citation precision 1.0、citation recall 0.667、refusal 1.0、平均 4 步/2.67 次工具。示例 `configs/agent_eval_cases.example.json`。
+- 0.3.0安装包：`meetingVAR-setup-0.3.0.exe` SHA256 `4ac2d9372200f158d4cc634907f2d66aabcf0d07172d884cfa54c114965a494c`；内置 `meetingVAR.exe` SHA256 `de78a7eba0309f250d0498c2560378bf3fa96cd67db06fda2689f83712b12292`；安装后 `--selftest` 通过。
 - 0.2.2安装包：`meetingVAR-setup-0.2.2.exe` SHA256 `7a9cc579ea419414158fa1dbe5e02f4dec097138c189481781c1369e232edea4`；内置 `meetingVAR.exe` SHA256 `10871852b183af4574a96cf885e2a2e30bc3134079f800886bff4c9f0b23dd46`；安装后 `--selftest` 通过。
 - 外部API输出修复：合成80实体块有效；真实API 5/5合成项目块完成、覆盖100%（约12.6秒）；思考关闭后不再被推理 token 截断。详见 `docs/API_OUTPUT_BUDGET_FIX.md`。
 - 以上均为合成/仿真或现有单元测试；真实麦克风、讯飞实际识别质量与长会硬件稳定性仍未验收。

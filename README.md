@@ -1,6 +1,6 @@
 # meetingVAR
 
-> **当前开发基线：`main` → `feat/agent-runtime` · 0.2.2**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断、轻量同步录屏、本地 GPU 推理、双源音频时间轴修复，以及带审批/记忆/Trace 的 Agent 桌面页（会前关注、会后五类事实、项目记忆问答与检索）。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，Agent 设计与边界见 [Agent Runtime](docs/AGENT_RUNTIME.md)。下方早期 CLI 架构保留作历史参考。
+> **当前开发基线：`main` → `feat/agent-runtime` · 0.3.0**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断、轻量同步录屏、本地 GPU 推理、双源音频时间轴修复，以及桌面 Agent 页（会前关注、会后五类事实、记忆问答）与企业级 Agent Runtime v2：模型原生工具调用、有界 ReAct/Plan-Execute 循环、Principal/审批、LLM 级 Trace、引用校验和黄金问题集评测。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，Agent 设计与边界见 [Agent Runtime v2](docs/AGENT_RUNTIME_V2.md)。下方早期 CLI 架构保留作历史参考。
 
 > record your meeting like VAR referee —— 不是记下一切，是保住对你重要的每一刻。
 

@@ -475,6 +475,24 @@ def cmd_agent_ask(folder: Path, question: str) -> dict:
     return MemoryQAAgent(project_root=folder, question=question).run()
 
 
+def cmd_agent_run(folder: Path, question: str, max_steps: int = 8,
+                  mode: str = "auto") -> dict:
+    from meetingvar.agent.loop import AgentLoop
+
+    loop = AgentLoop(project_root=folder, question=question, mode=mode,
+                     max_steps=max(1, min(20, int(max_steps))))
+    return loop.run()
+
+
+def cmd_agent_resume(folder: Path, task_id: str, max_steps: int = 8,
+                     mode: str = "auto") -> dict:
+    from meetingvar.agent.loop import AgentLoop
+
+    loop = AgentLoop(project_root=folder, question="(resume)", mode=mode,
+                     max_steps=max(1, min(20, int(max_steps))))
+    return loop.run(resume_task_id=task_id)
+
+
 def cmd_agent_memory(folder: Path, query: str = "") -> dict:
     from meetingvar.agent.memory import FactStore
 
@@ -527,6 +545,14 @@ def main() -> None:
             payload = cmd_agent_facts_save(sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]))
         elif cmd == "agent_ask":
             payload = cmd_agent_ask(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "agent_run":
+            payload = cmd_agent_run(Path(sys.argv[2]), sys.argv[3],
+                                    int(sys.argv[4]) if len(sys.argv) > 4 else 8,
+                                    sys.argv[5] if len(sys.argv) > 5 else "auto")
+        elif cmd == "agent_resume":
+            payload = cmd_agent_resume(Path(sys.argv[2]), sys.argv[3],
+                                       int(sys.argv[4]) if len(sys.argv) > 4 else 8,
+                                       sys.argv[5] if len(sys.argv) > 5 else "auto")
         elif cmd == "agent_memory":
             payload = cmd_agent_memory(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
         else:

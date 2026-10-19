@@ -258,6 +258,78 @@ def cmd_agent_memory(args) -> None:
               f"{fact.get('description', '')}")
 
 
+def cmd_agent_run(args) -> None:
+    """Bounded ReAct research run with tool calls and verified citations."""
+    import json as _json
+
+    from .agent.loop import AgentLoop
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[agent-run] 项目文件夹无效: {project}")
+    loop = AgentLoop(project_root=project, question=args.question,
+                     data_dir=config.DATA_DIR, mode=args.mode,
+                     max_steps=args.max_steps, max_tool_calls=args.max_tools,
+                     max_seconds=args.max_seconds)
+    report = loop.run(resume_task_id=args.resume)
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True)
+    else:
+        print(report.get("answer") or "（没有形成答案）")
+        if report.get("citations"):
+            print("\n[引用]")
+            for citation in report["citations"]:
+                if citation.get("kind") == "turn":
+                    print(f"  turn {citation.get('session_id')} {citation.get('turn_ids')}"
+                          + (f"：{citation['quote']}" if citation.get("quote") else ""))
+                else:
+                    print(f"  fact {citation.get('name')}")
+        print(f"\n[agent] status={report.get('status')} stop={report.get('stop_reason')} "
+              f"steps={report.get('steps')} tools={report.get('tool_calls')} "
+              f"grounded={report.get('grounded')} mode={report.get('mode')}")
+        usage = report.get("usage") or {}
+        print(f"[agent] tokens prompt={usage.get('prompt_tokens', 0)} "
+              f"completion={usage.get('completion_tokens', 0)} trace={report.get('trace')}")
+        for error in report.get("errors", []):
+            print(f"  [warning] {error}")
+    if not report.get("ok"):
+        raise SystemExit(1)
+
+
+def cmd_agent_eval(args) -> None:
+    """Run a golden question set through the same AgentLoop used by the product."""
+    import json as _json
+
+    from .agent.eval import evaluate, load_cases
+    from .agent.loop import AgentLoop
+
+    project = Path(args.project)
+    cases_path = Path(args.cases)
+    if not project.is_dir():
+        raise SystemExit(f"[agent-eval] 项目文件夹无效: {project}")
+    if not cases_path.is_file():
+        raise SystemExit(f"[agent-eval] 问题集不存在: {cases_path}")
+    cases = load_cases(cases_path)
+
+    def runner(case):
+        loop = AgentLoop(project_root=project, question=case.question,
+                         data_dir=config.DATA_DIR, mode=args.mode,
+                         max_steps=min(args.max_steps, case.max_steps))
+        return loop.run()
+
+    result = evaluate(cases, runner)
+    if args.json:
+        print(_json.dumps(result, ensure_ascii=False), flush=True)
+        return
+    summary = result["summary"]
+    print(f"[agent-eval] cases={summary['total']} accuracy={summary['accuracy']} "
+          f"grounded={summary['grounded_rate']} citation_p={summary['citation_precision']} "
+          f"citation_r={summary['citation_recall']} refusal={summary['refusal_accuracy']}")
+    for row in result["rows"]:
+        print(f"  {row['case_id']}: ok={row['ok']} grounded={row['grounded']} "
+              f"steps={row['steps']} tools={row['tool_calls']} stop={row['stop_reason']}")
+
+
 def cmd_digest(args) -> None:
     from .report.generate import digest
 
@@ -560,6 +632,23 @@ def main() -> None:
     am.add_argument("--limit", type=int, default=20)
     am.add_argument("--json", action="store_true")
 
+    arun = sub.add_parser("agent-run", help="有界 ReAct Agent：模型自主选工具后回答并校验引用")
+    arun.add_argument("--project", required=True)
+    arun.add_argument("--question", required=True)
+    arun.add_argument("--mode", choices=["auto", "native", "json"], default="auto")
+    arun.add_argument("--max-steps", type=int, default=8)
+    arun.add_argument("--max-tools", type=int, default=12)
+    arun.add_argument("--max-seconds", type=float, default=180.0)
+    arun.add_argument("--resume", default=None, help="从持久化的 task id 继续")
+    arun.add_argument("--json", action="store_true")
+
+    aeval = sub.add_parser("agent-eval", help="跑 Agent 黄金问题集并输出指标")
+    aeval.add_argument("--project", required=True)
+    aeval.add_argument("--cases", required=True)
+    aeval.add_argument("--mode", choices=["auto", "native", "json"], default="auto")
+    aeval.add_argument("--max-steps", type=int, default=8)
+    aeval.add_argument("--json", action="store_true")
+
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
@@ -620,7 +709,8 @@ def main() -> None:
      "review": cmd_review, "archive": cmd_archive, "devices": cmd_devices, "terms": cmd_terms,
      "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench,
      "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
-     "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory}[args.cmd](args)
+     "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
+     "agent-run": cmd_agent_run, "agent-eval": cmd_agent_eval}[args.cmd](args)
 
 
 def cmd_understand(args) -> None:

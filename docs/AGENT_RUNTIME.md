@@ -2,6 +2,8 @@
 
 本模块借鉴 ZCode（Apache-2.0）的**受控 Agent 运行时**思想，但不复制其编码 IDE 工具。实现保持独立、纯标准库、可离线测试。
 
+> 0.3.0 起新增模型驱动的企业级 Agent Runtime v2（原生工具调用、有界 ReAct、Principal/审批、LLM 级 Trace、断点续跑、黄金集评测）。见 [Agent Runtime v2](AGENT_RUNTIME_V2.md)。本文保留 0.2.x 的确定性工作流说明。
+
 ## 已实现
 
 ### 1. 工具契约（`agent/tools.py`）
