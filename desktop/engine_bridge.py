@@ -493,6 +493,40 @@ def cmd_agent_resume(folder: Path, task_id: str, max_steps: int = 8,
     return loop.run(resume_task_id=task_id)
 
 
+
+def cmd_agent_chat_new(folder: Path) -> dict:
+    from meetingvar.agent.chat import ChatAgent
+
+    agent = ChatAgent(project_root=folder)
+    return {"ok": True, "conversation_id": agent.conversation_id,
+            "title": agent.conversation.get("title", "新对话"),
+            "conversation": agent.conversation}
+
+
+def cmd_agent_chat_list(folder: Path) -> dict:
+    from meetingvar.agent.chat import ChatStore
+
+    return {"ok": True, "conversations": ChatStore(folder).list()}
+
+
+def cmd_agent_chat_load(folder: Path, conversation_id: str) -> dict:
+    from meetingvar.agent.chat import ChatStore
+
+    try:
+        conversation = ChatStore(folder).load(conversation_id)
+    except Exception:
+        return {"ok": False, "error": "对话不存在或不可读"}
+    return {"ok": True, "conversation": conversation}
+
+
+def cmd_agent_chat_send(folder: Path, conversation_id: str, message: str) -> dict:
+    from meetingvar.agent.chat import ChatAgent, ChatError
+
+    try:
+        return ChatAgent(folder, conversation_id=conversation_id).ask(message)
+    except ChatError as exc:
+        return {"ok": False, "error_code": exc.code, "error": exc.message}
+
 def cmd_agent_memory(folder: Path, query: str = "") -> dict:
     from meetingvar.agent.memory import FactStore
 
@@ -553,6 +587,14 @@ def main() -> None:
             payload = cmd_agent_resume(Path(sys.argv[2]), sys.argv[3],
                                        int(sys.argv[4]) if len(sys.argv) > 4 else 8,
                                        sys.argv[5] if len(sys.argv) > 5 else "auto")
+        elif cmd == "agent_chat_new":
+            payload = cmd_agent_chat_new(Path(sys.argv[2]))
+        elif cmd == "agent_chat_list":
+            payload = cmd_agent_chat_list(Path(sys.argv[2]))
+        elif cmd == "agent_chat_load":
+            payload = cmd_agent_chat_load(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "agent_chat_send":
+            payload = cmd_agent_chat_send(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         elif cmd == "agent_memory":
             payload = cmd_agent_memory(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
         else:

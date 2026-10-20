@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1443,6 +1443,33 @@ class Backend:
             return {"ok": False, "error": "任务 ID 无效"}
         return self._agent_bridge(["agent_resume", folder, task_id, str(max_steps), "auto"],
                                   use_llm=True, timeout=300)
+
+    def chat_new(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["agent_chat_new", folder], timeout=30)
+
+    def chat_list(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["agent_chat_list", folder], timeout=30)
+
+    def chat_load(self, folder: str, conversation_id: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not self._agent_valid_session(conversation_id):
+            return {"ok": False, "error": "对话 ID 无效"}
+        return self._agent_bridge(["agent_chat_load", folder, conversation_id], timeout=30)
+
+    def chat_send(self, folder: str, conversation_id: str, message: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not self._agent_valid_session(conversation_id):
+            return {"ok": False, "error": "对话 ID 无效"}
+        if not isinstance(message, str) or not message.strip():
+            return {"ok": False, "error": "请输入消息"}
+        return self._agent_bridge(["agent_chat_send", folder, conversation_id,
+                                   message.strip()[:2000]], use_llm=True, timeout=300)
 
     def agent_memory(self, folder: str, query: str = "") -> dict:
         if not folder or not Path(folder).is_dir():

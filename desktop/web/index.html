@@ -21,10 +21,11 @@
     </div>
 
     <nav class="side-primary">
-      <button class="side-item" id="btnNewTask" aria-label="新建会议"><span class="side-ico">＋</span><span>新建会议</span><kbd>Ctrl N</kbd></button>
+      <button class="side-item" id="btnNewTask" aria-label="新建对话"><span class="side-ico">＋</span><span>新建对话</span><kbd>Ctrl N</kbd></button>
       <button class="side-item" id="btnSideSearch" aria-label="搜索"><span class="side-ico">⌕</span><span>搜索</span><kbd>Ctrl K</kbd></button>
-      <button class="side-item navbtn" data-page="agent" aria-label="自动化"><span class="side-ico">✦</span><span>自动化</span></button>
+      <button class="side-item" id="btnSkills" aria-label="技能"><span class="side-ico">✦</span><span>技能</span></button>
       <button class="side-item navbtn" data-page="project" aria-label="项目"><span class="side-ico">▦</span><span>项目</span></button>
+      <button class="side-item navbtn" data-page="library" aria-label="会议库"><span class="side-ico">▤</span><span>会议库</span></button>
     </nav>
 
     <div class="side-section side-projects-section">
@@ -37,7 +38,7 @@
 
     <div class="side-section side-list-section">
       <div class="side-section-head">
-        <span>最近会议</span>
+        <span>最近对话</span>
         <button class="icon-btn" id="btnSideRefresh" title="刷新">↻</button>
       </div>
       <div id="sideSessions" class="side-list"></div>
@@ -68,43 +69,49 @@
     </header>
 
     <main class="workspace">
-      <!-- 主页 / 新任务 -->
+      <!-- 主页 / 对话工作区 -->
       <section id="page-home" class="page active">
-        <div class="home-hero">
-          <div class="hero-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <h1 id="greeting">早上好呀，新的一天开始啦</h1>
-          <p class="hero-sub" id="heroSub">今天要留下哪些值得回看的会议证据？</p>
-
-          <div class="composer" id="composer">
-            <div class="composer-head">
-              <button class="project-select" id="composerProject" title="切换项目">
-                <span class="project-glyph">▣</span>
-                <span id="homeProject">选择项目</span>
-                <span class="chev">⌄</span>
-              </button>
-              <span class="composer-hint">会议证据 · 本地优先</span>
-            </div>
-            <textarea id="homeAsk" rows="3" placeholder="向 meetingVAR 提问，使用 @ 添加项目上下文，或直接开始一场会议"></textarea>
-            <div class="composer-bar">
-              <div class="composer-left">
-                <button class="round-btn" id="btnComposerNew" title="新建会议">＋</button>
-                <span class="mode-pill" id="composerMode">只读 Agent</span>
-                <span class="composer-spacer"></span>
+        <div class="chat-shell">
+          <div class="chat-scroll" id="chatScroll">
+            <div class="home-hero" id="homeHero">
+              <div class="hero-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+              <h1 id="greeting">早上好呀，新的一天开始啦</h1>
+              <p class="hero-sub" id="heroSub">今天要留下哪些值得回看的会议证据？</p>
+              <div class="quick-row">
+                <button class="quick-chip" id="btnQuickMeeting"><span>◉</span>开始会议</button>
+                <button class="quick-chip" id="btnQuickLibrary"><span>▤</span>会议纪要</button>
+                <button class="quick-chip" id="btnQuickUnderstand"><span>▦</span>项目进展</button>
+                <button class="quick-chip" id="btnQuickAgent"><span>✦</span>技能</button>
               </div>
-              <div class="composer-right">
-                <span class="model-pill" id="composerModel">本地模型</span>
-                <button class="send-btn" id="btnComposerSend" title="发送 / 运行 Agent">↑</button>
-              </div>
+              <div class="home-hint">直接对话即可：找原话、查承诺、看项目进度、复盘会议。只保存命中片段；写入需要你确认。</div>
             </div>
+            <div id="chatThread" class="chat-thread" hidden></div>
           </div>
 
-          <div class="quick-row">
-            <button class="quick-chip" id="btnQuickMeeting"><span>◉</span>开始会议</button>
-            <button class="quick-chip" id="btnQuickLibrary"><span>▤</span>会议纪要</button>
-            <button class="quick-chip" id="btnQuickUnderstand"><span>▦</span>全库理解</button>
-            <button class="quick-chip" id="btnQuickAgent"><span>✦</span>Agent 检索</button>
+          <div class="composer-dock" id="composerDock">
+            <div class="composer" id="composer">
+              <div class="composer-head">
+                <button class="project-select" id="composerProject" title="切换项目">
+                  <span class="project-glyph">▣</span>
+                  <span id="homeProject">选择项目</span>
+                  <span class="chev">⌄</span>
+                </button>
+                <span class="composer-hint">会议证据 · 本地优先</span>
+              </div>
+              <textarea id="homeAsk" rows="2" placeholder="问会议里发生过什么，或让 Agent 查项目记忆…"></textarea>
+              <div class="composer-bar">
+                <div class="composer-left">
+                  <button class="round-btn" id="btnComposerNew" title="新对话">＋</button>
+                  <span class="mode-pill" id="composerMode">只读 Agent</span>
+                </div>
+                <div class="composer-right">
+                  <span class="model-pill" id="composerModel">本地模型</span>
+                  <button class="send-btn" id="btnComposerSend" title="发送">↑</button>
+                </div>
+              </div>
+            </div>
+            <div class="composer-foot"><span id="chatState">新对话</span><span class="muted">Enter 发送 · Shift+Enter 换行</span></div>
           </div>
-          <div class="home-hint">只保存命中片段；Agent 深度检索默认只读，写入项目记忆需要你在会后事实页勾选确认。</div>
         </div>
 
         <div class="meeting-console" id="meetingConsole" hidden>
@@ -401,7 +408,7 @@
             <div class="settings-pane" id="settings-memory">
               <div class="page-head compact"><div><h1>记忆与 Agent</h1><p>项目事实、会前关注和审计轨迹。</p></div></div>
               <div class="card">
-                <div class="row"><b>项目记忆</b><button class="btn navbtn" data-page="agent">打开 Agent 页 →</button></div>
+                <div class="row"><b>项目记忆</b><button class="btn" id="btnOpenSkills">打开技能菜单 →</button></div>
                 <div class="muted">事实保存在 <code>&lt;项目&gt;/meetingvar/agent_memory/</code>；一事实一 Markdown，带来源、版本和 Trace。Agent 深度检索默认只读。</div>
               </div>
               <div class="card">

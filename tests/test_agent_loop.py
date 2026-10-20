@@ -142,6 +142,10 @@ class AgentLoopTests(unittest.TestCase):
                                  "citations": [], "confidence": 0.2}, ensure_ascii=False)),
             _content(json.dumps({"answer": "根据现有证据无法确认改期。",
                                  "citations": [], "confidence": 0.2}, ensure_ascii=False)),
+            _content(json.dumps({"answer": "根据现有证据无法确认改期。",
+                                 "citations": [], "confidence": 0.2}, ensure_ascii=False)),
+            _content(json.dumps({"answer": "根据现有证据无法确认改期。",
+                                 "citations": [], "confidence": 0.2}, ensure_ascii=False)),
         ]
         loop, _ = self._loop(script, mode="native", max_steps=6)
         report = loop.run()

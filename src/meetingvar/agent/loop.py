@@ -74,7 +74,8 @@ _SYSTEM = """你是 meetingVAR 的企业会议证据 Agent。你只能依据工�
 4. 没有足够证据时明确说“根据现有证据无法回答”，不要猜。
 5. 一次搜索没有结果时，不要逐场重复同一查询；改用更短的关键词、同义词，或先 list_sessions 看会话。连续两次没有新证据就停止并说明无法回答。
 6. 规则/编码/定义/“分别是什么”类问题，必须找到含“记作/看成/对应/等于”的原文并读取该 turn；不能只引用主题相关的片段。
-7. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
+7. 用户问“会议/课堂里说过什么、某词被记作什么、谁说过什么”时，必须使用 search_sessions 或系统预检索给出的候选 turn，再用 get_transcript_window 核对；项目记忆为空不代表会议里没有，不能只查 search_memory 就拒答。
+8. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
 {"answer":"回答（≤500字）","citations":[{"kind":"turn","session_id":"...","turn_ids":["turn_1"],"quote":"原文短引"} 或 {"kind":"fact","name":"事实名"}],"unsupported":[],"confidence":0.0}
 citations 只能引用工具实际返回过的 turn 或事实；没有引用就填 []。confidence 是 0 到 1 的数字。
 """
@@ -104,7 +105,7 @@ class AgentLoop:
                  principal: Principal | None = None, llm: Callable | None = None,
                  mode: str = "auto", max_steps: int = 8, max_tool_calls: int = 12,
                  max_seconds: float = 180.0, max_input_tokens: int = 60000,
-                 max_output_tokens: int = 16000, approval=None):
+                 max_output_tokens: int = 16000, approval=None, history: list[dict] | None = None):
         self.project_root = Path(project_root).resolve()
         self.question = str(question or "").strip()
         if not self.question:
@@ -141,6 +142,7 @@ class AgentLoop:
         self.plan: list[dict] = []
         self.task = None
         self._prefetched = False
+        self.history = [m for m in (history or []) if isinstance(m, dict) and m.get("role") in {"user", "assistant"}][-12:]
 
     # ---------- model / trace ----------
     def _call_llm(self, messages: list[dict], *, tools=None, tool_choice: str = "auto"):
@@ -186,8 +188,13 @@ class AgentLoop:
 
     def _make_plan(self) -> list[dict]:
         tools = "\n".join(f"- {spec.name}: {spec.description}" for spec in self.registry.specs())
-        prompt = _PLANNER % (tools, self.question,
-                             self._project_context() or "（无额外项目上下文）")
+        history_text = "\n".join(
+            f"{'用户' if m.get('role') == 'user' else '助手'}：{str(m.get('content', ''))[:600]}"
+            for m in self.history[-6:])
+        context = self._project_context() or "（无额外项目上下文）"
+        if history_text:
+            context += "\n最近对话：\n" + history_text
+        prompt = _PLANNER % (tools, self.question, context)
         reply = self._call_llm([{"role": "system", "content": "你是严格输出 JSON 的规划器。"},
                                 {"role": "user", "content": prompt}])
         if not reply.get("ok"):
@@ -244,6 +251,20 @@ class AgentLoop:
                     row["terms"].append(term)
         rows = sorted(found.values(), key=lambda row: (-row["hits"], -row["score"]))[:10]
         if rows:
+            for row in rows[:2]:
+                try:
+                    turns = self.catalog.window(row["session_id"], [row["turn_id"]], max_turns=1)
+                except (OSError, ValueError):
+                    turns = []
+                if turns:
+                    self.observations.append({
+                        "tool": "get_transcript_window",
+                        "arguments": {"session_id": row["session_id"],
+                                      "turn_ids": [row["turn_id"]]},
+                        "value": {"session_id": row["session_id"], "turns": turns},
+                        "text": "\n".join(f"[{t['id']}] {t['speaker']}: {t['text']}"
+                                          for t in turns)[:4000],
+                        "step": 0})
             self.observations.append({
                 "tool": "prefetch", "arguments": {"terms": terms},
                 "value": {"results": [{"session_id": sid,
@@ -595,6 +616,7 @@ class AgentLoop:
         repeated = 0
         empty_results = 0
         missing_retry = False
+        evidence_retry = False
         last_call = ""
         errors: list = []
         while True:
@@ -684,6 +706,18 @@ class AgentLoop:
                 payload = _json_object(content)
                 if payload is not None and payload.get("answer"):
                     final = self._normalize_final(payload, content)
+                    evidence_text = "\n".join(o.get("text", "") for o in self.observations
+                                                if o.get("text"))[:4000]
+                    if (not final.get("answered") and evidence_text and not evidence_retry
+                            and self.budget.steps < self.max_steps):
+                        evidence_retry = True
+                        self.messages.append({"role": "assistant", "content": content})
+                        self.messages.append({"role": "user", "content":
+                            "已有以下工具证据（真实转写）：\n" + evidence_text +
+                            "\n请基于这些证据回答；不要直接拒答，除非证据确实不足。"
+                            "引用必须使用上面出现的 turn id。"})
+                        self._save_state("running")
+                        continue
                     missing = self._missing_terms()
                     if missing and not final.get("answered") and not missing_retry and self.budget.steps < self.max_steps:
                         missing_retry = True
@@ -759,6 +793,18 @@ class AgentLoop:
                 continue
             if payload.get("action") == "final":
                 final = self._normalize_final(payload, reply.get("content", ""))
+                evidence_text = "\n".join(o.get("text", "") for o in self.observations
+                                            if o.get("text"))[:4000]
+                if (not final.get("answered") and evidence_text and not evidence_retry
+                        and self.budget.steps < self.max_steps):
+                    evidence_retry = True
+                    self.messages.append({"role": "assistant", "content": reply.get("content", "")})
+                    self.messages.append({"role": "user", "content":
+                        "已有以下工具证据（真实转写）：\n" + evidence_text +
+                        "\n请基于这些证据回答；不要直接拒答，除非证据确实不足。"
+                        "引用必须使用上面出现的 turn id。"})
+                    self._save_state("running")
+                    continue
                 missing = self._missing_terms()
                 if missing and not final.get("answered") and not missing_retry and self.budget.steps < self.max_steps:
                     missing_retry = True

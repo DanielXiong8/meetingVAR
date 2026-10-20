@@ -131,6 +131,53 @@ def _read_overview(args: dict, context: ToolContext) -> dict:
             "first_turns": turns, "trust": "untrusted"}
 
 
+
+def _read_project_status(args: dict, context: ToolContext) -> dict:
+    """Project-progress memory: facts, focus, overview and recent meetings."""
+    store = _facts(context)
+    facts = store.list_facts(limit=300)
+    by_type = {}
+    for fact in facts:
+        kind = fact.get("metadata", {}).get("type", "fact")
+        by_type[kind] = by_type.get(kind, 0) + 1
+    focus = []
+    try:
+        import json
+        payload = json.loads((context.project_root / "meetingvar" / "agent_memory" / "focus.json").read_text(encoding="utf-8"))
+        focus = [{"title": str(item.get("title", ""))[:160], "why": str(item.get("why", ""))[:300]}
+                 for item in (payload.get("items") or [])[:10] if isinstance(item, dict)]
+    except (OSError, ValueError):
+        pass
+    overview = ""
+    try:
+        import json
+        payload = json.loads((context.project_root / "meetingvar" / "interest_context.json").read_text(encoding="utf-8"))
+        overview = str(payload.get("overview", ""))[:500]
+    except (OSError, ValueError):
+        pass
+    catalog = _catalog(context)
+    sessions = catalog.list_sessions(limit=6)
+    return {"project": str(context.project_root), "facts": len(facts), "by_type": by_type,
+            "recent_facts": [{"name": f.get("name", ""),
+                              "description": f.get("description", ""),
+                              "type": f.get("metadata", {}).get("type", ""),
+                              "origin_meeting": f.get("metadata", {}).get("origin_meeting", "")}
+                             for f in facts[:10]],
+            "focus": focus, "project_overview": overview,
+            "recent_sessions": sessions, "trust": "project-memory"}
+
+
+def _read_project_plan(args: dict, context: ToolContext) -> dict:
+    """Offline reading budget for the current project; no model call."""
+    from ..memory.probe import plan
+
+    result = plan(context.project_root)
+    return {"project": str(context.project_root), "ok": result.get("ok"),
+            "chars": result.get("chars"), "chunks": len(result.get("chunks", [])),
+            "est_local_minutes": result.get("est_local_minutes"),
+            "notes": result.get("notes", [])[:12],
+            "files": result.get("files", [])[:20], "error": result.get("error")}
+
 def build_meeting_registry(*, trace=None) -> ToolRegistry:
     """Register the read-only tool surface. Write tools stay in the controlled workflow."""
     registry = ToolRegistry(trace=trace)
@@ -222,5 +269,22 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": ["session_id"],
         },
     ), _read_overview)
+
+
+    registry.register(ToolSpec(
+        name="project_status",
+        description="读取当前项目的进度记忆：事实、会前关注、项目概览和最近会议",
+        read_only=True, side_effect_scope="none", timeout_s=20, max_output_chars=9000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {}},
+    ), _read_project_status)
+
+    registry.register(ToolSpec(
+        name="plan_project_reading",
+        description="离线计算当前项目全库阅读的字数、块数和预计耗时，不调用模型",
+        read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=8000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {}},
+    ), _read_project_plan)
 
     return registry

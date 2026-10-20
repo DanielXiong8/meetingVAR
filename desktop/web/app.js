@@ -9,6 +9,7 @@ const state = {
   lastCaptionAt: null, screen: {}, starting: false, polling: false, partials: new Map(),
   agentFocus: [], agentFocusSources: [], agentFacts: [], agentBusy: false,
   pageHistory: ["home"], pageIndex: 0, usage: null, usageRange: 7, libraryGroups: [], consolePinned: false,
+  chatId: "", chatMessages: [], chatBusy: false,
 };
 
 /* 全局错误可见化 + 导航事件委托（避免某个旧处理器异常后整页失效） */
@@ -455,7 +456,9 @@ async function scanProject(path) {
   $("btnUseProject").disabled = false;
   await pywebview.api.set_config({ last_project: path });
   updateComposer();
-  renderSidebar();
+  await renderSidebar();
+  await loadConversations();
+  newChat();
 }
 function updateComposer() {
   const cfg = state.cfg || {};
@@ -465,6 +468,193 @@ function updateComposer() {
   $("composerMode").textContent = "只读 Agent";
   $("aboutVersion").textContent = $("ver").textContent || "—";
 }
+function chatTime(ts) {
+  if (!ts) return "";
+  const d = new Date(Number(ts) * (Number(ts) < 1e12 ? 1000 : 1));
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function chatTools(msg) {
+  const obs = msg.observations || [];
+  if (!obs.length) return "";
+  return `<details class="chat-tools"><summary>工具轨迹 · ${obs.length} 次</summary>` +
+    obs.map((o, i) => `<div class="chat-tool-row"><span class="n">${i + 1}</span><span class="t">${agentEsc(o.tool || "")}</span><span class="muted">${agentEsc(JSON.stringify(o.arguments || {}).slice(0, 220))}</span></div>`).join("") +
+    `</details>`;
+}
+function chatCitations(msg) {
+  const cites = msg.citations || [];
+  if (!cites.length) return "";
+  const parts = cites.map((c) => {
+    if (c.kind === "turn") return `${agentEsc(c.session_id || "")}:${agentEsc((c.turn_ids || []).join(","))}`;
+    return agentEsc(c.name || "");
+  });
+  const stateText = msg.mode === "agent"
+    ? (msg.grounded ? "引用已校验" : "引用未通过校验")
+    : "";
+  return `<div class="chat-cites">${stateText ? stateText + " · " : ""}依据：${parts.map((p) => `<span class="cite">${p}</span>`).join("")}</div>`;
+}
+function chatNode(msg) {
+  const row = document.createElement("div");
+  row.className = "chat-msg " + (msg.role === "user" ? "user" : "assistant");
+  const avatar = document.createElement("div");
+  avatar.className = "chat-avatar";
+  avatar.textContent = msg.role === "user" ? "你" : "M";
+  const body = document.createElement("div");
+  body.className = "chat-body";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  bubble.textContent = msg.content || "";
+  body.appendChild(bubble);
+  if (msg.role === "assistant") {
+    const meta = document.createElement("div");
+    meta.className = "chat-meta";
+    const bits = [];
+    if (msg.mode === "agent") bits.push("Agent", `${msg.observations ? msg.observations.length : 0} 次工具`);
+    if (msg.stop_reason) bits.push(msg.stop_reason);
+    if (msg.ts) bits.push(chatTime(msg.ts));
+    meta.textContent = bits.join(" · ");
+    if (meta.textContent) body.appendChild(meta);
+    const tools = chatTools(msg);
+    if (tools) body.insertAdjacentHTML("beforeend", tools);
+    const cites = chatCitations(msg);
+    if (cites) body.insertAdjacentHTML("beforeend", cites);
+  }
+  row.appendChild(avatar);
+  row.appendChild(body);
+  return row;
+}
+function appendChatMessage(msg, scroll = true) {
+  const thread = $("chatThread");
+  thread.appendChild(chatNode(msg));
+  if (scroll) $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+}
+function setChatActive(active) {
+  $("homeHero").hidden = !!active;
+  $("chatThread").hidden = !active;
+}
+function newChat() {
+  state.chatId = "";
+  state.chatMessages = [];
+  $("chatThread").innerHTML = "";
+  $("chatThread").hidden = true;
+  $("homeHero").hidden = false;
+  $("chatState").textContent = "新对话";
+  $("pageTitle").textContent = "新任务";
+  $("homeAsk").value = "";
+  $("homeAsk").focus();
+}
+async function ensureChat() {
+  if (state.chatId) return state.chatId;
+  if (!state.project) throw new Error("先选择项目");
+  const r = await pywebview.api.chat_new(state.project);
+  if (!r || !r.ok) throw new Error((r && r.error) || "无法创建对话");
+  state.chatId = r.conversation_id;
+  return state.chatId;
+}
+function appendTyping() {
+  const thread = $("chatThread");
+  const row = document.createElement("div");
+  row.className = "chat-msg assistant";
+  row.id = "chatTyping";
+  row.innerHTML = `<div class="chat-avatar">M</div><div class="chat-body"><span class="chat-typing"><i></i><i></i><i></i> 正在处理…</span></div>`;
+  thread.appendChild(row);
+  $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+}
+async function sendChat(text) {
+  const message = String(text || "").trim();
+  if (!message) return;
+  if (!state.project) { toast("先选择项目"); switchPage("project"); return; }
+  if (state.chatBusy) return;
+  state.chatBusy = true;
+  $("btnComposerSend").disabled = true;
+  $("homeAsk").value = "";
+  const userMsg = { role: "user", content: message, ts: Date.now() / 1000 };
+  state.chatMessages.push(userMsg);
+  setChatActive(true);
+  appendChatMessage(userMsg);
+  appendTyping();
+  try {
+    const cid = await ensureChat();
+    const r = await pywebview.api.chat_send(state.project, cid, message);
+    const typing = $("chatTyping");
+    if (typing) typing.remove();
+    if (!r || !r.ok || !r.message) {
+      const errorMsg = { role: "assistant", content: "这次没有完成：" + ((r && r.error) || "未知错误"), ts: Date.now() / 1000, mode: "error" };
+      state.chatMessages.push(errorMsg);
+      appendChatMessage(errorMsg);
+    } else {
+      state.chatId = r.conversation_id || cid;
+      state.chatMessages.push(r.message);
+      appendChatMessage(r.message);
+      $("chatState").textContent = r.title || "对话";
+      $("pageTitle").textContent = r.title || "新任务";
+    }
+    await loadConversations();
+  } catch (e) {
+    const typing = $("chatTyping");
+    if (typing) typing.remove();
+    const errorMsg = { role: "assistant", content: "调用失败：" + (e && e.message ? e.message : e), ts: Date.now() / 1000, mode: "error" };
+    state.chatMessages.push(errorMsg);
+    appendChatMessage(errorMsg);
+  } finally {
+    state.chatBusy = false;
+    $("btnComposerSend").disabled = false;
+    $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+  }
+}
+async function loadConversations() {
+  const box = $("sideSessions");
+  if (!box) return;
+  if (!state.project) { box.innerHTML = '<div class="side-empty">选择项目后显示对话</div>'; return; }
+  try {
+    const r = await pywebview.api.chat_list(state.project);
+    const rows = (r && r.ok ? r.conversations : []) || [];
+    box.innerHTML = rows.length ? rows.slice(0, 12).map((c) =>
+      `<button class="side-session" data-conversation="${esc(c.id)}" title="${esc(c.title)}">
+        <span class="s-ico">◈</span><span class="s-name">${esc(c.title)}</span><span class="s-time">${relTime(Date.parse(c.updated_at || "") / 1000)}</span></button>`
+    ).join("") : '<div class="side-empty">还没有对话</div>';
+    box.querySelectorAll(".side-session").forEach((row) => {
+      row.onclick = () => openConversation(row.dataset.conversation);
+    });
+  } catch (e) { box.innerHTML = '<div class="side-empty">对话暂不可用</div>'; }
+}
+async function openConversation(id) {
+  if (!id || state.chatBusy) return;
+  try {
+    const r = await pywebview.api.chat_load(state.project, id);
+    if (!r || !r.ok) { toast((r && r.error) || "对话读取失败"); return; }
+    state.chatId = r.conversation.id;
+    state.chatMessages = r.conversation.messages || [];
+    $("chatThread").innerHTML = "";
+    setChatActive(state.chatMessages.length > 0);
+    for (const msg of state.chatMessages) appendChatMessage(msg, false);
+    switchPage("home", false);
+    $("chatState").textContent = r.conversation.title || "对话";
+    $("pageTitle").textContent = r.conversation.title || "新任务";
+    $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+  } catch (e) { toast("对话读取失败：" + e); }
+}
+function showSkills() {
+  switchPage("home", false);
+  $("pageTitle").textContent = "技能";
+  setChatActive(true);
+  const row = document.createElement("div");
+  row.className = "chat-msg assistant skill-message";
+  row.innerHTML = `<div class="chat-avatar">M</div><div class="chat-body"><div class="chat-bubble">
+    <b>会议技能</b><div class="muted" style="margin-top:4px">选一个，Agent 会调用会议工具并给出引用。</div>
+    <div class="skill-grid">
+      <button class="skill-btn" data-prompt="列出最近的会议，并总结每场的主要决定、行动项和未决问题。">最近会议总结</button>
+      <button class="skill-btn" data-prompt="查看当前项目的进展、已保存事实和会前关注，告诉我现在最需要确认什么。">项目进度</button>
+      <button class="skill-btn" data-prompt="计算当前项目全库阅读的字数、块数和预计耗时，并说明是否值得现在跑。">全库阅读预算</button>
+      <button class="skill-btn" data-prompt="在最近会议里搜索关于交付时间的原话，并给出引用。">找原话</button>
+      <button class="skill-btn" data-prompt="列出当前项目记忆里所有未决问题和风险，并给出来源。">未决问题</button>
+    </div></div></div>`;
+  $("chatThread").appendChild(row);
+  row.querySelectorAll(".skill-btn").forEach((btn) => {
+    btn.onclick = () => { row.remove(); sendChat(btn.dataset.prompt); };
+  });
+  $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+}
+
 async function renderSidebar() {
   const cfg = state.cfg || {};
   const projects = (cfg.projects || []).filter((p, i, arr) => p && arr.indexOf(p) === i);
@@ -479,22 +669,7 @@ async function renderSidebar() {
       row.onclick = () => { scanProject(row.dataset.project); switchPage("home"); };
     });
   }
-  const recent = $("sideSessions");
-  if (!recent) return;
-  try {
-    const groups = await pywebview.api.list_library();
-    state.libraryGroups = groups || [];
-    const sessions = [];
-    for (const g of groups || []) for (const s of g.sessions || []) sessions.push({ ...s, project: g.name });
-    sessions.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-    recent.innerHTML = sessions.length ? sessions.slice(0, 8).map((s) =>
-      `<button class="side-session" data-session="${esc(s.sid)}" title="${esc(s.sid)}">
-        <span class="s-ico">▤</span><span class="s-name">${esc(s.sid)}</span><span class="s-time">${relTime(s.mtime)}</span></button>`
-    ).join("") : '<div class="side-empty">还没有会议记录</div>';
-    recent.querySelectorAll(".side-session").forEach((row) => {
-      row.onclick = () => { switchPage("library"); showSession(row.dataset.session); };
-    });
-  } catch (e) { recent.innerHTML = '<div class="side-empty">会议库暂不可用</div>'; }
+  await loadConversations();
 }
 
 $("btnPick").onclick = async () => {
@@ -1206,32 +1381,23 @@ $("btnSidebarCollapse").onclick = () => {
 };
 $("btnBack").onclick = pageBack;
 $("btnForward").onclick = pageForward;
-$("btnNewTask").onclick = () => {
-  switchPage("home");
-  openMeetingConsole();
-  $("interestFocus").focus();
-};
+$("btnNewTask").onclick = () => { switchPage("home"); newChat(); };
 $("btnSideSearch").onclick = () => {
-  switchPage("library");
-  $("librarySearch").focus();
+  switchPage("home");
+  $("homeAsk").focus();
+  toast("直接问：哪场会议提到过… / 谁负责… / 项目现在什么进度", 6000);
 };
 $("btnSideAddProject").onclick = async () => {
   const p = await pywebview.api.pick_folder();
   if (p) { await scanProject(p); switchPage("home"); }
 };
-$("btnSideRefresh").onclick = renderSidebar;
+$("btnSideRefresh").onclick = loadConversations;
 $("composerProject").onclick = () => switchPage("project");
-$("btnComposerNew").onclick = () => {
-  switchPage("home");
-  openMeetingConsole();
-  $("interestFocus").focus();
-};
+$("btnComposerNew").onclick = () => newChat();
 function sendComposer() {
   const q = $("homeAsk").value.trim();
-  if (!q) { switchPage("home"); openMeetingConsole(); $("interestFocus").focus(); return; }
-  switchPage("agent");
-  $("agentRunQuestion").value = q;
-  $("btnAgentRun").click();
+  if (!q) { $("homeAsk").focus(); return; }
+  sendChat(q);
 }
 $("btnComposerSend").onclick = sendComposer;
 $("homeAsk").addEventListener("keydown", (e) => {
@@ -1242,13 +1408,12 @@ $("btnQuickMeeting").onclick = () => {
   openMeetingConsole();
   $("btnRec").click();
 };
-$("btnQuickLibrary").onclick = () => switchPage("library");
-$("btnQuickUnderstand").onclick = () => {
-  switchPage("project");
-  $("undCard").scrollIntoView({ behavior: "smooth", block: "start" });
-};
-$("btnQuickAgent").onclick = () => { switchPage("agent"); $("agentRunQuestion").focus(); };
+$("btnQuickLibrary").onclick = () => sendChat("列出最近的会议，并总结每场的主要决定、行动项和未决问题。");
+$("btnQuickUnderstand").onclick = () => sendChat("查看当前项目的进展、已保存事实和会前关注，告诉我现在最需要确认什么。");
+$("btnQuickAgent").onclick = () => showSkills();
 $("btnConsoleClose").onclick = () => { state.consolePinned = false; showMeetingConsole(false); };
+$("btnSkills").onclick = () => showSkills();
+$("btnOpenSkills").onclick = () => showSkills();
 $("librarySearch").addEventListener("input", filterLibrary);
 document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey)) return;
