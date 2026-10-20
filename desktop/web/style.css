@@ -456,3 +456,21 @@ select.input { padding-right: 24px; }
 .panel-close { position: absolute; top: 14px; right: 16px; width: 28px; height: 28px; border: 1px solid #393939; background: #242424; color: #bbb; border-radius: 7px; font-size: 14px; line-height: 1; z-index: 2; }
 .panel-close:hover { background: #303030; color: #fff; }
 body.panel-open .panel-scrim { display: block; }
+
+/* ---------- VS Code-like file viewer ---------- */
+.file-viewer { position: fixed; top: 50px; right: 0; bottom: 0; width: min(980px, 78vw); background: #1b1b1b; border-left: 1px solid #333; box-shadow: -24px 0 70px rgba(0,0,0,.45); z-index: 70; display: flex; flex-direction: column; }
+.file-viewer-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid #2c2c2c; background: #202020; }
+.file-viewer-title { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.file-viewer-title b { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-viewer-title .muted { font-size: 10px; white-space: nowrap; }
+.file-viewer-actions { display: flex; align-items: center; gap: 6px; }
+.file-viewer-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 28px; background: #191919; }
+.file-viewer-body .preview-note { color: var(--muted); font-size: 10px; margin-bottom: 10px; }
+.code-wrap { display: flex; align-items: flex-start; min-width: max-content; font-family: var(--mono); font-size: 11px; line-height: 1.65; }
+.code-nums { color: #555; text-align: right; padding-right: 14px; user-select: none; white-space: pre; }
+.code-text { color: #d4d4d4; white-space: pre; margin: 0; }
+.file-image-wrap { display: grid; place-items: center; min-height: 60vh; background: repeating-conic-gradient(#202020 0% 25%, #1b1b1b 0% 50%) 50% / 20px 20px; border: 1px solid #2d2d2d; border-radius: 10px; padding: 16px; }
+.file-image-wrap img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+.file-preview-note { color: var(--muted); font-size: 11px; padding: 18px; border: 1px dashed #333; border-radius: 10px; }
+.file-viewer video { max-width: 100%; max-height: 70vh; border-radius: 8px; display: block; margin: 0 auto; }
+.file-viewer audio { width: 100%; }

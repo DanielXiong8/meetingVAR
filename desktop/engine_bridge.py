@@ -21,10 +21,14 @@ _TREE_MAX_DEPTH = 6
 
 def _build_tree(root: Path):
     """VSCode 风格文件树（含被跳过的非文本文件清单）。深度/节点数封顶。"""
-    from meetingvar.memory.files import SKIP_DIRS, read_text_safely
+    from meetingvar.memory.files import (SKIP_DIRS, SUPPORTED_TEXT_SUFFIXES,
+                                                IMAGE_SUFFIXES, VIDEO_SUFFIXES, AUDIO_SUFFIXES,
+                                                read_text_safely)
 
     skipped: list[str] = []
     budget = [_TREE_MAX_NODES]
+
+    root = Path(root).resolve()
 
     def walk(d: Path, depth: int) -> list[dict]:
         if depth > _TREE_MAX_DEPTH or budget[0] <= 0:
@@ -41,11 +45,19 @@ def _build_tree(root: Path):
                 continue
             budget[0] -= 1
             try:
+                rel = p.relative_to(root).as_posix()
                 if p.is_dir():
-                    nodes.append({"name": p.name, "dir": True, "children": walk(p, depth + 1)})
+                    nodes.append({"name": p.name, "dir": True, "rel": rel,
+                                  "children": walk(p, depth + 1)})
                 else:
-                    node = {"name": p.name, "dir": False, "size": p.stat().st_size}
-                    if p.suffix.lower() in {".txt", ".md"} and read_text_safely(p) is None:
+                    suffix = p.suffix.lower()
+                    node = {"name": p.name, "dir": False, "size": p.stat().st_size,
+                            "rel": rel, "suffix": suffix,
+                            "readable": suffix in SUPPORTED_TEXT_SUFFIXES,
+                            "image": suffix in IMAGE_SUFFIXES,
+                            "video": suffix in VIDEO_SUFFIXES,
+                            "audio": suffix in AUDIO_SUFFIXES}
+                    if suffix in {".txt", ".md"} and read_text_safely(p) is None:
                         skipped.append(p.name)
                     nodes.append(node)
             except OSError:
@@ -55,9 +67,101 @@ def _build_tree(root: Path):
     return walk(root, 1), skipped
 
 
+
+_LANGUAGE = {
+    ".py": "python", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "tsx", ".jsx": "jsx", ".vue": "vue", ".svelte": "svelte",
+    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp",
+    ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".go": "go", ".rs": "rust",
+    ".rb": "ruby", ".php": "php", ".cs": "csharp", ".swift": "swift",
+    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".ps1": "powershell",
+    ".bat": "bat", ".cmd": "bat", ".sql": "sql", ".css": "css", ".scss": "scss",
+    ".less": "less", ".html": "html", ".htm": "html", ".xml": "xml", ".svg": "xml",
+    ".json": "json", ".jsonl": "json", ".yaml": "yaml", ".yml": "yaml",
+    ".toml": "toml", ".ini": "ini", ".cfg": "ini", ".md": "markdown",
+    ".tsv": "tsv", ".csv": "csv", ".tex": "latex",
+}
+
+
+def _safe_project_path(folder: Path, relative: str) -> Path:
+    if not isinstance(relative, str) or not relative.strip():
+        raise ValueError("empty path")
+    if "\x00" in relative:
+        raise ValueError("invalid path")
+    rel = Path(relative.replace("\\", "/"))
+    if rel.is_absolute() or any(part == ".." for part in rel.parts):
+        raise ValueError("path escapes project")
+    root = Path(folder).resolve()
+    target = (root / rel).resolve()
+    if root not in target.parents:
+        raise ValueError("path escapes project")
+    if not target.is_file() or target.is_symlink():
+        raise ValueError("not a readable file")
+    return target
+
+
+def cmd_read_project_file(folder: Path, relative: str) -> dict:
+    import base64
+    import mimetypes
+    from meetingvar.memory.files import (SUPPORTED_TEXT_SUFFIXES, IMAGE_SUFFIXES,
+                                         VIDEO_SUFFIXES, AUDIO_SUFFIXES,
+                                         read_text_safely)
+
+    try:
+        path = _safe_project_path(folder, relative)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    suffix = path.suffix.lower()
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return {"ok": False, "error": "文件不可读"}
+    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    result = {"ok": True, "path": relative, "name": path.name, "suffix": suffix,
+              "size": size, "mime": mime, "language": _LANGUAGE.get(suffix, "")}
+    if suffix in IMAGE_SUFFIXES:
+        if size > 15 * 1024 * 1024:
+            result.update(kind="image", too_large=True)
+            return result
+        try:
+            result.update(kind="image", data_url="data:" + mime + ";base64," +
+                          base64.b64encode(path.read_bytes()).decode("ascii"))
+        except OSError:
+            return {"ok": False, "error": "图片读取失败"}
+        return result
+    if suffix in VIDEO_SUFFIXES or suffix in AUDIO_SUFFIXES:
+        kind = "video" if suffix in VIDEO_SUFFIXES else "audio"
+        result.update(kind=kind)
+        if size <= 15 * 1024 * 1024:
+            try:
+                result["data_url"] = "data:" + mime + ";base64," + base64.b64encode(
+                    path.read_bytes()).decode("ascii")
+            except OSError:
+                pass
+        return result
+    if suffix == ".pdf":
+        text = read_text_safely(path)
+        result.update(kind="pdf", text=(text or "")[:200_000],
+                      truncated=bool(text and len(text) > 200_000),
+                      has_text=bool(text))
+        return result
+    if suffix in {".docx", ".doc", ".pptx", ".ppt"}:
+        text = read_text_safely(path)
+        result.update(kind="office", text=(text or "")[:200_000],
+                      truncated=bool(text and len(text) > 200_000),
+                      has_text=bool(text))
+        return result
+    text = read_text_safely(path) if suffix in SUPPORTED_TEXT_SUFFIXES else None
+    if text is None:
+        result.update(kind="binary")
+        return result
+    result.update(kind="text", text=text[:200_000], truncated=len(text) > 200_000)
+    return result
+
 def cmd_preview(folder: Path) -> dict:
     from meetingvar.memory.extract import extract_terms
-    from meetingvar.memory.files import project_files
+    from meetingvar.memory.files import (QUICK_TEXT_SUFFIXES, SUPPORTED_TEXT_SUFFIXES,
+                                             project_files)
 
     result: dict = {
         "folder": str(folder),
@@ -76,7 +180,7 @@ def cmd_preview(folder: Path) -> dict:
 
     try:
         result["doc_count"] = sum(
-            1 for _ in project_files(folder, {".md", ".txt", ".pdf", ".pptx", ".docx"})
+            1 for _ in project_files(folder, set(SUPPORTED_TEXT_SUFFIXES))
         )
     except Exception as exc:  # noqa: BLE001
         result["notes"].append(f"文档扫描失败: {type(exc).__name__}")
@@ -87,7 +191,7 @@ def cmd_preview(folder: Path) -> dict:
         result["notes"].append(f"文件树构建失败: {type(exc).__name__}")
 
     try:
-        terms = extract_terms(folder)
+        terms = extract_terms(folder, suffixes=set(QUICK_TEXT_SUFFIXES), max_files=80)
         result["term_count"] = len(terms)
         result["terms"] = {w: list(srcs)[:2] for w, srcs in list(terms.items())[:40]}
     except Exception as exc:  # noqa: BLE001
@@ -569,6 +673,8 @@ def main() -> None:
             payload = cmd_transcribe_file(media, xfyun_dir, out_path)
         elif cmd == "test_llm":
             payload = cmd_test_llm()
+        elif cmd == "read_project_file":
+            payload = cmd_read_project_file(Path(sys.argv[2]), sys.argv[3])
         elif cmd == "understand_plan":
             payload = cmd_understand_plan(Path(sys.argv[2]))
         elif cmd == "understand":

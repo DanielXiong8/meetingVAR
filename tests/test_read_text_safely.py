@@ -100,6 +100,33 @@ class SafeReadTests(unittest.TestCase):
         p.write_bytes(codecs.BOM_UTF16_BE + "大端也要能读".encode("utf-16-be"))
         self.assertIn("大端也要能读", read_text_safely(p) or "")
 
+    def test_pptx_text_and_notes_extracted(self) -> None:
+        p = self.tmp / "汇报.pptx"
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("ppt/slides/slide1.xml",
+                       '<p:sld><a:t>第一页标题</a:t><a:t>要点一</a:t></p:sld>')
+            z.writestr("ppt/slides/slide2.xml", '<p:sld><a:t>第二页内容</a:t></p:sld>')
+            z.writestr("ppt/notesSlides/notesSlide1.xml", '<p:notes><a:t>演讲备注</a:t></p:notes>')
+        text = read_text_safely(p)
+        self.assertIn("第一页标题", text)
+        self.assertIn("第二页内容", text)
+        self.assertIn("演讲备注", text)
+        self.assertIn("幻灯片 2", text)
+
+    def test_xml_tsv_and_code_are_text(self) -> None:
+        samples = {
+            "data.xml": "<root><item>结构化内容</item></root>",
+            "data.tsv": "name\tvalue\n甲\t乙\n",
+            "main.cpp": "#include <iostream>\nint main() { return 0; }\n",
+            "app.py": "def hello():\n    return '你好'\n",
+            "app.js": "export const answer = 42;\n",
+        }
+        for name, content in samples.items():
+            with self.subTest(name=name):
+                path = self.tmp / name
+                path.write_text(content, encoding="utf-8")
+                self.assertEqual((read_text_safely(path) or "").splitlines(), content.splitlines())
+
     def test_binary_with_fake_utf16_bom_still_rejected(self) -> None:
         """FFFE 打头的真二进制必须仍被拦下（头 4K 严格解码校验）。"""
         p = self.tmp / "fake.txt"

@@ -411,6 +411,8 @@ function renderTree(nodes, box, depth) {
     const row = document.createElement("div");
     row.className = "tree-row" + (n.dir ? " tree-dir" : "");
     row.style.paddingLeft = (6 + depth * 14) + "px";
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
     row.innerHTML =
       `<span class="tree-ico">${n.dir ? "📁" : fileGlyph(n.name)}</span>` +
       `<span class="tree-name">${esc(n.name)}</span>` +
@@ -421,8 +423,68 @@ function renderTree(nodes, box, depth) {
       kids.hidden = depth >= 1; // 顶层目录默认展开，更深层折叠
       renderTree(n.children || [], kids, depth + 1);
       row.onclick = () => { kids.hidden = !kids.hidden; row.classList.toggle("collapsed", kids.hidden); };
+      row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } };
       box.appendChild(kids);
+    } else {
+      row.classList.add("tree-file");
+      row.title = "点击预览：" + (n.rel || n.name);
+      row.onclick = () => openFilePreview(n.rel || n.name);
+      row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } };
     }
+  }
+}
+async function openFilePreview(rel) {
+  if (!state.project || !rel) return;
+  const box = $("fileViewerBody");
+  $("fileViewerName").textContent = rel.split("/").pop() || rel;
+  $("fileViewerMeta").textContent = "读取中…";
+  $("fileViewer").hidden = false;
+  box.innerHTML = '<div class="preview-note">读取文件…</div>';
+  state.previewRel = rel;
+  try {
+    const r = await pywebview.api.read_project_file(state.project, rel);
+    if (!r || !r.ok) {
+      box.innerHTML = `<div class="file-preview-note">无法预览：${esc((r && r.error) || "未知错误")}</div>`;
+      $("fileViewerMeta").textContent = "预览失败";
+      return;
+    }
+    $("fileViewerMeta").textContent = `${fmtSize(r.size)} · ${r.language || r.kind || ""}`;
+    if (r.kind === "image") {
+      box.innerHTML = r.data_url
+        ? `<div class="file-image-wrap"><img src="${r.data_url}" alt="${esc(r.name)}"></div>`
+        : '<div class="file-preview-note">图片过大，未内嵌预览；请用系统应用打开。</div>';
+      return;
+    }
+    if (r.kind === "video" || r.kind === "audio") {
+      if (r.data_url) {
+        box.innerHTML = r.kind === "video"
+          ? `<video controls preload="metadata" src="${r.data_url}"></video>`
+          : `<audio controls preload="metadata" src="${r.data_url}"></audio>`;
+      } else {
+        box.innerHTML = '<div class="file-preview-note">媒体文件较大，未内嵌预览；请用系统应用打开。</div>';
+      }
+      return;
+    }
+    if (r.kind === "binary") {
+      box.innerHTML = '<div class="file-preview-note">这是二进制文件，文本查看器无法显示；请用系统应用打开。</div>';
+      return;
+    }
+    const text = r.text || "";
+    if (!text.trim()) {
+      box.innerHTML = '<div class="file-preview-note">没有可提取的文本（可能是扫描件/图片型 PDF/空文件）；请用系统应用打开。</div>';
+      return;
+    }
+    const lines = text.split(String.fromCharCode(10)).map((x) => x.endsWith(String.fromCharCode(13)) ? x.slice(0, -1) : x);
+    const shown = lines.slice(0, 6000);
+    const note = r.truncated || lines.length > shown.length
+      ? `仅显示前 ${shown.length} 行 / 200,000 字符，完整内容请用系统应用打开。`
+      : (r.kind === "pdf" || r.kind === "office" ? "这是提取的文本预览；完整排版请用系统应用打开。" : "");
+    const sep = String.fromCharCode(10);
+    const nums = shown.map((_, i) => i + 1).join(sep);
+    box.innerHTML = (note ? `<div class="preview-note">${esc(note)}</div>` : "") +
+      `<div class="code-wrap"><pre class="code-nums">${nums}</pre><pre class="code-text">${esc(shown.join(sep))}</pre></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="file-preview-note">预览失败：${esc(String(e))}</div>`;
   }
 }
 async function scanProject(path) {
@@ -1514,6 +1576,19 @@ document.querySelectorAll(".page").forEach((page) => {
   page.prepend(close);
 });
 $("panelScrim").onclick = () => switchPage("home");
+
+$("fileViewerClose").onclick = () => { $("fileViewer").hidden = true; };
+$("btnViewerOpen").onclick = async () => {
+  if (!state.previewRel) return;
+  const r = await pywebview.api.open_project_file(state.project, state.previewRel);
+  if (!r || !r.ok) toast("打开失败：" + ((r && r.error) || "未知错误"));
+};
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!$("fileViewer").hidden) $("fileViewer").hidden = true;
+    else if (document.body.classList.contains("panel-open")) switchPage("home");
+  }
+});
 
 /* ---------- 启动 ---------- */
 async function boot() {

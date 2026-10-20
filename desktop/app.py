@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1443,6 +1443,31 @@ class Backend:
             return {"ok": False, "error": "任务 ID 无效"}
         return self._agent_bridge(["agent_resume", folder, task_id, str(max_steps), "auto"],
                                   use_llm=True, timeout=300)
+
+    def read_project_file(self, folder: str, relative: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(relative, str) or not relative.strip() or len(relative) > 1000:
+            return {"ok": False, "error": "文件路径无效"}
+        return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
+
+    def open_project_file(self, folder: str, relative: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(relative, str) or not relative.strip() or "\x00" in relative:
+            return {"ok": False, "error": "文件路径无效"}
+        root = Path(folder).resolve()
+        rel = Path(relative.replace("\\\\", "/"))
+        if rel.is_absolute() or any(part == ".." for part in rel.parts):
+            return {"ok": False, "error": "文件路径越界"}
+        target = (root / rel).resolve()
+        if root not in target.parents or not target.is_file() or target.is_symlink():
+            return {"ok": False, "error": "文件不存在或不可打开"}
+        try:
+            os.startfile(str(target))
+        except OSError as exc:
+            return {"ok": False, "error": f"无法用系统应用打开：{exc}"}
+        return {"ok": True, "path": str(target)}
 
     def chat_new(self, folder: str) -> dict:
         if not folder or not Path(folder).is_dir():

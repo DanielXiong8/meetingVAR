@@ -13,7 +13,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from .files import read_text_safely
+from .files import SUPPORTED_TEXT_SUFFIXES, read_text_safely
 
 CHUNK_CHARS = 6000
 MIN_CHUNK_CHARS = 4000
@@ -68,12 +68,12 @@ def atomic_write_json(path: Path, data: dict) -> None:
 
 def load_corpus(folder: Path) -> tuple[list[tuple[str, str]], list[str]]:
     """Read text, exclude engine archives, and deduplicate near-identical copies."""
-    from .files import project_files
+    from .files import SUPPORTED_TEXT_SUFFIXES, project_files
 
     folder = Path(folder).resolve()
     docs: list[tuple[str, str]] = []
     notes: list[str] = []
-    for f in project_files(folder, {".md", ".txt", ".docx"}):
+    for f in project_files(folder, SUPPORTED_TEXT_SUFFIXES):
         try:
             relative = f.resolve().relative_to(folder)
         except ValueError:

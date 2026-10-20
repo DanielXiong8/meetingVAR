@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
-from .files import project_files, read_text_safely
+from .files import SUPPORTED_TEXT_SUFFIXES, project_files, read_text_safely
 
 # jieba 懒加载：llm_extract/纯结构化路径不依赖 jieba（CI model-free 环境无此包）；
 # 只有人名/拉丁抽取（_persons/_latin）真正用到，在函数内 import。
@@ -95,12 +95,16 @@ def _latin(docs: list[str], terms: dict[str, set]) -> None:
             _add(terms, w, "拉丁")
 
 
-def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None) -> dict[str, list[str]]:
+def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None,
+                  suffixes: set[str] | None = None, max_files: int | None = None) -> dict[str, list[str]]:
     """返回 {词: [来源, …]}。docs = memory_dir 下全部 md/txt/docx（二进制伪装文件跳过）。"""
     _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
     # 健壮读取：曾把伪装成 .txt 的 zip 当文本硬读，抽出 CQ/Dc/Fk 一筐二进制垃圾词
     docs = []
-    for f in project_files(memory_dir, {".md", ".txt", ".docx"}):
+    files = list(project_files(memory_dir, suffixes or set(SUPPORTED_TEXT_SUFFIXES)))
+    if max_files:
+        files = files[:max_files]
+    for f in files:
         text = read_text_safely(f)
         if text:
             docs.append(text)
@@ -164,12 +168,12 @@ def llm_extract(memory_dir: Path) -> tuple[dict[str, list[str]], list[dict]] | N
 
     # 剪枝扫描（files.project_files：运行时目录不当作项目记忆）+ prompt 预算：
     # 小模型上下文有限（llama_cpp 默认 4k，建议 ≥32k 起服务）——单文件留头部、总量封顶。
-    from .files import project_files
+    from .files import SUPPORTED_TEXT_SUFFIXES, project_files
 
     per_doc_chars, total_chars = 6000, 40000
     parts: list[str] = []
     total = 0
-    for f in sorted(project_files(memory_dir, {".md", ".txt", ".docx"})):
+    for f in sorted(project_files(memory_dir, SUPPORTED_TEXT_SUFFIXES)):
         text = read_text_safely(f)  # 二进制伪装文件跳过，不喂给 LLM
         if not text:
             continue

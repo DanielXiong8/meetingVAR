@@ -37,11 +37,11 @@ def load_terms(path: Path) -> list[str]:
 
 
 def load_memory_docs(folder: Path) -> list[str]:
-    from .memory.files import project_files, read_text_safely
+    from .memory.files import SUPPORTED_TEXT_SUFFIXES, project_files, read_text_safely
 
     # 健壮读取（坑：严格 utf-8 曾被伪装成 .txt 的 zip 文件崩掉整个 go，界面只见"会议已结束"）
     docs = []
-    for f in project_files(folder, {".md", ".txt", ".docx"}):
+    for f in project_files(folder, SUPPORTED_TEXT_SUFFIXES):
         text = read_text_safely(f)
         if text:
             docs.append(text)

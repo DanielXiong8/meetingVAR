@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from ..memory.files import project_files, read_text_safely
+from ..memory.files import SUPPORTED_TEXT_SUFFIXES, project_files, read_text_safely
 from .runtime import AgentRuntime
 from .tools import ToolContext, ToolError, ToolRegistry, ToolSpec
 from .trace import TraceRecorder
@@ -17,7 +17,7 @@ from .trace import TraceRecorder
 
 def _load_material(project: Path, max_chars: int) -> tuple[str, list[str]]:
     parts, names, total = [], [], 0
-    for path in project_files(project, {".md", ".txt", ".docx"}):
+    for path in project_files(project, SUPPORTED_TEXT_SUFFIXES):
         if "meetingvar" in path.parts:
             continue
         text = read_text_safely(path)
