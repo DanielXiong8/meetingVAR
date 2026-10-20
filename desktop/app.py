@@ -514,28 +514,31 @@ class Backend:
         return path
 
     def scan_project(self, folder: str) -> dict:
-        """只读预览：用引擎 Python 跑 engine_bridge（不写任何文件）。"""
+        """Read the tree even without an engine; enrich with terms when available."""
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
         py = self._cfg.get("engine_python") or ""
         repo = self._cfg.get("repo_dir") or ""
-        if not py or not Path(py).exists():
-            return {"ok": False, "error": "未找到引擎 Python（设置页可手动指定）"}
+        if py and Path(py).exists():
+            try:
+                r = subprocess.run(
+                    [py, str(BRIDGE_PY), "preview", folder],
+                    cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=180, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+                )
+                out = (r.stdout or "").strip().splitlines()
+                if out:
+                    data = json.loads(out[-1])
+                    data["ok"] = True
+                    return data
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
         try:
-            r = subprocess.run(
-                [py, str(BRIDGE_PY), "preview", folder],
-                cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=180, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
-            )
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "预览超时（>180s）"}
-        out = (r.stdout or "").strip().splitlines()
-        if not out:
-            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）: {(r.stderr or '')[-200:]}"}
-        try:
-            data = json.loads(out[-1])
-            data["ok"] = True
-            return data
-        except ValueError:
-            return {"ok": False, "error": f"引擎输出无法解析: {out[-1][:200]}"}
+            from meetingvar.memory.preview import scan_project_folder
+
+            return scan_project_folder(folder)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"本地预览失败：{type(exc).__name__}"}
 
     def start_meeting(self, folder: str = "", mode: str = "go") -> dict:
         if self.is_running():
@@ -1490,7 +1493,17 @@ class Backend:
             return {"ok": False, "error": "项目文件夹无效"}
         if not isinstance(relative, str) or not relative.strip() or len(relative) > 1000:
             return {"ok": False, "error": "文件路径无效"}
-        return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
+        try:
+            from meetingvar.memory.preview import read_project_file
+
+            return read_project_file(folder, relative)
+        except ImportError:
+            # Older/custom builds may not include the preview package; the
+            # engine bridge remains a compatible fallback.
+            return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
+        except Exception as exc:  # noqa: BLE001
+            log(f"[file] 本地预览失败：{type(exc).__name__}")
+            return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
 
     def open_project_file(self, folder: str, relative: str) -> dict:
         if not folder or not Path(folder).is_dir():

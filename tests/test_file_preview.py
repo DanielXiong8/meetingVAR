@@ -111,6 +111,15 @@ class FilePreviewTests(unittest.TestCase):
         self.assertEqual(xls["kind"], "xls")
         self.assertIn("负责人", xls["text"])
 
+    def test_local_scan_works_without_engine(self):
+        from meetingvar.memory.preview import scan_project_folder
+
+        result = scan_project_folder(self.root)
+        self.assertTrue(result["ok"])
+        names = {node["name"] for node in result["tree"]}
+        self.assertIn("README.md", names)
+        self.assertGreaterEqual(result["doc_count"], 3)
+
     def test_path_traversal_is_rejected(self):
         for bad in ("../outside_preview.txt", "sub/../../outside_preview.txt",
                     "/etc/passwd", "C:/Windows/win.ini"):

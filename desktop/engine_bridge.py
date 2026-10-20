@@ -70,101 +70,11 @@ def _build_tree(root: Path):
 
 
 
-_LANGUAGE = {
-    ".py": "python", ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-    ".ts": "typescript", ".tsx": "tsx", ".jsx": "jsx", ".vue": "vue", ".svelte": "svelte",
-    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp",
-    ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".go": "go", ".rs": "rust",
-    ".rb": "ruby", ".php": "php", ".cs": "csharp", ".swift": "swift",
-    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".ps1": "powershell",
-    ".bat": "bat", ".cmd": "bat", ".sql": "sql", ".css": "css", ".scss": "scss",
-    ".less": "less", ".html": "html", ".htm": "html", ".xml": "xml", ".svg": "xml",
-    ".json": "json", ".jsonl": "json", ".yaml": "yaml", ".yml": "yaml",
-    ".toml": "toml", ".ini": "ini", ".cfg": "ini", ".md": "markdown",
-    ".tsv": "tsv", ".csv": "csv", ".tex": "latex",
-}
-
-
-def _safe_project_path(folder: Path, relative: str) -> Path:
-    if not isinstance(relative, str) or not relative.strip():
-        raise ValueError("empty path")
-    if "\x00" in relative:
-        raise ValueError("invalid path")
-    rel = Path(relative.replace("\\", "/"))
-    if rel.is_absolute() or any(part == ".." for part in rel.parts):
-        raise ValueError("path escapes project")
-    root = Path(folder).resolve()
-    target = (root / rel).resolve()
-    if root not in target.parents:
-        raise ValueError("path escapes project")
-    if not target.is_file() or target.is_symlink():
-        raise ValueError("not a readable file")
-    return target
-
-
 def cmd_read_project_file(folder: Path, relative: str) -> dict:
-    import base64
-    import mimetypes
-    from meetingvar.memory.files import detect_file_type, read_text_safely, zip_entries
+    """Delegate to the shared, engine-independent preview implementation."""
+    from meetingvar.memory.preview import read_project_file
 
-    try:
-        path = _safe_project_path(folder, relative)
-    except (OSError, ValueError) as exc:
-        return {"ok": False, "error": str(exc)}
-    suffix = path.suffix.lower()
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return {"ok": False, "error": "文件不可读"}
-    info = detect_file_type(path, suffix)
-    kind = info["kind"]
-    mime = (mimetypes.guess_type("preview" + info["actual_suffix"])[0]
-            or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
-    result = {"ok": True, "path": relative, "name": path.name, "suffix": suffix,
-              "actual_suffix": info["actual_suffix"], "kind": kind,
-              "kind_label": info["label"], "kind_short": info["short"],
-              "mismatch": info["mismatch"], "size": size, "mime": mime,
-              "language": _LANGUAGE.get(suffix if kind == "text" else info["actual_suffix"], "")}
-    if kind == "image":
-        if size > 15 * 1024 * 1024:
-            result["too_large"] = True
-            return result
-        try:
-            result["data_url"] = "data:" + mime + ";base64," + base64.b64encode(
-                path.read_bytes()).decode("ascii")
-        except OSError:
-            return {"ok": False, "error": "图片读取失败"}
-        return result
-    if kind in {"video", "audio"}:
-        if size <= 15 * 1024 * 1024:
-            try:
-                result["data_url"] = "data:" + mime + ";base64," + base64.b64encode(
-                    path.read_bytes()).decode("ascii")
-            except OSError:
-                pass
-        return result
-    if kind in {"zip", "xlsx"}:
-        listing = zip_entries(path)
-        result.update(entry_count=listing["count"], entries=listing["entries"])
-        return result
-    if kind == "pdf" or kind in {"docx", "pptx", "doc", "ppt", "xls", "rtf"}:
-        text = read_text_safely(path)
-        result.update(text=(text or "")[:200_000],
-                      truncated=bool(text and len(text) > 200_000),
-                      has_text=bool(text))
-        return result
-    if kind == "text":
-        text = read_text_safely(path)
-        if text is not None:
-            result.update(text=text[:200_000], truncated=len(text) > 200_000)
-            return result
-    if kind == "text":
-        result.update(kind="binary", kind_label="无法解码的文本", kind_short="BIN")
-    elif kind == "empty":
-        result.update(kind="binary", kind_label="空文件", kind_short="EMPTY")
-    elif kind == "ole":
-        result["kind_label"] = "OLE 复合文档（可能是旧版 Office）"
-    return result
+    return read_project_file(folder, relative)
 
 def cmd_preview(folder: Path) -> dict:
     from meetingvar.memory.extract import extract_terms
