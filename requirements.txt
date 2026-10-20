@@ -25,8 +25,9 @@ scikit-learn
 pypinyin
 
 # --- 文档读取/媒体编码（Python 轮子，不依赖 LibreOffice/pdftotext/系统 ffmpeg） ---
-pymupdf
+pdfminer.six
 pypdf
+cryptography  # 离线许可证签名验证
 imageio-ffmpeg
 
 # --- 通用 ---

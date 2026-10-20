@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.10.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -92,6 +92,14 @@ CONFIG_DEFAULTS = {
     "llm_base_url": "",      # custom: 形如 https://api.xxx.com/v1
     "llm_model": "",         # custom: 模型名
     "llm_api_key": "",       # custom: API Key（仅存本机配置）
+    "license_token": "",
+    "trial_started": "",
+    "telemetry_enabled": False,
+    "telemetry_endpoint": "",
+    "crash_reports_enabled": True,
+    "update_manifest_url": "",
+    "auto_update_check": False,
+    "data_retention_days": 0,
 }
 
 SESSMAP_FILE = CONFIG_DIR / "sessions_map.json"
@@ -165,6 +173,9 @@ def save_config(cfg: dict) -> None:
 class Backend:
     def __init__(self) -> None:
         self._cfg = load_config()
+        if not self._cfg.get("trial_started"):
+            self._cfg["trial_started"] = time.strftime("%Y-%m-%d")
+            save_config(self._cfg)
         self._window: webview.Window | None = None
         self._proc: subprocess.Popen | None = None
         self._reader_thread: threading.Thread | None = None
@@ -1319,6 +1330,106 @@ class Backend:
         self._push("capture_state", phase="stopping", text="正在保存会议，请等待收尾完成后关闭窗口")
         return False
 
+    def license_status(self) -> dict:
+        from meetingvar.commercial.license import status
+
+        return {"ok": True, **status(self._cfg.get("license_token", ""),
+                                     self._cfg.get("trial_started", ""))}
+
+    def license_activate(self, token: str) -> dict:
+        from meetingvar.commercial.license import verify_license
+
+        verified = verify_license(token)
+        if not verified.get("valid"):
+            return {"ok": False, "error": verified.get("reason", "许可证无效")}
+        self._cfg["license_token"] = str(token).strip()
+        save_config(self._cfg)
+        return self.license_status()
+
+    def license_remove(self) -> dict:
+        self._cfg["license_token"] = ""
+        save_config(self._cfg)
+        return self.license_status()
+
+    def update_check(self) -> dict:
+        from meetingvar.commercial.updates import check_manifest
+
+        return check_manifest(self._cfg.get("update_manifest_url", ""), APP_VERSION)
+
+    def update_download(self, url: str, sha256: str) -> dict:
+        from meetingvar.commercial.updates import download_update
+
+        result = download_update(url, sha256)
+        if result.get("ok"):
+            self._update_path = result["path"]
+        return result
+
+    def update_install(self) -> dict:
+        path = Path(getattr(self, "_update_path", ""))
+        if not path.is_file() or path.suffix.lower() != ".exe":
+            return {"ok": False, "error": "没有已验证的更新包"}
+        try:
+            subprocess.Popen([str(path), "--silent", "--dir", str(_APP_HOME)],
+                             creationflags=_SPAWN_FLAGS)
+        except OSError as exc:
+            return {"ok": False, "error": f"更新启动失败: {exc}"}
+        return {"ok": True, "path": str(path)}
+
+    def telemetry_set(self, enabled: bool) -> dict:
+        self._cfg["telemetry_enabled"] = bool(enabled)
+        save_config(self._cfg)
+        return {"ok": True, "enabled": self._cfg["telemetry_enabled"]}
+
+    def crash_reports_open(self) -> dict:
+        target = CONFIG_DIR / "crashes"
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(target))  # type: ignore[attr-defined]
+        except OSError:
+            return {"ok": False, "error": "无法打开崩溃报告目录"}
+        return {"ok": True, "path": str(target)}
+
+    def open_legal(self, name: str) -> dict:
+        files = {"privacy": "PRIVACY.md", "terms": "TERMS.md",
+                 "licenses": "THIRD_PARTY_LICENSES.md"}
+        filename = files.get(str(name).lower())
+        if not filename:
+            return {"ok": False, "error": "未知文档"}
+        for base in (_BASE / "legal", Path(__file__).resolve().parents[1] / "docs"):
+            path = base / filename
+            if path.is_file():
+                try:
+                    os.startfile(str(path))  # type: ignore[attr-defined]
+                except OSError:
+                    return {"ok": False, "error": "无法打开文档"}
+                return {"ok": True, "path": str(path)}
+        return {"ok": False, "error": "文档未随安装包分发"}
+
+    def data_inventory(self, folder: str = "") -> dict:
+        from meetingvar.commercial.data import inventory
+
+        data_dir = Path(self._cfg.get("repo_dir") or _APP_HOME) / "data"
+        return inventory(folder or self._cfg.get("last_project", ""), data_dir)
+
+    def export_project_data(self, folder: str, out_dir: str) -> dict:
+        from meetingvar.commercial.data import export_project
+
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目目录无效"}
+        if not out_dir or not Path(out_dir).is_dir():
+            return {"ok": False, "error": "导出目录无效"}
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        target = Path(out_dir) / f"meetingvar-export-{stamp}.zip"
+        return export_project(folder, target)
+
+    def delete_project_data(self, folder: str, categories: list, confirm: str) -> dict:
+        from meetingvar.commercial.data import delete_categories
+
+        if not isinstance(categories, list):
+            return {"ok": False, "error": "删除类别无效"}
+        data_dir = Path(self._cfg.get("repo_dir") or _APP_HOME) / "data"
+        return delete_categories(folder, data_dir, categories, confirm)
+
     def get_config(self) -> dict:
         return self._cfg
 
@@ -1567,6 +1678,29 @@ class Backend:
         return self._agent_bridge(args, timeout=60)
 
 
+def _install_crash_handler(backend: "Backend") -> None:
+    def handle(exc_type, exc, tb) -> None:
+        try:
+            log(f"[crash] {getattr(exc_type, '__name__', 'Exception')}")
+            if backend._cfg.get("crash_reports_enabled", True):
+                from meetingvar.commercial.telemetry import upload_crash, write_crash
+
+                path = write_crash(exc_type, exc, tb, app_version=APP_VERSION,
+                                   logs_dir=CONFIG_DIR,
+                                   context={"log": backend._last_log[:1000]})
+                if path and backend._cfg.get("telemetry_enabled") and backend._cfg.get("telemetry_endpoint"):
+                    upload_crash(path, backend._cfg["telemetry_endpoint"])
+        except Exception:  # noqa: BLE001
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = handle
+    if hasattr(threading, "excepthook"):
+        def thread_handle(args) -> None:
+            handle(args.exc_type, args.exc_value, args.exc_traceback)
+        threading.excepthook = thread_handle
+
+
 def main() -> None:
     import webview
 
@@ -1588,6 +1722,7 @@ def main() -> None:
     smoke = "--smoke-engine" in sys.argv
     log(f"[ui] {APP_NAME} {APP_VERSION} 启动（selftest={selftest} smoke={smoke}）")
     backend = Backend()
+    _install_crash_handler(backend)
 
     if smoke:
         _smoke_engine(backend)

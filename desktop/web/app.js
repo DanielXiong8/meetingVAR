@@ -1530,11 +1530,103 @@ async function loadUsage() {
 $("usageRange7").onclick = () => { state.usageRange = 7; $("usageRange7").classList.add("active"); $("usageRange30").classList.remove("active"); renderUsage(); };
 $("usageRange30").onclick = () => { state.usageRange = 30; $("usageRange30").classList.add("active"); $("usageRange7").classList.remove("active"); renderUsage(); };
 
+/* ---------- 商业与合规 ---------- */
+let pendingUpdate = null;
+async function loadCommercial() {
+  const cfg = state.cfg || await pywebview.api.get_config();
+  state.cfg = cfg;
+  $("cfgUpdateUrl").value = cfg.update_manifest_url || "";
+  $("cfgTelemetry").value = cfg.telemetry_enabled ? "1" : "0";
+  const lic = await pywebview.api.license_status();
+  if (lic && lic.state === "licensed") {
+    $("licenseState").textContent = `已授权 · ${lic.edition || "professional"} · ${lic.issued_to || ""}${lic.expires ? " · 到期 " + lic.expires : ""}`;
+  } else if (lic && lic.state === "trial") {
+    $("licenseState").textContent = `试用中 · 剩余 ${lic.trial ? lic.trial.days_left : 0} 天`;
+  } else {
+    $("licenseState").textContent = "试用已结束或未激活";
+  }
+  await loadDataInventory();
+}
+async function loadDataInventory() {
+  const r = await pywebview.api.data_inventory(state.project || "");
+  if (!r || !r.ok) { $("dataInventory").textContent = (r && r.error) || "统计失败"; return; }
+  $("dataInventory").textContent = `项目：${r.project || "（未选择）"} · 数据目录：${r.data_dir}`;
+  $("dataCategories").innerHTML = (r.categories || []).map((c) =>
+    `<label class="data-row"><input type="checkbox" data-cat="${esc(c.category)}">` +
+    `<span>${esc(c.label)}</span><span class="muted">${c.files} 个文件 · ${fmtSize(c.bytes)}</span></label>`).join("");
+}
+$("btnLicenseActivate").onclick = async () => {
+  $("licenseResult").textContent = "校验中…";
+  const r = await pywebview.api.license_activate($("licenseToken").value.trim());
+  if (!r || !r.ok) { $("licenseResult").textContent = (r && r.error) || "激活失败"; return; }
+  $("licenseToken").value = "";
+  $("licenseResult").textContent = "已激活";
+  await loadCommercial();
+};
+$("btnLicenseRemove").onclick = async () => {
+  await pywebview.api.license_remove();
+  $("licenseResult").textContent = "已移除";
+  await loadCommercial();
+};
+$("btnUpdateCheck").onclick = async () => {
+  const url = $("cfgUpdateUrl").value.trim();
+  await pywebview.api.set_config({ update_manifest_url: url });
+  state.cfg = await pywebview.api.get_config();
+  $("updateResult").textContent = "检查中…";
+  const r = await pywebview.api.update_check();
+  if (!r || !r.ok) { $("updateResult").textContent = (r && r.error) || "检查失败"; return; }
+  if (!r.available) { $("updateResult").textContent = "已是最新版本"; $("btnUpdateInstall").disabled = true; return; }
+  pendingUpdate = r;
+  $("updateResult").textContent = `发现 ${r.version}：${r.notes || "有新版本"}`;
+  $("btnUpdateInstall").disabled = false;
+};
+$("btnUpdateInstall").onclick = async () => {
+  if (!pendingUpdate) return;
+  $("updateResult").textContent = "下载并校验中…";
+  const d = await pywebview.api.update_download(pendingUpdate.url, pendingUpdate.sha256);
+  if (!d || !d.ok) { $("updateResult").textContent = (d && d.error) || "下载失败"; return; }
+  const i = await pywebview.api.update_install();
+  $("updateResult").textContent = i && i.ok ? "安装程序已启动；应用将被更新程序关闭并重启" : ((i && i.error) || "安装启动失败");
+};
+$("cfgTelemetry").onchange = async () => {
+  await pywebview.api.set_config({ telemetry_enabled: $("cfgTelemetry").value === "1" });
+  state.cfg = await pywebview.api.get_config();
+  toast("遥测设置已保存");
+};
+$("btnCrashOpen").onclick = async () => {
+  const r = await pywebview.api.crash_reports_open();
+  if (!r || !r.ok) toast((r && r.error) || "无法打开目录");
+};
+for (const [id, name] of [["btnLegalPrivacy", "privacy"], ["btnLegalTerms", "terms"], ["btnLegalLicenses", "licenses"]]) {
+  $(id).onclick = async () => {
+    const r = await pywebview.api.open_legal(name);
+    if (!r || !r.ok) toast((r && r.error) || "无法打开文档");
+  };
+}
+$("btnDataRefresh").onclick = loadDataInventory;
+$("btnDataExport").onclick = async () => {
+  if (!state.project) { toast("先选择项目"); return; }
+  const out = await pywebview.api.pick_folder();
+  if (!out) return;
+  const r = await pywebview.api.export_project_data(state.project, out);
+  $("dataResult").textContent = r && r.ok ? `已导出 ${r.files} 个文件：${r.path}` : ((r && r.error) || "导出失败");
+};
+$("btnDataDelete").onclick = async () => {
+  if (!state.project) { toast("先选择项目"); return; }
+  const cats = [...document.querySelectorAll("#dataCategories input:checked")].map((x) => x.dataset.cat);
+  if (!cats.length) { $("dataResult").textContent = "请先勾选要删除的类别"; return; }
+  const r = await pywebview.api.delete_project_data(state.project, cats, $("dataConfirm").value);
+  $("dataResult").textContent = r && r.ok ? `已删除 ${r.count} 项` : ((r && r.error) || "删除失败");
+  $("dataConfirm").value = "";
+  await loadDataInventory();
+};
+
 /* ---------- 设置分区 ---------- */
 function switchSettings(name) {
   document.querySelectorAll(".settings-tab").forEach((b) => b.classList.toggle("active", b.dataset.settings === name));
   document.querySelectorAll(".settings-pane").forEach((p) => p.classList.toggle("active", p.id === "settings-" + name));
   if (name === "usage") loadUsage();
+  if (name === "commercial") loadCommercial();
 }
 document.querySelectorAll(".settings-tab").forEach((b) => { b.onclick = () => switchSettings(b.dataset.settings); });
 

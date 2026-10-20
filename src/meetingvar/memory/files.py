@@ -337,8 +337,8 @@ def _read_pdf_basic(path: Path) -> str | None:
     """Last-resort PDF text reader using only the standard library.
 
     Handles Flate-compressed content streams and common Tj/TJ operators.  CID
-    fonts without a usable ToUnicode map cannot be decoded; PyMuPDF/pypdf are
-    preferred and are normal Python dependencies, not host applications.
+    fonts without a usable ToUnicode map cannot be decoded; pdfminer.six and
+    pypdf are preferred, permissively licensed Python dependencies.
     """
     data = path.read_bytes()
     chunks: list[str] = []
@@ -387,17 +387,13 @@ def _read_pdf_basic(path: Path) -> str | None:
 
 
 def _read_pdf(path: Path) -> str | None:
+    # pdfminer.six is MIT-licensed; PyMuPDF is AGPL/commercial and therefore
+    # deliberately not a dependency of the commercial build.
     try:
-        try:
-            import pymupdf as fitz
-        except ImportError:
-            import fitz
-        doc = fitz.open(str(path))
-        try:
-            text = "\n".join(page.get_text("text") for page in doc)
-        finally:
-            doc.close()
-        if text.strip():
+        from pdfminer.high_level import extract_text
+
+        text = extract_text(str(path))
+        if text and text.strip():
             return text
     except Exception:
         pass

@@ -379,6 +379,11 @@ select.input { padding-right: 24px; }
 .empty { color: var(--faint); font-size: 11px; padding: 14px 0; }
 .divider { height: 1px; background: var(--line-soft); margin: 14px 0; }
 .kbd { font-family: var(--mono); font-size: 9px; color: var(--faint); border: 1px solid #333; border-radius: 4px; padding: 0 4px; }
+.btn-danger { border-color: #5a2a2a; color: #ffb3b3; }
+.data-categories { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.data-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-2); }
+.data-row input { accent-color: var(--accent); }
+.data-row .muted { margin-left: auto; }
 
 @media (max-width: 1120px) {
   .workspace { padding: 22px 20px 32px; }

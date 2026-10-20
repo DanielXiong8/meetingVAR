@@ -302,6 +302,7 @@
             <button class="settings-tab" data-settings="appearance">◐ 外观</button>
             <button class="settings-tab" data-settings="model">▣ 模型设置</button>
             <button class="settings-tab" data-settings="usage">▥ 使用统计</button>
+            <button class="settings-tab" data-settings="commercial">◇ 商业与合规</button>
             <button class="settings-tab" data-settings="memory">◈ 记忆与 Agent</button>
             <button class="settings-tab" data-settings="about">ⓘ 关于</button>
           </aside>
@@ -406,6 +407,32 @@
               </div>
             </div>
 
+            <div class="settings-pane" id="settings-commercial">
+              <div class="page-head compact"><div><h1>商业与合规</h1><p>离线许可证、更新、遥测和本机数据控制。</p></div></div>
+              <div class="card">
+                <div class="card-head"><div><b>许可证</b><div id="licenseState" class="muted">读取中…</div></div></div>
+                <textarea id="licenseToken" class="input" rows="3" placeholder="粘贴离线许可证 token"></textarea>
+                <div class="row"><button id="btnLicenseActivate" class="btn btn-primary">激活</button><button id="btnLicenseRemove" class="btn">移除许可证</button><span id="licenseResult" class="muted"></span></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><b>更新</b><div class="muted">只接受 HTTPS/HTTP 清单中的 SHA256 校验包；不会静默安装未校验文件。</div></div></div>
+                <label class="field"><span>更新清单地址</span><input id="cfgUpdateUrl" class="input" placeholder="https://example.com/meetingvar/latest.json"></label>
+                <div class="row"><button id="btnUpdateCheck" class="btn">检查更新</button><button id="btnUpdateInstall" class="btn" disabled>安装已下载更新</button><span id="updateResult" class="muted"></span></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><b>崩溃报告与遥测</b><div class="muted">默认只写本机脱敏报告；上传需显式开启并配置地址。</div></div></div>
+                <label class="field"><span>遥测上传</span><select id="cfgTelemetry" class="input"><option value="0">关闭（仅本机）</option><option value="1">开启（脱敏崩溃报告）</option></select></label>
+                <div class="row"><button id="btnCrashOpen" class="btn">打开崩溃报告目录</button></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><div><b>数据保留与删除</b><div id="dataInventory" class="muted">读取中…</div></div></div>
+                <div class="row"><button id="btnDataExport" class="btn">导出项目数据 ZIP…</button><button id="btnDataRefresh" class="btn">刷新统计</button></div>
+                <div id="dataCategories" class="data-categories"></div>
+                <div class="row"><input id="dataConfirm" class="input" placeholder="输入 DELETE 确认删除选中类别"><button id="btnDataDelete" class="btn btn-danger">删除选中数据</button></div>
+                <div id="dataResult" class="muted"></div>
+              </div>
+            </div>
+
             <div class="settings-pane" id="settings-memory">
               <div class="page-head compact"><div><h1>记忆与 Agent</h1><p>项目事实、会前关注和审计轨迹。</p></div></div>
               <div class="card">
@@ -425,6 +452,7 @@
                 <div class="row"><b>运行方式</b><span class="muted">本地桌面壳 + 引擎子进程</span></div>
                 <div class="row"><b>数据边界</b><span class="muted">本地优先；只有你配置的自定义 API 会收到项目文本</span></div>
                 <div class="muted">不是记下一切，是保住对你重要的每一刻。</div>
+                <div class="row"><button id="btnLegalPrivacy" class="btn">隐私说明</button><button id="btnLegalTerms" class="btn">服务条款</button><button id="btnLegalLicenses" class="btn">第三方许可证</button></div>
               </div>
             </div>
           </div>
