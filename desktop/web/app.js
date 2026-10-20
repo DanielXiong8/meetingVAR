@@ -8,7 +8,22 @@ const state = {
   askQueue: [], askOpen: false, ticker: [], phase: "idle", follow: true, captionCount: 0,
   lastCaptionAt: null, screen: {}, starting: false, polling: false, partials: new Map(),
   agentFocus: [], agentFocusSources: [], agentFacts: [], agentBusy: false,
+  pageHistory: ["home"], pageIndex: 0, usage: null, usageRange: 7, libraryGroups: [], consolePinned: false,
 };
+
+/* 全局错误可见化 + 导航事件委托（避免某个旧处理器异常后整页失效） */
+window.addEventListener("error", (event) => {
+  const t = document.getElementById("toast");
+  if (t) { t.hidden = false; t.textContent = "界面脚本错误：" + (event.message || "未知错误"); }
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const t = document.getElementById("toast");
+  if (t) { t.hidden = false; t.textContent = "后台调用失败：" + (event.reason && event.reason.message ? event.reason.message : event.reason); }
+});
+document.addEventListener("click", (event) => {
+  const target = event.target && event.target.closest ? event.target.closest(".navbtn") : null;
+  if (target && target.dataset.page) switchPage(target.dataset.page);
+});
 
 /* ---------- 小工具 ---------- */
 function esc(s) {
@@ -36,11 +51,45 @@ function toast(msg, ms = 5000) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
-function switchPage(name) {
+const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", settings: "设置" };
+function switchPage(name, push = true) {
+  if (!document.getElementById("page-" + name)) return;
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
+  const workspace = document.querySelector(".workspace");
+  if (workspace) { workspace.scrollLeft = 0; workspace.scrollTop = 0; }
+  $("pageTitle").textContent = PAGE_TITLES[name] || name;
+  document.title = "meetingVAR " + (($("ver") && $("ver").textContent) || "") + " · " + ($("pageTitle").textContent);
+  if (push) {
+    state.pageHistory = state.pageHistory.slice(0, state.pageIndex + 1);
+    if (state.pageHistory[state.pageHistory.length - 1] !== name) state.pageHistory.push(name);
+    state.pageIndex = state.pageHistory.length - 1;
+  }
   if (name === "library") refreshLibrary();
   if (name === "agent") loadAgentPage();
+  if (name === "settings") loadUsage();
+}
+function pageBack() {
+  if (state.pageIndex <= 0) return;
+  state.pageIndex -= 1;
+  switchPage(state.pageHistory[state.pageIndex], false);
+}
+function pageForward() {
+  if (state.pageIndex >= state.pageHistory.length - 1) return;
+  state.pageIndex += 1;
+  switchPage(state.pageHistory[state.pageIndex], false);
+}
+function openMeetingConsole() {
+  state.consolePinned = true;
+  showMeetingConsole(true);
+}
+function showMeetingConsole(show = true) {
+  const box = $("meetingConsole");
+  if (!box) return;
+  box.hidden = !show;
+  const workspace = document.querySelector(".workspace");
+  if (show) box.scrollIntoView({ behavior: "smooth", block: "start" });
+  else if (workspace) workspace.scrollTop = 0;
 }
 
 /* ---------- 迷你 Markdown 渲染（足够覆盖我们自己的纪要格式） ---------- */
@@ -232,6 +281,7 @@ function renderScreenStatus(s) {
 function setRunning(running, startedAt) {
   state.running = running;
   if (startedAt) state.startedAt = startedAt;
+  if (running) showMeetingConsole(true);
   const pill = $("statusPill");
   pill.textContent = running ? ({loading: "● 正在准备", ready: "● 会议中", stopping: "● 正在收尾"}[state.phase] || "● 正在准备") : "● 待机";
   pill.classList.toggle("live", running);
@@ -404,7 +454,49 @@ async function scanProject(path) {
   $("scanTerms").innerHTML = html;
   $("btnUseProject").disabled = false;
   await pywebview.api.set_config({ last_project: path });
+  updateComposer();
+  renderSidebar();
 }
+function updateComposer() {
+  const cfg = state.cfg || {};
+  $("homeProject").textContent = state.project || "选择项目";
+  $("composerModel").textContent = cfg.llm_provider === "custom"
+    ? (cfg.llm_model || "自定义 API") : "本地模型";
+  $("composerMode").textContent = "只读 Agent";
+  $("aboutVersion").textContent = $("ver").textContent || "—";
+}
+async function renderSidebar() {
+  const cfg = state.cfg || {};
+  const projects = (cfg.projects || []).filter((p, i, arr) => p && arr.indexOf(p) === i);
+  const box = $("sideProjects");
+  if (box) {
+    box.innerHTML = projects.length ? projects.map((p) => {
+      const name = p.split(/[\\/]/).filter(Boolean).pop() || p;
+      return `<button class="side-project${p === state.project ? " current" : ""}" data-project="${esc(p)}" title="${esc(p)}">
+        <span class="p-ico">▣</span><span class="p-name">${esc(name)}</span><span class="p-time">${p === state.project ? "当前" : ""}</span></button>`;
+    }).join("") : '<div class="side-empty">还没有项目</div>';
+    box.querySelectorAll(".side-project").forEach((row) => {
+      row.onclick = () => { scanProject(row.dataset.project); switchPage("home"); };
+    });
+  }
+  const recent = $("sideSessions");
+  if (!recent) return;
+  try {
+    const groups = await pywebview.api.list_library();
+    state.libraryGroups = groups || [];
+    const sessions = [];
+    for (const g of groups || []) for (const s of g.sessions || []) sessions.push({ ...s, project: g.name });
+    sessions.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+    recent.innerHTML = sessions.length ? sessions.slice(0, 8).map((s) =>
+      `<button class="side-session" data-session="${esc(s.sid)}" title="${esc(s.sid)}">
+        <span class="s-ico">▤</span><span class="s-name">${esc(s.sid)}</span><span class="s-time">${relTime(s.mtime)}</span></button>`
+    ).join("") : '<div class="side-empty">还没有会议记录</div>';
+    recent.querySelectorAll(".side-session").forEach((row) => {
+      row.onclick = () => { switchPage("library"); showSession(row.dataset.session); };
+    });
+  } catch (e) { recent.innerHTML = '<div class="side-empty">会议库暂不可用</div>'; }
+}
+
 $("btnPick").onclick = async () => {
   const p = await pywebview.api.pick_folder();
   if (p) scanProject(p);
@@ -416,11 +508,23 @@ $("btnScanInput").onclick = () => {
 $("btnUseProject").onclick = () => { switchPage("home"); toast("已就绪——回主页按「开始会议」"); };
 
 /* ---------- 会议库（按项目分组：项目 → 场次 → 详情） ---------- */
+function filterLibrary() {
+  const q = ($("librarySearch")?.value || "").trim().toLowerCase();
+  document.querySelectorAll("#libGroups .lib-group").forEach((group) => {
+    const text = group.textContent.toLowerCase();
+    const groupMatch = !q || text.includes(q);
+    group.hidden = !groupMatch;
+    group.querySelectorAll(".sess-row").forEach((row) => {
+      row.hidden = !!q && !groupMatch && !row.textContent.toLowerCase().includes(q);
+    });
+  });
+}
 async function refreshLibrary() {
   const groups = await pywebview.api.list_library();
+  state.libraryGroups = groups || [];
   $("sessionDetail").hidden = true;
   const box = $("libGroups");
-  if (!groups.length) { box.innerHTML = `<div class="muted">还没有会议记录（零命中会话按设计不留任何文件）</div>`; return; }
+  if (!groups.length) { box.innerHTML = `<div class="muted">还没有会议记录（零命中会话按设计不留任何文件）</div>`; renderSidebar(); return; }
   box.innerHTML = "";
   for (const g of groups) {
     const wrap = document.createElement("div");
@@ -450,6 +554,8 @@ async function refreshLibrary() {
     wrap.appendChild(body);
     box.appendChild(wrap);
   }
+  filterLibrary();
+  renderSidebar();
 }
 async function showSession(sid) {
   const d = await pywebview.api.session_detail(sid);
@@ -715,7 +821,10 @@ async function refreshLlm() {
   const cfg = state.cfg || {};
   const configured = !!(cfg.llm_base_url || "").trim() && !!(cfg.llm_model || "").trim();
   $("llmPill").textContent = cfg.interest_mode === "manual" ? "仅手动保存" : (configured ? "兴趣API 已配置" : "兴趣API 未配置");
-  $("llmPill").classList.toggle("on", configured && cfg.interest_mode !== "manual");
+  $("llmPill").classList.toggle("ok", configured && cfg.interest_mode !== "manual");
+  $("composerModel").textContent = cfg.llm_provider === "custom"
+    ? (cfg.llm_model || "自定义 API")
+    : (st.up ? "本地 · " + (st.display_model || st.model || "模型已载入") : "本地模型");
   return st;
 }
 $("btnLlmStart").onclick = async () => {
@@ -767,7 +876,9 @@ async function loadConfig() {
     $("rpProjName").textContent = cfg.last_project;
     scanProject(cfg.last_project); // 右栏项目树：启动即恢复上次项目上下文
   }
+  updateComposer();
   refreshLlm();
+  renderSidebar();
 }
 $("btnSaveCfg").onclick = async () => {
   await pywebview.api.set_config({
@@ -980,6 +1091,102 @@ $("btnUndCancel").onclick = async () => {
 };
 
 $("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };
+/* ---------- 使用统计 ---------- */
+function fmtTokens(n) {
+  n = Number(n) || 0;
+  if (n >= 1e8) return (n / 1e8).toFixed(1) + "亿";
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + "万";
+  return String(n);
+}
+function dayKey(offset) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function renderUsage() {
+  const data = state.usage || {};
+  const totals = data.totals || {};
+  const days = data.days || [];
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const peak = days.reduce((m, d) => Math.max(m, Number(d.tokens) || 0), 0);
+  const active = days.filter((d) => (Number(d.tokens) || 0) > 0).length;
+  $("usageTotal").textContent = fmtTokens(totals.tokens);
+  $("usageCalls").textContent = String(totals.calls || 0);
+  $("usagePeak").textContent = fmtTokens(peak);
+  $("usageActiveDays").textContent = String(active);
+  $("usageErrors").textContent = String(totals.errors || 0);
+  const heat = $("usageHeatmap");
+  const maxDay = Math.max(1, ...days.map((d) => Number(d.tokens) || 0));
+  const cells = [];
+  for (let i = -83; i <= 0; i++) {
+    const key = dayKey(i);
+    const item = byDate.get(key) || { tokens: 0, calls: 0 };
+    const value = Number(item.tokens) || 0;
+    const level = value ? Math.max(1, Math.min(4, Math.ceil(value / maxDay * 4))) : 0;
+    cells.push(`<span class="heat-cell${level ? " l" + level : ""}" title="${key} · ${fmtTokens(value)} tokens · ${item.calls || 0} 次"></span>`);
+  }
+  heat.innerHTML = cells.join("");
+
+  const range = Math.max(2, state.usageRange || 7);
+  const series = [];
+  for (let i = range - 1; i >= 0; i--) {
+    const key = dayKey(-i);
+    const item = byDate.get(key) || { tokens: 0 };
+    series.push({ date: key, tokens: Number(item.tokens) || 0 });
+  }
+  const max = Math.max(1, ...series.map((p) => p.tokens));
+  const W = 800, H = 190, padX = 34, padY = 20;
+  const x = (i) => padX + (series.length <= 1 ? 0 : i * (W - padX * 2) / (series.length - 1));
+  const y = (v) => H - padY - (v / max) * (H - padY * 2);
+  const points = series.map((p, i) => `${x(i).toFixed(1)},${y(p.tokens).toFixed(1)}`).join(" ");
+  const area = `${padX},${H - padY} ${points} ${W - padX},${H - padY}`;
+  const grid = [0, .25, .5, .75, 1].map((v) => {
+    const yy = (H - padY - v * (H - padY * 2)).toFixed(1);
+    return `<line x1="${padX}" y1="${yy}" x2="${W - padX}" y2="${yy}" stroke="#2c2c2c" stroke-width="1"/>`;
+  }).join("");
+  const labels = [0, Math.floor((series.length - 1) / 2), series.length - 1]
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 2}" fill="#6f6f6f" font-size="10" text-anchor="middle">${series[i].date.slice(5)}</text>`).join("");
+  const hasData = series.some((p) => p.tokens > 0);
+  $("usageChart").innerHTML = hasData
+    ? `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}
+       <polyline points="${points}" fill="none" stroke="#7aa2ff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+       <polygon points="${area}" fill="rgba(122,162,255,.10)"/>
+       <text x="${padX}" y="12" fill="#6f6f6f" font-size="10">${fmtTokens(max)}</text>${labels}</svg>`
+    : "";
+  $("usageEmpty").hidden = hasData;
+
+  const models = (data.models || []).slice(0, 8);
+  const modelTotal = models.reduce((s, m) => s + (Number(m.tokens) || 0), 0) || 1;
+  $("usageModels").className = models.length ? "usage-models" : "usage-models muted";
+  $("usageModels").innerHTML = models.length ? models.map((m) => {
+    const pct = Math.round((Number(m.tokens) || 0) / modelTotal * 100);
+    return `<div class="usage-model-row"><span>${esc(m.model || "unknown")}</span>
+      <span class="usage-model-bar"><span style="width:${pct}%"></span></span>
+      <span class="muted">${fmtTokens(m.tokens)} · ${pct}%</span></div>`;
+  }).join("") : "暂无数据";
+}
+async function loadUsage() {
+  try {
+    const data = await pywebview.api.usage_stats();
+    state.usage = data && data.ok ? data : { totals: {}, days: [], models: [] };
+  } catch (e) {
+    state.usage = { totals: {}, days: [], models: [] };
+  }
+  renderUsage();
+}
+$("usageRange7").onclick = () => { state.usageRange = 7; $("usageRange7").classList.add("active"); $("usageRange30").classList.remove("active"); renderUsage(); };
+$("usageRange30").onclick = () => { state.usageRange = 30; $("usageRange30").classList.add("active"); $("usageRange7").classList.remove("active"); renderUsage(); };
+
+/* ---------- 设置分区 ---------- */
+function switchSettings(name) {
+  document.querySelectorAll(".settings-tab").forEach((b) => b.classList.toggle("active", b.dataset.settings === name));
+  document.querySelectorAll(".settings-pane").forEach((p) => p.classList.toggle("active", p.id === "settings-" + name));
+  if (name === "usage") loadUsage();
+}
+document.querySelectorAll(".settings-tab").forEach((b) => { b.onclick = () => switchSettings(b.dataset.settings); });
+
 $("btnTestEngine").onclick = async () => {
   $("testResult").textContent = "测试中…";
   const r = await pywebview.api.test_engine();
@@ -988,17 +1195,82 @@ $("btnTestEngine").onclick = async () => {
 $("btnOpenCfg").onclick = () => pywebview.api.open_config_dir();
 
 /* ---------- 导航/弹窗事件 ---------- */
-document.querySelectorAll(".navbtn").forEach((b) => { b.onclick = () => switchPage(b.dataset.page); });
 $("btnAskOk").onclick = () => answerAsk($("askInput").value);
 $("btnAskSkip").onclick = () => answerAsk("");
 $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") answerAsk($("askInput").value); });
+
+/* ---------- 新壳交互 ---------- */
+$("btnSidebarCollapse").onclick = () => {
+  $("appShell").classList.toggle("sidebar-collapsed");
+  $("btnSidebarCollapse").textContent = $("appShell").classList.contains("sidebar-collapsed") ? "›" : "‹";
+};
+$("btnBack").onclick = pageBack;
+$("btnForward").onclick = pageForward;
+$("btnNewTask").onclick = () => {
+  switchPage("home");
+  openMeetingConsole();
+  $("interestFocus").focus();
+};
+$("btnSideSearch").onclick = () => {
+  switchPage("library");
+  $("librarySearch").focus();
+};
+$("btnSideAddProject").onclick = async () => {
+  const p = await pywebview.api.pick_folder();
+  if (p) { await scanProject(p); switchPage("home"); }
+};
+$("btnSideRefresh").onclick = renderSidebar;
+$("composerProject").onclick = () => switchPage("project");
+$("btnComposerNew").onclick = () => {
+  switchPage("home");
+  openMeetingConsole();
+  $("interestFocus").focus();
+};
+function sendComposer() {
+  const q = $("homeAsk").value.trim();
+  if (!q) { switchPage("home"); openMeetingConsole(); $("interestFocus").focus(); return; }
+  switchPage("agent");
+  $("agentRunQuestion").value = q;
+  $("btnAgentRun").click();
+}
+$("btnComposerSend").onclick = sendComposer;
+$("homeAsk").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendComposer(); }
+});
+$("btnQuickMeeting").onclick = () => {
+  switchPage("home");
+  openMeetingConsole();
+  $("btnRec").click();
+};
+$("btnQuickLibrary").onclick = () => switchPage("library");
+$("btnQuickUnderstand").onclick = () => {
+  switchPage("project");
+  $("undCard").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+$("btnQuickAgent").onclick = () => { switchPage("agent"); $("agentRunQuestion").focus(); };
+$("btnConsoleClose").onclick = () => { state.consolePinned = false; showMeetingConsole(false); };
+$("librarySearch").addEventListener("input", filterLibrary);
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key.toLowerCase() === "n") { e.preventDefault(); $("btnNewTask").click(); }
+  if (e.key.toLowerCase() === "k") { e.preventDefault(); $("btnSideSearch").click(); }
+});
 
 /* ---------- 启动 ---------- */
 async function boot() {
   const info = await pywebview.api.bootstrap();
   state.mediaBase = info.media_base;
   $("ver").textContent = "v" + info.version;
+  $("aboutVersion").textContent = "v" + info.version;
+  const hour = new Date().getHours();
+  $("greeting").textContent = hour < 6 ? "夜深了，先保存这一场"
+    : hour < 12 ? "早上好呀，新的一天开始啦"
+    : hour < 18 ? "下午好，继续留下重要证据"
+    : "晚上好，今天要回看哪一场？";
+  updateComposer();
+  showMeetingConsole(!!info.meeting_running);
   setRunning(info.meeting_running, null);
+  setTimeout(() => { if (!state.running && !state.consolePinned) showMeetingConsole(false); }, 1200);
   await loadConfig();
   setInterval(poll, 800);
   // JS 桥活体回执（自检/诊断用：证明前端引导完成且 API 往返正常）

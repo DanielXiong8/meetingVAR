@@ -272,6 +272,30 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(Path(opened[0]), desktop_app.CONFIG_DIR)
         self.assertEqual(Path(opened[1]), self.tmp, "无项目/无 data 时回落仓库目录")
 
+    def test_usage_stats_aggregates_agent_trace(self) -> None:
+        project = self.tmp / "project"
+        trace = project / "meetingvar" / "agent_memory" / "trace"
+        trace.mkdir(parents=True)
+        rows = [
+            {"event": "llm_call", "ts": 1792400000, "model": "local-a", "ok": True,
+             "prompt_tokens": 100, "completion_tokens": 20, "reasoning_tokens": 5},
+            {"event": "llm_call", "ts": 1792400100, "model": "local-a", "ok": False,
+             "prompt_tokens": 50, "completion_tokens": 10, "reasoning_tokens": 0},
+            {"event": "tool_started", "ts": 1792400200},
+        ]
+        (trace / "agent_run.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+        self.b._cfg["projects"] = [str(project)]
+        self.b._cfg["last_project"] = str(project)
+        stats = self.b.usage_stats()
+        self.assertTrue(stats["ok"])
+        self.assertEqual(stats["totals"]["calls"], 2)
+        self.assertEqual(stats["totals"]["tokens"], 180)
+        self.assertEqual(stats["totals"]["errors"], 1)
+        self.assertEqual(len(stats["days"]), 90)
+        self.assertEqual(stats["models"][0]["model"], "local-a")
+        self.assertEqual(stats["models"][0]["tokens"], 180)
+
     def test_shutdown_stops_engine_and_llm(self) -> None:
         class _FakeProc:
             def __init__(self) -> None:

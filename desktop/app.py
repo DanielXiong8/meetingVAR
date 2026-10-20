@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -651,6 +651,81 @@ class Backend:
                             "mtime": mtime, "has_transcript": tj.exists()})
         out.sort(key=lambda x: -x["mtime"])
         return out[:100]
+
+    def usage_stats(self) -> dict:
+        """Aggregate local Agent LLM traces for the usage dashboard.
+
+        Reads only application-owned JSONL audit events; prompts and content are
+        never included in the trace, so the dashboard cannot leak meeting text.
+        """
+        from datetime import date, timedelta
+
+        roots = []
+        for value in [self._cfg.get("last_project")] + list(self._cfg.get("projects") or []):
+            if not isinstance(value, str) or not value.strip():
+                continue
+            path = Path(value)
+            if path.is_dir() and path.resolve() not in {p.resolve() for p in roots}:
+                roots.append(path)
+        totals = {"tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                  "reasoning_tokens": 0, "calls": 0, "errors": 0}
+        days = {}
+        models = {}
+        seen = set()
+        for root in roots:
+            for name in ("agent_run.jsonl", "agent_run.jsonl.1"):
+                path = root / "meetingvar" / "agent_memory" / "trace" / name
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+                if resolved in seen or not path.is_file():
+                    continue
+                seen.add(resolved)
+                try:
+                    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                except OSError:
+                    continue
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(event, dict) or event.get("event") != "llm_call":
+                        continue
+                    def number(key):
+                        value = event.get(key)
+                        return value if type(value) is int and value >= 0 else 0
+                    prompt, completion = number("prompt_tokens"), number("completion_tokens")
+                    reasoning = number("reasoning_tokens")
+                    tokens = prompt + completion
+                    stamp = event.get("ts")
+                    try:
+                        key = time.strftime("%Y-%m-%d", time.localtime(float(stamp)))
+                    except (TypeError, ValueError, OSError):
+                        key = date.today().isoformat()
+                    day = days.setdefault(key, {"date": key, "tokens": 0, "calls": 0})
+                    day["tokens"] += tokens
+                    day["calls"] += 1
+                    model = str(event.get("model") or "unknown")[:120]
+                    row = models.setdefault(model, {"model": model, "tokens": 0, "calls": 0})
+                    row["tokens"] += tokens
+                    row["calls"] += 1
+                    totals["tokens"] += tokens
+                    totals["prompt_tokens"] += prompt
+                    totals["completion_tokens"] += completion
+                    totals["reasoning_tokens"] += reasoning
+                    totals["calls"] += 1
+                    if event.get("ok") is False:
+                        totals["errors"] += 1
+        end = date.today()
+        series = []
+        for offset in range(89, -1, -1):
+            key = (end - timedelta(days=offset)).isoformat()
+            series.append(days.get(key, {"date": key, "tokens": 0, "calls": 0}))
+        return {"ok": True, "totals": totals, "days": series,
+                "models": sorted(models.values(), key=lambda row: -row["tokens"]),
+                "projects": [str(root) for root in roots]}
 
     def session_detail(self, sid: str) -> dict:
         data = Path(self._cfg["repo_dir"] or ".") / "data"
@@ -1394,7 +1469,7 @@ def main() -> None:
         f"{APP_NAME} {APP_VERSION}",
         url=str(WEB_DIR / "index.html"),
         js_api=backend,
-        width=1280, height=800, min_size=(900, 600),
+        width=1050, height=680, x=0, y=0, min_size=(900, 600),
     )
     backend._window = window
     window.events.closing += backend._allow_close

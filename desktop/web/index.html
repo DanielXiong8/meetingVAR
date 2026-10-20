@@ -7,255 +7,423 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="logodot"></span> meetingVAR <span class="ver" id="ver"></span></div>
-  <div class="topbar-right">
-    <span class="llm-pill" id="llmPill" title="兴趣API的配置状态；实际调用状态见主页">兴趣API 未配置</span>
-    <span class="status-pill" id="statusPill">● 待机</span>
-  </div>
-</header>
-
-<div class="app">
-  <nav class="side">
-    <button class="navbtn active" data-page="home">● 主页</button>
-    <button class="navbtn" data-page="project">▤ 项目</button>
-    <button class="navbtn" data-page="library">▦ 会议库</button>
-    <button class="navbtn" data-page="agent">◆ Agent</button>
-    <button class="navbtn" data-page="settings">⚙ 设置</button>
-  </nav>
-
-  <main>
-    <!-- 主页 -->
-    <section id="page-home" class="page active">
-      <div class="card projectcard">
-        <div class="pc-label">当前项目</div>
-        <div class="pc-path" id="homeProject">（未选择——去「项目」页选一个文件夹）</div>
-      </div>
-      <div class="recrow">
-        <button id="btnRec" class="recbtn"><span class="recdot"></span><span id="recLabel">开始会议</span></button>
-        <div class="recside">
-          <button id="btnVar" class="btn">手动 VAR（回车等价）</button>
-          <button id="btnOpenOut" class="btn">打开产物文件夹</button>
-          <button id="btnTf" class="btn" title="选一个录音/录像文件 → 讯飞录音文件转写（含说话人分离）→ 生成 <文件名>.transcript.txt">文件转写…</button>
+<div class="shell" id="appShell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="brand-lockup">
+        <div class="brand-glyph">M</div>
+        <div class="brand-copy">
+          <div class="brand-name">meetingVAR</div>
+          <div class="brand-sub">personal evidence agent</div>
         </div>
       </div>
-      <div id="tfLine" class="muted" hidden></div>
-      <div class="statusline">
-        <span id="statTime">--</span>
-        <span id="statHits">命中 0</span>
-        <span id="statSpeakers">说话人 —</span>
-      </div>
-      <div class="capture-strip" role="status">
-        <span id="captureStatus">尚未开始采集</span>
-        <span id="audioStatus">音频 —</span><meter id="audioLevel" min="0" max="1" value="0" aria-label="混合音频电平"></meter>
-        <span id="asrStatus">字幕 —</span>
-      </div>
-      <div class="card interest-card">
-        <label for="interestFocus"><b>本场关注事项</b> <span class="muted">可留空，按重要决策、分工、风险和新进展判断</span></label>
-        <textarea id="interestFocus" rows="2" maxlength="6000" placeholder="例如：架构是否定稿、任务由谁负责、老师最终采用哪种定义"></textarea>
-        <div id="interestStatus" class="muted" role="status">API兴趣判断未运行；专业词不再直接触发保存</div>
-      </div>
-      <div class="meeting-workspace">
-        <div class="card ticker">
-          <div class="ticker-title"><b>实时字幕</b><span id="captionCount" class="muted">0 句</span><button id="btnFollow" class="btn">跟随最新</button></div>
-          <div id="ticker" class="ticker-body" role="log" aria-label="会议字幕，可滚动回看"></div>
-          <div id="partialCaption" class="partial-caption" aria-live="polite" hidden></div>
-          <div id="captionHelp" class="muted">讯飞RTASR临时字幕持续更新，句尾定稿后进入兴趣判断。</div>
-        </div>
-        <div class="card screen-card">
-          <div class="ticker-title"><b>当前录制画面</b></div>
-          <div class="screen-preview"><img id="screenPreview" alt="当前录制屏幕预览" hidden><span id="screenEmpty">开始会议后显示预览</span></div>
-          <div id="screenStatus" class="muted">轻量录屏 · 目标 5 帧/秒 · 最宽 1600 像素</div>
-          <div class="muted">采集系统默认屏幕。只保存命中片段，回溯目标 5 分钟；实际覆盖和内存限制会显示在此处。</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 项目页（读取文件夹） -->
-    <section id="page-project" class="page">
-      <div class="row">
-        <button id="btnPick" class="btn btn-primary">选择项目文件夹…</button>
-        <div class="path" id="projPath">未选择</div>
-      </div>
-      <div class="row">
-        <label class="muted">或手动输入路径</label>
-        <input id="projManual" class="input" placeholder="如：D:\项目\AI for ALS\数据处理与筛选">
-        <button id="btnScanInput" class="btn">读取</button>
-      </div>
-      <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）；文件树在右侧</div>
-      <div id="scanTerms" class="scan"></div>
-      <button id="btnUseProject" class="btn btn-primary" disabled>用此项目开会 →</button>
-
-      <div class="card" id="undCard">
-        <div class="row"><b>全库理解</b>
-          <span class="muted">让模型把整个文件夹分层读完（覆盖率和耗时都能核算），产出候选词 → 勾选确认 → 写入项目词表，开会自动采用</span></div>
-        <div class="muted">当前厂商：<span id="undProvider">—</span> · <span id="undEgress">—</span>（设置页可切换；本地模型不联网）</div>
-        <div class="row">
-          <button id="btnUndPlan" class="btn">① 先算预算（字数 / 块数 / 预计耗时）</button>
-          <button id="btnUndGo" class="btn btn-primary" disabled>② 开始全库理解</button>
-          <button id="btnUndSmall" class="btn" disabled>小样试跑（前 5 块）</button>
-          <button id="btnUndCancel" class="btn" hidden>取消（已完成块保留）</button>
-        </div>
-        <div id="undPlanLine" class="muted"></div>
-        <div id="undProgress" class="muted"></div>
-        <div id="undResult" hidden></div>
-      </div>
-    </section>
-
-    <!-- 会议库（按项目分组；参照 ZCode 侧栏信息结构：项目 → 场次 → 详情） -->
-    <section id="page-library" class="page">
-      <div class="row">
-        <button class="btn" onclick="refreshLibrary()">刷新</button>
-        <span class="muted">按项目分组 · 点项目展开场次</span>
-      </div>
-      <div id="libGroups" class="lib-groups"></div>
-      <div id="sessionDetail" class="detail card" hidden></div>
-    </section>
-
-    <!-- Agent：会前关注、会后事实、项目记忆问答 -->
-    <section id="page-agent" class="page">
-      <div class="card agent-head">
-        <div>
-          <div class="pc-label">当前项目</div>
-          <div class="pc-path" id="agentProject">（未选择项目）</div>
-        </div>
-        <span id="agentStatusLine" class="muted">打开 Agent 页后加载项目记忆</span>
-      </div>
-
-      <div class="agent-grid">
-        <div class="card">
-          <div class="row"><b>会前关注清单</b>
-            <span class="muted">让 Agent 从项目材料提出可判断的关注点</span>
-            <button id="btnFocusGen" class="btn btn-primary">生成关注清单</button>
-            <button id="btnFocusSave" class="btn" disabled>保存勾选</button>
-          </div>
-          <div id="focusList" class="agent-list muted">暂无关注清单</div>
-        </div>
-
-        <div class="card">
-          <div class="row"><b>会后会议事实</b>
-            <select id="agentSession" class="input agent-session"><option value="">选择已保存会话</option></select>
-            <button id="btnFactsPreview" class="btn btn-primary">预览事实</button>
-            <button id="btnFactsSave" class="btn" disabled>写入勾选</button>
-          </div>
-          <div class="muted">Agent 只提出候选；原句由本地工具核对，勾选后才写入项目记忆。</div>
-          <div id="factsList" class="agent-list muted">选择会话后预览行动项、决策、承诺、风险、未决问题</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row"><b>项目记忆问答</b>
-          <input id="agentQuestion" class="input" placeholder="例如：第二方案定了吗？谁负责周五交付？">
-          <button id="btnAsk" class="btn btn-primary">提问</button>
-        </div>
-        <div class="muted">只依据已经写入项目记忆的事实回答，并列出引用；找不到依据会明确说明。</div>
-        <div id="agentAnswer" class="agent-answer" hidden></div>
-      </div>
-
-      <div class="card">
-        <div class="row"><b>Agent 深度检索</b>
-          <span class="muted">模型自主选择工具：跨会话搜索、读原句、对比、检索项目记忆</span>
-          <input id="agentRunQuestion" class="input" placeholder="例如：上次说周五交付，这次谁改了口？把两次原话找出来">
-          <button id="btnAgentRun" class="btn btn-primary">运行 Agent</button>
-        </div>
-        <div class="muted">有界 ReAct：最多 8 步；只读工具；引用必须来自实际工具返回的 turn/事实。</div>
-        <div id="agentRunPlan" class="muted"></div>
-        <div id="agentRunSteps" class="agent-list muted"></div>
-        <div id="agentRunAnswer" class="agent-answer" hidden></div>
-      </div>
-
-      <div class="card">
-        <div class="row"><b>项目记忆</b>
-          <input id="agentMemoryQuery" class="input" placeholder="按关键词检索事实记忆（留空显示最近）">
-          <button id="btnMemory" class="btn">检索</button>
-        </div>
-        <div id="agentMemory" class="agent-list muted">暂无记忆</div>
-      </div>
-    </section>
-
-    <!-- 设置 -->
-    <section id="page-settings" class="page">
-      <label class="field"><span>引擎 Python（meetingvar 所在环境）</span>
-        <input id="cfgPy" class="input" placeholder="D:\miniconda3\envs\meetingvar\python.exe"></label>
-      <label class="field"><span>仓库目录（引擎代码所在位置）</span>
-        <input id="cfgRepo" class="input" placeholder="C:\Users\Lenovo\projects\meetingVAR"></label>
-      <label class="field"><span>设备</span>
-        <select id="cfgDevice" class="input">
-          <option value="cuda">cuda（GPU，推荐）</option>
-          <option value="cpu">cpu（无 GPU 时）</option>
-        </select></label>
-      <label class="field"><span>音频采集源</span>
-        <select id="cfgSource" class="input">
-          <option value="both">系统声音 + 麦克风（推荐：别人说的 + 你说的，两头都录）</option>
-          <option value="loopback">仅系统声音（只听电脑外放/视频的声音）</option>
-          <option value="mic">仅麦克风（只听现场/自己的声音）</option>
-        </select></label>
-
-      <h3 class="set-h">识别引擎（实时转写）</h3>
-      <label class="field"><span>引擎</span>
-        <select id="cfgAsr" class="input">
-          <option value="xfyun_rtasr">讯飞 RTASR（推荐：持续连接，实时临时字幕＋句尾定稿）</option>
-          <option value="xfyun">讯飞 IAT（分块听写备用，不是连续实时转写）</option>
-          <option value="local">本地 FunASR（离线分块备用，质量与延迟需按设备验证）</option>
-        </select></label>
-      <div class="row" id="xfyunRow">
-        <input id="cfgXfyunDir" class="input" placeholder="讯飞服务文件夹（内含 实时语音转写 / 语音听写 / 录音文件转写）">
-        <button id="btnXfyunDir" class="btn">选择…</button>
-        <button id="btnXfyunCheck" class="btn">检测</button>
-      </div>
-      <div id="xfyunResult" class="muted">RTASR使用“实时语音转写”服务凭证；检测只检查配置，不发送音频。开会后音频持续发送到讯飞，当前不自动识别人名或弹出点名。</div>
-
-      <h3 class="set-h">自动保存与API兴趣判断</h3>
-      <label class="field"><span>保存方式</span><select id="cfgInterestMode" class="input">
-        <option value="api">API判断重要事件＋手动VAR</option>
-        <option value="manual">仅手动VAR（不调用兴趣API）</option>
-      </select></label>
-      <div class="muted">API判断使用下方自定义地址和模型。最近定稿转写、关注事项、确认词及已保存的项目阅读摘要会发送到该API；只提到一个词不会直接保存。API失败时提示，不退回规则触发。</div>
-      <h3 class="set-h">项目理解模型（本地可选）与自定义API</h3>
-      <label class="field"><span>厂商</span>
-        <select id="cfgProvider" class="input">
-          <option value="local">本地模型（内置 llama.cpp 服务，离线免费）</option>
-          <option value="custom">自定义 API（任意 OpenAI 兼容：DeepSeek / 通义 / OpenAI / 自建…）</option>
-        </select></label>
-      <div id="provLocal">
-        <div class="row">
-          <span id="llmStatus" class="muted">检测中…</span>
-          <button id="btnLlmStart" class="btn">启动服务</button>
-          <button id="btnLlmStop" class="btn">停止服务</button>
-        </div>
-        <label class="field"><span>模型 GGUF 路径（自动探测，可改）</span>
-          <input id="cfgGguf" class="input" placeholder="D:\env\models\models\Qwen--Qwen3-4B-GGUF\...\Qwen3-4B-Q4_K_M.gguf"></label>
-      </div>
-      <div id="provCustom" hidden>
-        <label class="field"><span>Base URL（OpenAI 兼容，通常以 /v1 结尾）</span>
-          <input id="cfgBaseUrl" class="input" placeholder="https://api.deepseek.com/v1"></label>
-        <label class="field"><span>模型名</span>
-          <input id="cfgModel" class="input" placeholder="deepseek-chat"></label>
-        <label class="field"><span>API Key（只存本机配置目录，不随纪要/仓库外发）</span>
-          <input id="cfgApiKey" class="input" type="password" placeholder="sk-…"></label>
-        <div class="row"><button id="btnTestLlm" class="btn">测试生成（少量API用量）</button><span id="llmTestResult" class="muted"></span></div>
-      </div>
-      <div class="muted">专业词表只用于保守纠错；自动保存只由API事件判断或手动VAR触发。</div>
-
-      <div class="row">
-        <button id="btnTestEngine" class="btn">测试引擎</button>
-        <button id="btnSaveCfg" class="btn btn-primary">保存</button>
-        <button id="btnOpenCfg" class="btn">打开配置目录</button>
-      </div>
-      <div id="testResult" class="muted"></div>
-    </section>
-  </main>
-
-  <!-- 右栏：项目文件树（工作区在中间；参照 ZCode 的侧栏信息结构） -->
-  <aside class="rightpanel" id="rightPanel">
-    <div class="rp-head">
-      <span class="rp-title">项目文件</span>
-      <span class="muted" id="treeStat"></span>
-      <button class="btn rp-refresh" id="btnTreeRefresh" title="重新读取">↻</button>
+      <button class="icon-btn" id="btnSidebarCollapse" title="收起侧栏">‹</button>
     </div>
-    <div class="rp-proj muted" id="rpProjName">（未选择项目）</div>
-    <div class="tree-body" id="sideTree"><div class="muted" style="padding:4px 8px">在「项目」页选择文件夹后显示</div></div>
+
+    <nav class="side-primary">
+      <button class="side-item" id="btnNewTask" aria-label="新建会议"><span class="side-ico">＋</span><span>新建会议</span><kbd>Ctrl N</kbd></button>
+      <button class="side-item" id="btnSideSearch" aria-label="搜索"><span class="side-ico">⌕</span><span>搜索</span><kbd>Ctrl K</kbd></button>
+      <button class="side-item navbtn" data-page="agent" aria-label="自动化"><span class="side-ico">✦</span><span>自动化</span></button>
+      <button class="side-item navbtn" data-page="project" aria-label="项目"><span class="side-ico">▦</span><span>项目</span></button>
+    </nav>
+
+    <div class="side-section side-projects-section">
+      <div class="side-section-head">
+        <span>项目</span>
+        <button class="icon-btn" id="btnSideAddProject" title="添加项目">＋</button>
+      </div>
+      <div id="sideProjects" class="side-list"></div>
+    </div>
+
+    <div class="side-section side-list-section">
+      <div class="side-section-head">
+        <span>最近会议</span>
+        <button class="icon-btn" id="btnSideRefresh" title="刷新">↻</button>
+      </div>
+      <div id="sideSessions" class="side-list"></div>
+    </div>
+
+    <div class="side-footer">
+      <div class="avatar">M</div>
+      <div class="user-copy"><b>本机工作区</b><span>本地优先 · 数据不出机</span></div>
+      <button class="icon-btn navbtn" data-page="settings" title="设置" aria-label="设置">⚙</button>
+    </div>
   </aside>
+
+  <div class="main-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="icon-btn" id="btnBack" title="后退">←</button>
+        <button class="icon-btn" id="btnForward" title="前进">→</button>
+        <span class="topbar-brand">meetingVAR</span>
+        <span class="topbar-sep">/</span>
+        <span class="page-title" id="pageTitle">新任务</span>
+        <span class="ver" id="ver"></span>
+      </div>
+      <div class="topbar-right">
+        <span class="llm-pill" id="llmPill" title="兴趣API的配置状态；实际调用状态见主页">兴趣API 未配置</span>
+        <span class="status-pill" id="statusPill">● 待机</span>
+        <button class="icon-btn navbtn" data-page="settings" title="设置" aria-label="设置">⚙</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- 主页 / 新任务 -->
+      <section id="page-home" class="page active">
+        <div class="home-hero">
+          <div class="hero-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h1 id="greeting">早上好呀，新的一天开始啦</h1>
+          <p class="hero-sub" id="heroSub">今天要留下哪些值得回看的会议证据？</p>
+
+          <div class="composer" id="composer">
+            <div class="composer-head">
+              <button class="project-select" id="composerProject" title="切换项目">
+                <span class="project-glyph">▣</span>
+                <span id="homeProject">选择项目</span>
+                <span class="chev">⌄</span>
+              </button>
+              <span class="composer-hint">会议证据 · 本地优先</span>
+            </div>
+            <textarea id="homeAsk" rows="3" placeholder="向 meetingVAR 提问，使用 @ 添加项目上下文，或直接开始一场会议"></textarea>
+            <div class="composer-bar">
+              <div class="composer-left">
+                <button class="round-btn" id="btnComposerNew" title="新建会议">＋</button>
+                <span class="mode-pill" id="composerMode">只读 Agent</span>
+                <span class="composer-spacer"></span>
+              </div>
+              <div class="composer-right">
+                <span class="model-pill" id="composerModel">本地模型</span>
+                <button class="send-btn" id="btnComposerSend" title="发送 / 运行 Agent">↑</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="quick-row">
+            <button class="quick-chip" id="btnQuickMeeting"><span>◉</span>开始会议</button>
+            <button class="quick-chip" id="btnQuickLibrary"><span>▤</span>会议纪要</button>
+            <button class="quick-chip" id="btnQuickUnderstand"><span>▦</span>全库理解</button>
+            <button class="quick-chip" id="btnQuickAgent"><span>✦</span>Agent 检索</button>
+          </div>
+          <div class="home-hint">只保存命中片段；Agent 深度检索默认只读，写入项目记忆需要你在会后事实页勾选确认。</div>
+        </div>
+
+        <div class="meeting-console" id="meetingConsole" hidden>
+          <div class="console-head">
+            <div>
+              <div class="console-title">会议控制台</div>
+              <div class="console-sub">采集状态、实时字幕与当前录制画面</div>
+            </div>
+            <button class="icon-btn" id="btnConsoleClose" title="收起">⌃</button>
+          </div>
+
+          <div class="recrow">
+            <button id="btnRec" class="recbtn"><span class="recdot"></span><span id="recLabel">开始会议</span></button>
+            <div class="recside">
+              <button id="btnVar" class="btn">手动 VAR（回车等价）</button>
+              <button id="btnOpenOut" class="btn">打开产物文件夹</button>
+              <button id="btnTf" class="btn" title="选一个录音/录像文件 → 讯飞录音文件转写（含说话人分离）→ 生成 <文件名>.transcript.txt">文件转写…</button>
+            </div>
+          </div>
+          <div id="tfLine" class="muted" hidden></div>
+
+          <div class="statusline">
+            <span id="statTime">--</span>
+            <span id="statHits">命中 0</span>
+            <span id="statSpeakers">说话人 —</span>
+          </div>
+          <div class="capture-strip" role="status">
+            <span id="captureStatus">尚未开始采集</span>
+            <span id="audioStatus">音频 —</span><meter id="audioLevel" min="0" max="1" value="0" aria-label="混合音频电平"></meter>
+            <span id="asrStatus">字幕 —</span>
+          </div>
+
+          <div class="card interest-card">
+            <label for="interestFocus"><b>本场关注事项</b> <span class="muted">可留空，按重要决策、分工、风险和新进展判断</span></label>
+            <textarea id="interestFocus" rows="2" maxlength="6000" placeholder="例如：架构是否定稿、任务由谁负责、老师最终采用哪种定义"></textarea>
+            <div id="interestStatus" class="muted" role="status">API兴趣判断未运行；专业词不再直接触发保存</div>
+          </div>
+
+          <div class="meeting-workspace">
+            <div class="card ticker">
+              <div class="ticker-title"><b>实时字幕</b><span id="captionCount" class="muted">0 句</span><button id="btnFollow" class="btn">跟随最新</button></div>
+              <div id="ticker" class="ticker-body" role="log" aria-label="会议字幕，可滚动回看"></div>
+              <div id="partialCaption" class="partial-caption" aria-live="polite" hidden></div>
+              <div id="captionHelp" class="muted">讯飞RTASR临时字幕持续更新，句尾定稿后进入兴趣判断。</div>
+            </div>
+            <div class="card screen-card">
+              <div class="ticker-title"><b>当前录制画面</b></div>
+              <div class="screen-preview"><img id="screenPreview" alt="当前录制屏幕预览" hidden><span id="screenEmpty">开始会议后显示预览</span></div>
+              <div id="screenStatus" class="muted">轻量录屏 · 目标 5 帧/秒 · 最宽 1600 像素</div>
+              <div class="muted">采集系统默认屏幕。只保存命中片段，回溯目标 5 分钟；实际覆盖和内存限制会显示在此处。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 项目 -->
+      <section id="page-project" class="page">
+        <div class="page-head">
+          <div><h1>项目</h1><p>选择项目文件夹，读取材料、建立词表，并让 Agent 理解项目上下文。</p></div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <span class="pc-label">当前项目</span>
+            <div class="path" id="projPath">未选择</div>
+          </div>
+          <div class="row">
+            <button id="btnPick" class="btn btn-primary">选择项目文件夹…</button>
+            <input id="projManual" class="input" placeholder="或手动输入路径，如：D:\项目\AI for ALS\数据处理与筛选">
+            <button id="btnScanInput" class="btn">读取</button>
+            <button id="btnUseProject" class="btn" disabled>用此项目开会 →</button>
+          </div>
+          <div id="scanMeta" class="muted">读取后显示摘要（文档数 / 词表 / 跳过的非文本文件）；文件树在右侧。</div>
+        </div>
+
+        <div class="project-grid">
+          <div class="card">
+            <div class="card-head"><div><b>项目材料</b><div class="muted">抽取候选词只用于纠错；全库理解结果需要你勾选后才写入词表。</div></div></div>
+            <div id="scanTerms" class="scan"></div>
+
+            <div class="card und-card" id="undCard">
+              <div class="card-head"><div><b>全库理解</b><div class="muted">分层读完整个文件夹，覆盖率和耗时都能核算。</div></div></div>
+              <div class="muted">当前厂商：<span id="undProvider">—</span> · <span id="undEgress">—</span>（设置页可切换；本地模型不联网）</div>
+              <div class="row">
+                <button id="btnUndPlan" class="btn">① 先算预算</button>
+                <button id="btnUndGo" class="btn btn-primary" disabled>② 开始全库理解</button>
+                <button id="btnUndSmall" class="btn" disabled>小样试跑（前 5 块）</button>
+                <button id="btnUndCancel" class="btn" hidden>取消（已完成块保留）</button>
+              </div>
+              <div id="undPlanLine" class="muted"></div>
+              <div id="undProgress" class="muted"></div>
+              <div id="undResult" hidden></div>
+            </div>
+          </div>
+
+          <div class="card project-tree-card">
+            <div class="card-head">
+              <div><b>项目文件</b><div class="muted" id="rpProjName">（未选择项目）</div></div>
+              <div class="row compact">
+                <span class="muted" id="treeStat"></span>
+                <button class="btn" id="btnTreeRefresh" title="重新读取">↻</button>
+              </div>
+            </div>
+            <div class="tree-body" id="sideTree"><div class="muted">选择文件夹后显示</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 会议库 -->
+      <section id="page-library" class="page">
+        <div class="page-head">
+          <div><h1>会议库</h1><p>按项目分组；打开一场会议回看纪要、证据片段和原句。</p></div>
+          <button class="btn" onclick="refreshLibrary()">刷新</button>
+        </div>
+        <div class="library-toolbar">
+          <input id="librarySearch" class="input" placeholder="搜索项目、会话 ID 或纪要…">
+          <span class="muted">点击项目展开场次</span>
+        </div>
+        <div id="libGroups" class="lib-groups"></div>
+        <div id="sessionDetail" class="detail card" hidden></div>
+      </section>
+
+      <!-- Agent -->
+      <section id="page-agent" class="page">
+        <div class="page-head">
+          <div><h1>Agent</h1><p>先让 Agent 在全部会议证据里找答案，再把结果沉淀为项目记忆。</p></div>
+          <div class="agent-head-status"><span id="agentProject">（未选择项目）</span><span id="agentStatusLine" class="muted">打开页面后加载项目记忆</span></div>
+        </div>
+
+        <div class="card agent-search-card">
+          <div class="agent-search-head">
+            <div><b>Agent 深度检索</b><div class="muted">有界 ReAct · 只读工具 · 引用校验 · 最多 8 步</div></div>
+            <span class="mode-pill">跨会议</span>
+          </div>
+          <div class="agent-composer">
+            <textarea id="agentRunQuestion" rows="2" placeholder="例如：上次说周五交付，这次谁改了口？把两次原话找出来"></textarea>
+            <button id="btnAgentRun" class="send-btn">↑</button>
+          </div>
+          <div id="agentRunPlan" class="agent-plan muted"></div>
+          <div id="agentRunSteps" class="agent-list muted"></div>
+          <div id="agentRunAnswer" class="agent-answer" hidden></div>
+        </div>
+
+        <div class="agent-grid">
+          <div class="card">
+            <div class="card-head">
+              <div><b>会前关注清单</b><div class="muted">让 Agent 从项目材料提出可判断的关注点。</div></div>
+              <div class="row compact"><button id="btnFocusGen" class="btn btn-primary">生成</button><button id="btnFocusSave" class="btn" disabled>保存勾选</button></div>
+            </div>
+            <div id="focusList" class="agent-list muted">暂无关注清单</div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div><b>会后会议事实</b><div class="muted">Agent 只提出候选；原句由本地工具核对，勾选后才写入。</div></div>
+              <div class="row compact">
+                <select id="agentSession" class="input agent-session"><option value="">选择有转写的会话</option></select>
+                <button id="btnFactsPreview" class="btn btn-primary">预览</button>
+                <button id="btnFactsSave" class="btn" disabled>写入勾选</button>
+              </div>
+            </div>
+            <div id="factsList" class="agent-list muted">选择会话后预览行动项、决策、承诺、风险、未决问题</div>
+          </div>
+        </div>
+
+        <div class="agent-grid">
+          <div class="card">
+            <div class="card-head"><div><b>项目记忆问答</b><div class="muted">只依据已经写入项目记忆的事实回答，并列出引用。</div></div></div>
+            <div class="row"><input id="agentQuestion" class="input" placeholder="例如：第二方案定了吗？谁负责周五交付？"><button id="btnAsk" class="btn btn-primary">提问</button></div>
+            <div id="agentAnswer" class="agent-answer" hidden></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><div><b>项目记忆</b><div class="muted">按关键词检索事实记忆。</div></div></div>
+            <div class="row"><input id="agentMemoryQuery" class="input" placeholder="按关键词检索（留空显示最近）"><button id="btnMemory" class="btn">检索</button></div>
+            <div id="agentMemory" class="agent-list muted">暂无记忆</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section id="page-settings" class="page">
+        <div class="settings-shell">
+          <aside class="settings-nav">
+            <div class="settings-nav-title">设置</div>
+            <button class="settings-tab active" data-settings="general">⌘ 常规</button>
+            <button class="settings-tab" data-settings="appearance">◐ 外观</button>
+            <button class="settings-tab" data-settings="model">▣ 模型设置</button>
+            <button class="settings-tab" data-settings="usage">▥ 使用统计</button>
+            <button class="settings-tab" data-settings="memory">◈ 记忆与 Agent</button>
+            <button class="settings-tab" data-settings="about">ⓘ 关于</button>
+          </aside>
+
+          <div class="settings-content">
+            <div class="settings-pane active" id="settings-general">
+              <div class="page-head compact"><div><h1>常规</h1><p>引擎、设备与默认采集源。</p></div></div>
+              <div class="card">
+                <label class="field"><span>引擎 Python（meetingvar 所在环境）</span>
+                  <input id="cfgPy" class="input" placeholder="D:\miniconda3\envs\meetingvar\python.exe"></label>
+                <label class="field"><span>仓库目录（引擎代码所在位置）</span>
+                  <input id="cfgRepo" class="input" placeholder="C:\Users\Lenovo\projects\meetingVAR"></label>
+                <label class="field"><span>设备</span>
+                  <select id="cfgDevice" class="input"><option value="cuda">cuda（GPU，推荐）</option><option value="cpu">cpu（无 GPU 时）</option></select></label>
+                <label class="field"><span>音频采集源</span>
+                  <select id="cfgSource" class="input">
+                    <option value="both">系统声音 + 麦克风（推荐：别人说的 + 你说的）</option>
+                    <option value="loopback">仅系统声音（只听电脑外放/视频）</option>
+                    <option value="mic">仅麦克风（只听现场/自己的声音）</option>
+                  </select></label>
+                <label class="field"><span>保存方式</span><select id="cfgInterestMode" class="input">
+                  <option value="api">API判断重要事件＋手动VAR</option>
+                  <option value="manual">仅手动VAR（不调用兴趣API）</option>
+                </select></label>
+                <div class="row">
+                  <button id="btnTestEngine" class="btn">测试引擎</button>
+                  <button id="btnSaveCfg" class="btn btn-primary">保存</button>
+                  <button id="btnOpenCfg" class="btn">打开配置目录</button>
+                </div>
+                <div id="testResult" class="muted"></div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-appearance">
+              <div class="page-head compact"><div><h1>外观</h1><p>当前使用 ZCode 风格的深色工作区。</p></div></div>
+              <div class="card">
+                <div class="row"><b>主题</b><span class="mode-pill">深色（当前）</span></div>
+                <div class="muted">meetingVAR 采用低对比深色界面：长时间阅读字幕、纪要和证据时减少视觉干扰。浅色主题保留为后续能力。</div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-model">
+              <div class="page-head compact"><div><h1>模型设置</h1><p>识别引擎、项目理解模型与自定义 API。</p></div></div>
+              <div class="card">
+                <h3 class="set-h">识别引擎（实时转写）</h3>
+                <label class="field"><span>引擎</span><select id="cfgAsr" class="input">
+                  <option value="xfyun_rtasr">讯飞 RTASR（推荐：持续连接，实时临时字幕＋句尾定稿）</option>
+                  <option value="xfyun">讯飞 IAT（分块听写备用，不是连续实时转写）</option>
+                  <option value="local">本地 FunASR（离线分块备用，质量与延迟需按设备验证）</option>
+                </select></label>
+                <div class="row" id="xfyunRow">
+                  <input id="cfgXfyunDir" class="input" placeholder="讯飞服务文件夹（实时语音转写 / 语音听写 / 录音文件转写）">
+                  <button id="btnXfyunDir" class="btn">选择…</button>
+                  <button id="btnXfyunCheck" class="btn">检测</button>
+                </div>
+                <div id="xfyunResult" class="muted">RTASR使用“实时语音转写”服务凭证；检测只检查配置，不发送音频。</div>
+              </div>
+
+              <div class="card">
+                <h3 class="set-h">项目理解模型与自定义 API</h3>
+                <label class="field"><span>厂商</span><select id="cfgProvider" class="input">
+                  <option value="local">本地模型（内置 llama.cpp 服务，离线免费）</option>
+                  <option value="custom">自定义 API（任意 OpenAI 兼容）</option>
+                </select></label>
+                <div id="provLocal">
+                  <div class="row"><span id="llmStatus" class="muted">检测中…</span><button id="btnLlmStart" class="btn">启动服务</button><button id="btnLlmStop" class="btn">停止服务</button></div>
+                  <label class="field"><span>模型 GGUF 路径</span><input id="cfgGguf" class="input" placeholder="D:\env\models\...\Qwen3-4B-Q4_K_M.gguf"></label>
+                </div>
+                <div id="provCustom" hidden>
+                  <label class="field"><span>Base URL（OpenAI 兼容，通常以 /v1 结尾）</span><input id="cfgBaseUrl" class="input" placeholder="https://api.deepseek.com/v1"></label>
+                  <label class="field"><span>模型名</span><input id="cfgModel" class="input" placeholder="deepseek-chat"></label>
+                  <label class="field"><span>API Key（只存本机配置目录）</span><input id="cfgApiKey" class="input" type="password" placeholder="sk-…"></label>
+                  <div class="row"><button id="btnTestLlm" class="btn">测试生成（少量API用量）</button><span id="llmTestResult" class="muted"></span></div>
+                </div>
+                <div class="muted">专业词表只用于保守纠错；自动保存只由API事件判断或手动VAR触发。</div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-usage">
+              <div class="page-head compact"><div><h1>使用统计</h1><p>来自本地 Agent Trace 的真实调用量；不上传云端。</p></div></div>
+              <div class="usage-metrics">
+                <div class="usage-metric"><b id="usageTotal">0</b><span>累计 Token</span></div>
+                <div class="usage-metric"><b id="usageCalls">0</b><span>LLM 调用</span></div>
+                <div class="usage-metric"><b id="usagePeak">0</b><span>单日峰值</span></div>
+                <div class="usage-metric"><b id="usageActiveDays">0</b><span>活跃天数</span></div>
+                <div class="usage-metric"><b id="usageErrors">0</b><span>失败调用</span></div>
+              </div>
+              <div class="card usage-card">
+                <div class="card-head"><div><b>Token 活动</b><div class="muted">最近 12 周；每格代表一天。</div></div>
+                  <div class="usage-range"><button class="range-btn active" id="usageRange7">近 7 日</button><button class="range-btn" id="usageRange30">近 30 日</button></div>
+                </div>
+                <div id="usageHeatmap" class="usage-heatmap"></div>
+              </div>
+              <div class="card usage-card">
+                <div class="card-head"><div><b>每日 Token 趋势</b><div class="muted">本地 Agent 的 prompt + completion tokens。</div></div></div>
+                <div id="usageChart" class="usage-chart"></div>
+                <div id="usageEmpty" class="muted" hidden>还没有 Agent 调用记录。运行一次「Agent 深度检索」后，这里会出现真实统计。</div>
+              </div>
+              <div class="card usage-card">
+                <div class="card-head"><div><b>模型用量</b><div class="muted">按 token 占比。</div></div></div>
+                <div id="usageModels" class="usage-models muted">暂无数据</div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-memory">
+              <div class="page-head compact"><div><h1>记忆与 Agent</h1><p>项目事实、会前关注和审计轨迹。</p></div></div>
+              <div class="card">
+                <div class="row"><b>项目记忆</b><button class="btn navbtn" data-page="agent">打开 Agent 页 →</button></div>
+                <div class="muted">事实保存在 <code>&lt;项目&gt;/meetingvar/agent_memory/</code>；一事实一 Markdown，带来源、版本和 Trace。Agent 深度检索默认只读。</div>
+              </div>
+              <div class="card">
+                <div class="row"><b>审计</b><span class="muted">本地 JSONL · 不含正文和密钥</span></div>
+                <div class="muted">LLM 调用、工具调用、任务状态和 token 用量记录在项目内；可按项目归档或删除。</div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-about">
+              <div class="page-head compact"><div><h1>关于</h1><p>meetingVAR · 面向复杂工作会议的个人证据层。</p></div></div>
+              <div class="card">
+                <div class="row"><b>版本</b><span id="aboutVersion">—</span></div>
+                <div class="row"><b>运行方式</b><span class="muted">本地桌面壳 + 引擎子进程</span></div>
+                <div class="row"><b>数据边界</b><span class="muted">本地优先；只有你配置的自定义 API 会收到项目文本</span></div>
+                <div class="muted">不是记下一切，是保住对你重要的每一刻。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 </div>
 
 <!-- 说话人点名弹窗 -->
