@@ -104,8 +104,7 @@ meetingVAR-setup-0.8.0.exe --silent --dir D:\apps\mv :: 静默
 "%LOCALAPPDATA%\Programs\meetingVAR\uninstall.exe" --uninstall
 ```
 
-**引擎不在安装包内**：首次运行在「设置」页指定引擎 Python（如 `D:\miniconda3\envs\meetingvar\python.exe`）
-与仓库目录（本机均自动探测默认值）；没有引擎时壳仍可打开（项目页/库页只读不可用并如实报错）。
+**引擎运行时按 `runtime/` 布局发现**：安装目录下 `runtime/python/python.exe`、`runtime/repo`、`runtime/models`、`runtime/llama.cpp`、`runtime/bin/ffmpeg.exe` 会被自动使用；也可用 `MEETINGVAR_ENGINE_PYTHON`/`MEETINGVAR_REPO` 指定。没有引擎时壳仍可打开，文件查看器可用，会议功能如实报错。
 
 ## 自检
 

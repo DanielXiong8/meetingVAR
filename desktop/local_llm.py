@@ -5,10 +5,14 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_APP_HOME = (Path(sys.executable).resolve().parent
+             if getattr(sys, "frozen", False) else _REPO_ROOT)
+_RUNTIME = _APP_HOME / "runtime"
 _SERVER_ROOT = Path("D:/env/llama.cpp")
 _SERVER_NAMES = ("llama-server.exe", "llama-server")
 _MODEL_ALIAS = "meetingvar-local"
@@ -96,7 +100,14 @@ def discover_server(repo_dir: str | None = None) -> str:
         repo = Path(repo_text).expanduser() if repo_text else _REPO_ROOT
     except (OSError, ValueError, RuntimeError):
         raise ValueError("项目目录无效。") from None
-    for root in (repo / ".tools" / "llama.cpp", _SERVER_ROOT):
+    roots = [repo / ".tools" / "llama.cpp"]
+    try:
+        if (_RUNTIME / "llama.cpp").is_dir():
+            roots.append(_RUNTIME / "llama.cpp")
+    except OSError:
+        pass
+    roots.append(_SERVER_ROOT)
+    for root in roots:
         for directory in (root, root / "bin"):
             found = _server_in(directory)
             if found:

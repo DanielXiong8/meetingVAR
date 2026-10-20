@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -267,6 +268,13 @@ def _request_once(prompt: str, *, temperature: float, timeout: int,
             "retryable": False, "finish_reason": finish, "usage": usage}
 
 
+def _loopback_endpoint(profile: dict) -> bool:
+    try:
+        return urllib.parse.urlsplit(profile["endpoint"]).hostname in {"127.0.0.1", "localhost", "::1"}
+    except (KeyError, ValueError):
+        return False
+
+
 def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
                 max_tokens: int | None = None, thinking: str | None = None) -> dict:
     """Generate once, with one safe retry when a reasoning model exhausts the budget.
@@ -295,6 +303,13 @@ def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
         return error_result("context_budget")
     result = _request_once(prompt, temperature=temperature, timeout=timeout,
                            profile=profile, max_tokens=effective_max, thinking=effective_thinking)
+    if result.get("error_code") == "network" and _loopback_endpoint(profile):
+        # A local server may still be binding its port; one short retry is safe
+        # for loopback and removes a real startup race (and test flakes).
+        time.sleep(0.05)
+        result = _request_once(prompt, temperature=temperature, timeout=timeout,
+                               profile=profile, max_tokens=effective_max,
+                               thinking=effective_thinking)
     reasoning = (result.get("usage") or {}).get("completion_tokens_details", {}).get("reasoning_tokens", 0)
     if result.get("error_code") != "truncated" or effective_thinking == "disabled" or not isinstance(reasoning, int) or reasoning <= 0:
         return result

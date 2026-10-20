@@ -38,6 +38,6 @@
 ## 边界
 
 - XLSX 只识别、不解析单元格（避免引入表格依赖）
-- 旧版 `.doc/.ppt` 仍依赖本机 LibreOffice
+- 旧版 `.doc/.ppt/.xls` 由纯 Python CFB/CLX、TextAtom、BIFF SST 解析；代码不再调用 LibreOffice
 - 加密 ZIP 只列条目，不尝试解密
 - 扫描件/图片型 PDF 没有文本层时仍提示用系统应用打开

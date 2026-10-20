@@ -577,7 +577,7 @@ def main() -> None:
     rp.add_argument("--terms", default=None, help="监听词表文件；缺省时从 --memory 自动抽取")
     rp.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     rp.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
-    rp.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    rp.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
 
     tr = sub.add_parser("transcribe", help="转写模式：跑全管线并把全场转写显式存为 txt（--out 必填）")
     tr.add_argument("--wav", required=True)
@@ -585,7 +585,7 @@ def main() -> None:
     tr.add_argument("--terms", default=None, help="监听词表文件；缺省时从 --memory 自动抽取")
     tr.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     tr.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
-    tr.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    tr.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
 
     rc = sub.add_parser("record", help="实时采集（系统声音）")
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")
@@ -598,7 +598,7 @@ def main() -> None:
     rc.add_argument("--hd", action="store_true", help="命中后高清补录 ≤90s（帧缩至 1280 宽；帧率按临时预算折算，实测约 13-20fps）")
     rc.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     rc.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
-    rc.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    rc.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     rc.add_argument("--asr", choices=["local", "xfyun", "xfyun_rtasr"], default="local",
                     help="local=本地分块；xfyun=IAT分块；xfyun_rtasr=讯飞RTASR连续转写")
     rc.add_argument("--xfyun-cred", default=None, help="对应讯飞服务凭证文件或目录")

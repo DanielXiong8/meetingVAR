@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.9.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -51,17 +51,25 @@ _SPAWN_FLAGS = 0
 if os.name == "nt":
     _SPAWN_FLAGS = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
+_APP_HOME = (Path(sys.executable).resolve().parent
+             if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1])
+_RUNTIME = _APP_HOME / "runtime"
 ENGINE_PY_CANDIDATES = [
-    r"D:\miniconda3\envs\meetingvar\python.exe",
+    os.environ.get("MEETINGVAR_ENGINE_PYTHON", ""),
+    str(_RUNTIME / "python" / "python.exe"),
+    str(_RUNTIME / "python.exe"),
 ]
 REPO_CANDIDATES = [
-    r"C:\Users\Lenovo\projects\meetingVAR",
+    os.environ.get("MEETINGVAR_REPO", ""),
+    str(_RUNTIME / "repo"),
+    str(_RUNTIME),
+    str(_APP_HOME),
 ]
 
 CONFIG_DEFAULTS = {
     "engine_python": "",
     "repo_dir": "",
-    "device": "cuda",
+    "device": "auto",
     "last_project": "",
     "projects": [],          # 已知项目（会议归档分组用；start_meeting 时维护）
     "llm_gguf": "",
@@ -102,6 +110,30 @@ def log(msg: str) -> None:
             f.write(line + "\n")
     except OSError:
         pass
+
+
+def _webview2_available() -> bool:
+    """WebView2 is a Windows component, but older clean images may lack it."""
+    if os.name != "nt":
+        return True
+    roots = [
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Microsoft" / "EdgeWebView" / "Application",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "Microsoft" / "EdgeWebView" / "Application",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "EdgeWebView" / "Application",
+    ]
+    if any(root.is_dir() and any(root.iterdir()) for root in roots):
+        return True
+    try:
+        import winreg
+
+        key = r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as handle:
+            winreg.QueryValueEx(handle, "pv")
+            return True
+    except (ImportError, OSError):
+        return False
 
 
 def _first_existing(paths: list[str]) -> str:
@@ -197,11 +229,13 @@ class Backend:
         if not self._cfg.get("repo_dir") or not Path(self._cfg["repo_dir"]).exists():
             self._cfg["repo_dir"] = _first_existing(REPO_CANDIDATES)
         if not self._cfg.get("llm_gguf") or not Path(self._cfg["llm_gguf"]).exists():
-            try:
-                hits = sorted(Path("D:/env/models/models").glob("Qwen--Qwen3-*GGUF*/**/*.gguf"))
-                self._cfg["llm_gguf"] = str(hits[0]) if hits else ""
-            except OSError:
-                self._cfg["llm_gguf"] = ""
+            hits = []
+            for base in (_RUNTIME / "models", Path("D:/env/models/models")):
+                try:
+                    hits.extend(sorted(base.glob("**/*.gguf")))
+                except OSError:
+                    continue
+            self._cfg["llm_gguf"] = str(hits[0]) if hits else ""
 
     def _push(self, etype: str, **fields) -> None:
         with self._events_lock:
@@ -291,6 +325,13 @@ class Backend:
     def _engine_env(self) -> dict:
         env = os.environ.copy()
         env.update({"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+        models = _RUNTIME / "models"
+        if models.is_dir():
+            env["MEETINGVAR_MODELS"] = str(models)
+        for candidate in (_RUNTIME / "bin" / "ffmpeg.exe", _RUNTIME / "ffmpeg.exe"):
+            if candidate.is_file():
+                env["MEETINGVAR_FFMPEG"] = str(candidate)
+                break
         return env
 
     def _llm_env(self, provider: str | None = None, purpose: str = "reading") -> dict:
@@ -529,7 +570,7 @@ class Backend:
             parsed = urlparse(base)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
                 return {"ok": False, "error": "API地址须为http/https地址，不要将密钥写入URL"}
-        cmd += ["--device", self._cfg.get("device", "cuda"), "--no-ask-speakers", "--interest", interest]
+        cmd += ["--device", self._cfg.get("device", "auto"), "--no-ask-speakers", "--interest", interest]
         cmd += ["--source", self._cfg.get("audio_source", "both")]
         engine = self._cfg.get("asr_engine", "xfyun_rtasr")
         if engine not in {"local", "xfyun", "xfyun_rtasr"}:
@@ -1515,6 +1556,20 @@ class Backend:
 
 def main() -> None:
     import webview
+
+    if not _webview2_available():
+        message = ("meetingVAR 需要 Microsoft Edge WebView2 Runtime。\n\n"
+                   "请安装 Evergreen WebView2 Runtime 后重新启动：\n"
+                   "https://developer.microsoft.com/microsoft-edge/webview2/")
+        log("[ui] 缺少 WebView2 Runtime，无法创建窗口")
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(None, message, "meetingVAR", 0x10)
+            except Exception:
+                pass
+        return
 
     selftest = "--selftest" in sys.argv
     smoke = "--smoke-engine" in sys.argv

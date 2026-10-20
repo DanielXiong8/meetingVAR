@@ -20,8 +20,10 @@ raw 帧无自描述头，尺寸/帧率/帧数/预算用量落在 meta.json（异
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -31,7 +33,7 @@ from .. import config
 
 
 _KNOWN_FFMPEG = [
-    # yt-dlp 附带版（winget 包），PATH 没配时也能发现
+    # yt-dlp 附带版（winget 包）仅作最后兜底；新机器不应依赖它。
     Path.home() / "AppData/Local/Microsoft/WinGet/Packages",
 ]
 
@@ -39,6 +41,30 @@ FPS_FLOOR = 1.0  # 预算折算的最低帧率；低于此值由硬上限提前�
 
 
 def _ffmpeg() -> str | None:
+    """Find an app-owned ffmpeg first; host PATH/installed apps are last resort."""
+    override = os.environ.get("MEETINGVAR_FFMPEG", "").strip()
+    if override and Path(override).is_file():
+        return str(Path(override))
+    candidates = []
+    if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", None):
+        candidates.append(Path(sys._MEIPASS) / "bin" / "ffmpeg.exe")
+    candidates += [
+        Path(sys.executable).resolve().parent / "ffmpeg.exe",
+        Path(__file__).resolve().parents[3] / "runtime" / "bin" / "ffmpeg.exe",
+        Path(__file__).resolve().parents[3] / "bin" / "ffmpeg.exe",
+        Path(__file__).resolve().parents[3] / "desktop" / "assets" / "bin" / "ffmpeg.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    try:
+        import imageio_ffmpeg
+
+        packaged = Path(imageio_ffmpeg.get_ffmpeg_exe())
+        if packaged.is_file():
+            return str(packaged)
+    except (ImportError, OSError, RuntimeError):
+        pass
     found = shutil.which("ffmpeg")
     if found:
         return found

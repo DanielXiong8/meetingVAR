@@ -506,7 +506,7 @@ async function openFilePreview(rel) {
     }
     const lines = text.split(String.fromCharCode(10)).map((x) => x.endsWith(String.fromCharCode(13)) ? x.slice(0, -1) : x);
     const shown = lines.slice(0, 6000);
-    const richText = ["pdf", "docx", "pptx", "doc", "ppt", "xls"].includes(r.kind);
+    const richText = ["pdf", "docx", "pptx", "doc", "ppt", "xls", "rtf"].includes(r.kind);
     const note = r.truncated || lines.length > shown.length
       ? `仅显示前 ${shown.length} 行 / 200,000 字符，完整内容请用系统应用打开。`
       : (richText ? "这是提取的文本预览；完整排版请用系统应用打开。" : "");
@@ -1209,7 +1209,7 @@ async function loadConfig() {
   state.cfg = cfg;
   $("cfgPy").value = cfg.engine_python || "";
   $("cfgRepo").value = cfg.repo_dir || "";
-  $("cfgDevice").value = cfg.device || "cuda";
+  $("cfgDevice").value = cfg.device || "auto";
   $("cfgGguf").value = cfg.llm_gguf || "";
   $("cfgInterestMode").value = cfg.interest_mode || "api";
   $("interestFocus").value = cfg.interest_focus || "";

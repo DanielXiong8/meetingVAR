@@ -147,7 +147,7 @@ def cmd_read_project_file(folder: Path, relative: str) -> dict:
         listing = zip_entries(path)
         result.update(entry_count=listing["count"], entries=listing["entries"])
         return result
-    if kind == "pdf" or kind in {"docx", "pptx", "doc", "ppt", "xls"}:
+    if kind == "pdf" or kind in {"docx", "pptx", "doc", "ppt", "xls", "rtf"}:
         text = read_text_safely(path)
         result.update(text=(text or "")[:200_000],
                       truncated=bool(text and len(text) > 200_000),

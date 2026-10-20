@@ -68,6 +68,52 @@ class SafeReadTests(unittest.TestCase):
         self.assertIn("体育建设书面材料", text)
         self.assertIn("第二段内容", text)
 
+    def test_legacy_doc_text_without_libreoffice(self) -> None:
+        """旧版 .doc 由纯 Python CFB/CLX 解析，不依赖宿主 LibreOffice。"""
+        fixture = ROOT / "tests" / "fixtures" / "legacy" / "sample.doc"
+        text = read_text_safely(fixture)
+        self.assertIn("Legacy Word 正文测试", text or "")
+        self.assertIn("第二段：会议决议与行动项", text or "")
+
+    def test_legacy_ppt_text_without_libreoffice(self) -> None:
+        """旧版 .ppt 由纯 Python TextCharsAtom 扫描，不依赖宿主 LibreOffice。"""
+        fixture = ROOT / "tests" / "fixtures" / "legacy" / "sample.ppt"
+        text = read_text_safely(fixture)
+        self.assertIn("Legacy PPT 标题", text or "")
+        self.assertIn("第一页正文：项目进展", text or "")
+        self.assertIn("第二页内容：周五交付", text or "")
+
+    def test_legacy_xls_text_without_libreoffice(self) -> None:
+        """旧版 .xls 由纯 Python BIFF SST 解析，不依赖宿主 LibreOffice。"""
+        fixture = ROOT / "tests" / "fixtures" / "legacy" / "sample.xls"
+        text = read_text_safely(fixture)
+        self.assertIn("项目", text or "")
+        self.assertIn("负责人", text or "")
+        self.assertIn("周五", text or "")
+
+    def test_pdf_basic_fallback_uses_stdlib_only(self) -> None:
+        """PyMuPDF/pypdf 都缺失时仍能从 Flate 文本流取字，不调用 pdftotext。"""
+        import zlib
+
+        from meetingvar.memory.files import _read_pdf_basic
+
+        stream = b"BT /F1 12 Tf 72 720 Td (Hello PDF fallback) Tj ET"
+        compressed = zlib.compress(stream)
+        p = self.tmp / "plain.pdf"
+        p.write_bytes(
+            b"%PDF-1.4\n1 0 obj\n<< /Length " + str(len(compressed)).encode()
+            + b" /Filter /FlateDecode >>\nstream\n" + compressed
+            + b"\nendstream\nendobj\n%%EOF\n"
+        )
+        self.assertIn("Hello PDF fallback", _read_pdf_basic(p) or "")
+
+    def test_rtf_text_without_host_app(self) -> None:
+        p = self.tmp / "note.rtf"
+        p.write_bytes(b"{\\rtf1\\ansi Hello RTF\\par Second line}")
+        text = read_text_safely(p)
+        self.assertIn("Hello RTF", text or "")
+        self.assertIn("Second line", text or "")
+
     def test_plain_zip_without_docx_returns_none(self) -> None:
         p = self.tmp / "归档.zip"
         with zipfile.ZipFile(p, "w") as z:

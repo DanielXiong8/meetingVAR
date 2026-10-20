@@ -1,6 +1,7 @@
 """meetingVAR 全局配置：路径、模型、采集参数。
 
-约定：模型权重在 D:/env/models（见 SETUP.md），运行期产物在 data/（gitignore）。
+模型优先从应用自带 ``runtime/models`` 读取；没有时才用本机开发路径。
+运行期产物在 data/（gitignore）。
 """
 from __future__ import annotations
 
@@ -10,8 +11,19 @@ from .env import load_local_env
 
 load_local_env()
 
+
+def _models_root() -> Path:
+    configured = os.environ.get("MEETINGVAR_MODELS", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    bundled = Path(__file__).resolve().parents[2] / "runtime" / "models"
+    if bundled.is_dir():
+        return bundled
+    return Path("D:/env/models")
+
+
 # ---- 模型 ----
-MODELS_ROOT = Path(os.environ.get("MEETINGVAR_MODELS", "D:/env/models"))
+MODELS_ROOT = _models_root()
 ASR_MODEL_KEYWORD = os.environ.get("MEETINGVAR_ASR", "SenseVoiceSmall")  # 可换 seaco_paraformer
 VAD_KEYWORD = "fsmn_vad"
 SPK_KEYWORD = "campplus"

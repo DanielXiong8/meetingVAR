@@ -43,10 +43,19 @@ def _ffprobe() -> str | None:
 
 
 def probe_video(path: Path) -> dict:
-    """ffprobe 读取帧数/时长/分辨率（完整性证据）。"""
+    """ffprobe 读取帧数/时长/分辨率；没有 ffprobe 时用 imageio-ffmpeg。"""
     pr = _ffprobe()
     if not pr:
-        return {}
+        try:
+            import imageio_ffmpeg
+
+            meta = next(imageio_ffmpeg.read_frames(str(path)))
+            frames, duration = imageio_ffmpeg.count_frames_and_secs(str(path))
+            width, height = meta.get("size") or (None, None)
+            return {"nb_read_frames": frames, "width": width, "height": height,
+                    "duration": duration}
+        except (ImportError, OSError, RuntimeError, StopIteration, ValueError):
+            return {}
     cmd = [
         pr, "-v", "error", "-count_frames",
         "-select_streams", "v:0",

@@ -42,3 +42,6 @@ Thumbs.db
 /dist_installer/
 meetingVAR.spec
 meetingVAR-setup.spec
+
+# 面向干净 Windows 的可携带运行时（Python/模型/ffmpeg/llama.cpp，GB 级）
+/runtime/

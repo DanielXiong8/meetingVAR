@@ -1,6 +1,7 @@
 """Project file preview API tests: text/texture/image/binary and path safety."""
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,20 @@ class FilePreviewTests(unittest.TestCase):
         self.assertEqual(node["kind"], "zip")
         self.assertEqual(node["kind_short"], "ZIP")
         self.assertTrue(node["mismatch"])
+
+    def test_legacy_office_preview_without_host_apps(self):
+        fixtures = ROOT / "tests" / "fixtures" / "legacy"
+        for name in ("sample.doc", "sample.ppt", "sample.xls"):
+            shutil.copy2(fixtures / name, self.root / name)
+        doc = engine_bridge.cmd_read_project_file(self.root, "sample.doc")
+        ppt = engine_bridge.cmd_read_project_file(self.root, "sample.ppt")
+        xls = engine_bridge.cmd_read_project_file(self.root, "sample.xls")
+        self.assertEqual(doc["kind"], "doc")
+        self.assertIn("Legacy Word 正文测试", doc["text"])
+        self.assertEqual(ppt["kind"], "ppt")
+        self.assertIn("Legacy PPT 标题", ppt["text"])
+        self.assertEqual(xls["kind"], "xls")
+        self.assertIn("负责人", xls["text"])
 
     def test_path_traversal_is_rejected(self):
         for bad in ("../outside_preview.txt", "sub/../../outside_preview.txt",

@@ -9,10 +9,10 @@
 | 类型 | 扩展名 | 方式 |
 |---|---|---|
 | 纯文本/Markdown | `.md/.markdown/.txt/.rst/.log` | UTF-8/BOM/GBK 解码 |
-| PDF | `.pdf` | PyMuPDF `page.get_text`；回退 `pdftotext -layout` |
+| PDF | `.pdf` | PyMuPDF `page.get_text`；回退 `pypdf`（纯 Python）→ 标准库 Flate/文本流兜底 |
 | Word | `.docx` | OOXML `word/document.xml` 解析（零第三方依赖） |
 | PowerPoint | `.pptx` | OOXML 幻灯片 + 备注 `<a:t>` 文本解析 |
-| 旧版 Office | `.ppt/.doc` | LibreOffice headless 转 txt，按 mtime/size 缓存 |
+| 旧版 Office | `.ppt/.doc/.xls` | 纯 Python CFB + Word CLX / PPT TextAtom / XLS BIFF SST |
 | XML/HTML/SVG | `.xml/.html/.htm/.xhtml/.svg` | 文本读取 |
 | 表格 | `.tsv/.csv` | 文本读取 |
 | 代码 | `.py/.js/.ts/.tsx/.jsx/.c/.cpp/.h/.hpp/.java/.go/.rs/.rb/.php/.cs/.swift/.sh/.ps1/.sql/.css/.scss/.vue/.svelte` 等 | 文本读取 |
@@ -26,7 +26,7 @@
 - **视频/音频**：不作为模型输入；查看器可播放小文件，其他用系统应用打开。
 - **扫描版 PDF**：若没有文本层，提取为空；未接 OCR（用户可另用 OCR 工具）。
 - **加密 PDF/旧版 Office**：无法提取时返回空/不支持，查看器提示用系统应用打开。
-- **PPT/DOC**：需要机器安装 LibreOffice；未安装时只能元数据/系统打开。
+- **PPT/DOC/XLS**：常见 97-2003 文件由纯 Python 解析，不要求安装 LibreOffice。
 - 二进制未知格式：查看器显示元数据 + 系统打开。
 
 ## 3. VS Code 式文件查看器
@@ -55,7 +55,7 @@
 ## 5. 边界
 
 - PDF 文本质量取决于文本层；扫描件没有 OCR。
-- PPT/DOC 依赖 LibreOffice，分发安装包不包含 LibreOffice。
+- 常见 PPT/DOC/XLS 由纯 Python 解析，分发不要求 LibreOffice；仅极旧/损坏变体可能无法提取。
 - 15MB 以上图片/音视频不内嵌；查看器只显示元数据。
 - 模型读代码/XML/TSV 时仍受 16K 本地上下文和分块预算限制，不能保证一次读完超大仓库。
 - 真实 UI 文件树点击仍需用户在安装版窗口验收（当前自动化受前台其他窗口影响）。

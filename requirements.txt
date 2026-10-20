@@ -24,5 +24,10 @@ scikit-learn
 # --- C5 · 转写后术语纠错 ---
 pypinyin
 
+# --- 文档读取/媒体编码（Python 轮子，不依赖 LibreOffice/pdftotext/系统 ffmpeg） ---
+pymupdf
+pypdf
+imageio-ffmpeg
+
 # --- 通用 ---
 rich                # CLI 输出美化，spike 脚本用

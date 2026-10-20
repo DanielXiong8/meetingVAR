@@ -18,7 +18,7 @@ import winreg
 from pathlib import Path
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.9.0"
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Programs" / APP_NAME
 REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\meetingVAR"
 LOG_FILE = Path(tempfile.gettempdir()) / "meetingvar_setup.log"
@@ -111,6 +111,10 @@ def install(target_dir: Path, progress=None) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     step("复制程序文件")
     shutil.copy2(payload, target_dir / f"{APP_NAME}.exe")
+    runtime_src = _base() / "runtime"
+    if runtime_src.is_dir():
+        step("复制可携带运行时（Python/模型/ffmpeg）")
+        shutil.copytree(runtime_src, target_dir / "runtime", dirs_exist_ok=True)
     # 把安装器自身复制为卸载器（保留安装包在别处被删后仍可卸载）
     me = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
     shutil.copy2(me, target_dir / "uninstall.exe")

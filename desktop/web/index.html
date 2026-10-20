@@ -311,11 +311,11 @@
               <div class="page-head compact"><div><h1>常规</h1><p>引擎、设备与默认采集源。</p></div></div>
               <div class="card">
                 <label class="field"><span>引擎 Python（meetingvar 所在环境）</span>
-                  <input id="cfgPy" class="input" placeholder="D:\miniconda3\envs\meetingvar\python.exe"></label>
+                  <input id="cfgPy" class="input" placeholder="runtime\python\python.exe（或设置 MEETINGVAR_ENGINE_PYTHON）"></label>
                 <label class="field"><span>仓库目录（引擎代码所在位置）</span>
-                  <input id="cfgRepo" class="input" placeholder="C:\Users\Lenovo\projects\meetingVAR"></label>
+                  <input id="cfgRepo" class="input" placeholder="runtime\repo（或设置 MEETINGVAR_REPO）"></label>
                 <label class="field"><span>设备</span>
-                  <select id="cfgDevice" class="input"><option value="cuda">cuda（GPU，推荐）</option><option value="cpu">cpu（无 GPU 时）</option></select></label>
+                  <select id="cfgDevice" class="input"><option value="auto">auto（有 GPU 用 GPU，否则 CPU）</option><option value="cuda">cuda（强制 GPU）</option><option value="cpu">cpu（强制 CPU）</option></select></label>
                 <label class="field"><span>音频采集源</span>
                   <select id="cfgSource" class="input">
                     <option value="both">系统声音 + 麦克风（推荐：别人说的 + 你说的）</option>

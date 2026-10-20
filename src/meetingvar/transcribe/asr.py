@@ -23,11 +23,27 @@ def clean(text: str) -> str:
 class ASR:
     """懒加载的 FunASR 管线（asr+vad+spk+punc）+ 独立声纹模型（句级 embedding）。"""
 
-    def __init__(self, device: str = "cuda", with_embeddings: bool = True):
-        self._device = device
+    def __init__(self, device: str = "auto", with_embeddings: bool = True):
+        self._device = self._resolve_device(device)
         self.with_embeddings = with_embeddings  # 公开：pipeline 据此决定 emb 缺失时的降级策略
         self._model = None
         self._sv = None
+
+    @staticmethod
+    def _resolve_device(device: str) -> str:
+        """A clean machine may have no CUDA runtime; auto falls back to CPU."""
+        if device not in {"auto", "cuda", "cpu"}:
+            return "cpu"
+        if device == "cpu":
+            return "cpu"
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda"
+        except (ImportError, OSError, RuntimeError):
+            pass
+        return "cpu"
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:

@@ -22,10 +22,12 @@ class _StubHandler(BaseHTTPRequestHandler):
     ).encode()
 
     def do_POST(self):  # noqa: N802
+        body = json.dumps({"choices": [{"message": {"content": self.body_out.decode()}}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps({"choices": [{"message": {"content": self.body_out.decode()}}]}).encode())
+        self.wfile.write(body)
 
     def log_message(self, *args):  # 静默
         pass

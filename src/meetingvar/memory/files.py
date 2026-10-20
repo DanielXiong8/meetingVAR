@@ -4,19 +4,21 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
+
+from .legacy_office import (extract_doc_text, extract_ppt_text, extract_rtf_text,
+                            extract_xls_text)
 
 SKIP_DIRS = {".git", ".venv", "venv", ".tools", ".runtimes", "node_modules",
              "__pycache__", "dist", "build", ".zcode", ".secrets"}
 
 # Text-like files the agent may read. PDF/Office are converted to text.
 SUPPORTED_TEXT_SUFFIXES = frozenset({
-    ".md", ".markdown", ".txt", ".rst", ".log",
-    ".pdf", ".docx", ".doc", ".pptx", ".ppt",
+    ".md", ".markdown", ".txt", ".rst", ".log", ".rtf",
+    ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xls",
     ".xml", ".html", ".htm", ".xhtml", ".svg",
     ".tsv", ".csv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte",
@@ -55,6 +57,7 @@ _TYPE_INFO = {
     "text": ("文本", "TXT", True),
     "pdf": ("PDF", "PDF", True),
     "docx": ("Word 文档", "DOCX", True),
+    "rtf": ("RTF 文档", "RTF", True),
     "pptx": ("PowerPoint 演示文稿", "PPTX", True),
     "xlsx": ("Excel 工作簿", "XLSX", True),
     "doc": ("Word 97-2003 文档", "DOC", True),
@@ -115,6 +118,8 @@ def detect_file_type(path: Path, suffix: str | None = None) -> dict:
             actual_suffix = {"docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx", "zip": ".zip"}[kind]
         elif head.startswith(b"%PDF-"):
             kind, actual_suffix = "pdf", ".pdf"
+        elif head.startswith(b"{\\rtf"):
+            kind, actual_suffix = "rtf", ".rtf"
         elif head[:8] == _OLE_MAGIC:
             kind = suffix[1:] if suffix in {".doc", ".ppt", ".xls"} else "ole"
             actual_suffix = "." + kind if kind in {"doc", "ppt", "xls"} else suffix
@@ -149,6 +154,8 @@ def detect_file_type(path: Path, suffix: str | None = None) -> dict:
             kind, actual_suffix = "audio", ".flac"
         elif head[:4] == b"OggS":
             kind, actual_suffix = "audio", ".ogg"
+        elif suffix == ".rtf":
+            kind = "rtf"
         elif suffix in SUPPORTED_TEXT_SUFFIXES:
             kind = "text"
         elif suffix in _ARCHIVE_SUFFIXES:
@@ -197,8 +204,9 @@ def read_text_safely(path: Path, max_bytes: int = 8_000_000) -> str | None:
 
     Content wins over extension: a renamed DOCX/PPTX is still parsed, while a
     plain ZIP named ``.txt`` stays binary. Plain text is decoded with
-    BOM/UTF-8/GBK fallbacks. PDF uses PyMuPDF when available, then pdftotext.
-    Legacy PPT/DOC use LibreOffice headless conversion with a temp cache.
+    BOM/UTF-8/GBK fallbacks. PDF uses PyMuPDF, then pypdf, then a standard
+    library stream parser. Legacy DOC/PPT/XLS use pure-Python CFB parsers.
+    No office suite or external converter is invoked.
     """
     path = Path(path)
     info = detect_file_type(path)
@@ -210,8 +218,10 @@ def read_text_safely(path: Path, max_bytes: int = 8_000_000) -> str | None:
             return _read_pptx(path)
         if kind == "pdf":
             return _read_pdf(path)
+        if kind == "rtf":
+            return extract_rtf_text(path)
         if kind in {"doc", "ppt", "xls", "ole"}:
-            return _read_libreoffice(path)
+            return _read_legacy_office(path)
         if kind != "text":
             return None
         data = path.read_bytes()[:max_bytes]
@@ -280,6 +290,102 @@ def _read_pptx(path: Path) -> str | None:
         return None
 
 
+def _pdf_unescape(raw: bytes) -> bytes:
+    out = bytearray()
+    index = 0
+    while index < len(raw):
+        ch = raw[index]
+        if ch != 0x5C or index + 1 >= len(raw):
+            out.append(ch)
+            index += 1
+            continue
+        index += 1
+        nxt = raw[index]
+        mapping = {ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("b"): 8,
+                   ord("f"): 12, ord("("): 40, ord(")"): 41, ord("\\"): 92}
+        if nxt in mapping:
+            out.append(mapping[nxt])
+            index += 1
+        elif 48 <= nxt <= 55:
+            digits = bytearray()
+            while index < len(raw) and len(digits) < 3 and 48 <= raw[index] <= 55:
+                digits.append(raw[index])
+                index += 1
+            out.append(int(digits.decode("ascii"), 8) & 0xFF)
+        elif nxt in (10, 13):
+            index += 1
+            if nxt == 13 and index < len(raw) and raw[index] == 10:
+                index += 1
+        else:
+            out.append(nxt)
+            index += 1
+    return bytes(out)
+
+
+def _pdf_string(raw: bytes) -> str:
+    if raw.startswith(b"\xfe\xff"):
+        return raw[2:].decode("utf-16-be", "replace")
+    if raw.startswith(b"\xff\xfe"):
+        return raw[2:].decode("utf-16-le", "replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", "replace")
+
+
+def _read_pdf_basic(path: Path) -> str | None:
+    """Last-resort PDF text reader using only the standard library.
+
+    Handles Flate-compressed content streams and common Tj/TJ operators.  CID
+    fonts without a usable ToUnicode map cannot be decoded; PyMuPDF/pypdf are
+    preferred and are normal Python dependencies, not host applications.
+    """
+    data = path.read_bytes()
+    chunks: list[str] = []
+    for match in re.finditer(rb"(?<!end)stream\r?\n", data):
+        start = match.end()
+        end = data.find(b"endstream", start)
+        if end < 0:
+            break
+        raw = data[start:end].rstrip(b"\r\n")
+        try:
+            stream = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        if b"Tj" not in stream and b"TJ" not in stream and b"'" not in stream:
+            continue
+        text = []
+        for show in re.finditer(
+            rb"(?:\[(?:[^\[\]]|\\.)*\]\s*TJ|"
+            rb"(?:\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>)\s*(?:Tj|'|\"))",
+            stream, re.S,
+        ):
+            body = show.group(0)
+            for literal in re.finditer(rb"\(((?:\\.|[^\\()])*)\)", body, re.S):
+                value = _pdf_string(_pdf_unescape(literal.group(1)))
+                if value:
+                    text.append(value)
+            for hex_string in re.finditer(rb"<([0-9A-Fa-f\s]+)>", body):
+                digits = re.sub(rb"\s+", b"", hex_string.group(1))
+                if len(digits) % 2:
+                    digits += b"0"
+                try:
+                    value = _pdf_string(bytes.fromhex(digits.decode("ascii")))
+                except ValueError:
+                    continue
+                if value:
+                    text.append(value)
+            if b"TJ" in body:
+                text.append(" ")
+        if text:
+            chunks.append("".join(text))
+    result = re.sub(r"[ \t]{2,}", " ", "\n".join(chunks)).strip()
+    if not result:
+        return None
+    printable = sum(1 for ch in result if ch.isprintable() or ch in "\n\t")
+    return result if printable / max(1, len(result)) > 0.75 else None
+
+
 def _read_pdf(path: Path) -> str | None:
     try:
         try:
@@ -295,32 +401,27 @@ def _read_pdf(path: Path) -> str | None:
             return text
     except Exception:
         pass
-    executable = shutil.which("pdftotext")
-    if not executable:
-        return None
     try:
-        result = subprocess.run([executable, "-layout", str(path), "-"],
-                                capture_output=True, timeout=45)
-        if result.returncode == 0:
-            return result.stdout.decode("utf-8", "replace").strip() or None
-    except (OSError, subprocess.SubprocessError):
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        if text.strip():
+            return text
+    except Exception:
         pass
-    return None
+    try:
+        return _read_pdf_basic(path)
+    except (OSError, ValueError, zlib.error):
+        return None
 
 
-def _soffice() -> str | None:
-    found = shutil.which("soffice")
-    if found:
-        return found
-    for candidate in (r"C:\Program Files\LibreOffice\program\soffice.exe",
-                      r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"):
-        if Path(candidate).is_file():
-            return candidate
-    return None
+def _read_legacy_office(path: Path) -> str | None:
+    """Legacy PPT/DOC/XLS text with pure Python, cached by source mtime/size.
 
-
-def _read_libreoffice(path: Path) -> str | None:
-    """PPT/DOC legacy conversion, cached by source mtime/size."""
+    No office suite is required or invoked.  The function name is retained for
+    callers and caches created before 0.9.0.
+    """
     key = _cache_key(path)
     cached = _cache_dir() / f"{key}.txt"
     try:
@@ -328,27 +429,20 @@ def _read_libreoffice(path: Path) -> str | None:
             return cached.read_text(encoding="utf-8", errors="replace").strip() or None
     except OSError:
         pass
-    executable = _soffice()
-    if not executable:
-        return None
-    with tempfile.TemporaryDirectory(prefix="mv_office_") as tmp:
+    text = None
+    try:
+        # Content is checked in order; each parser returns None for other formats.
+        text = extract_doc_text(path)
+        if not text:
+            text = extract_ppt_text(path)
+        if not text:
+            text = extract_xls_text(path)
+    except (OSError, ValueError):
+        text = None
+    if text:
         try:
-            result = subprocess.run(
-                [executable, "--headless", "--nologo", "--norestore", "--nolockcheck",
-                 "--convert-to", "txt:Text", "--outdir", tmp, str(path)],
-                capture_output=True, timeout=60,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        candidates = list(Path(tmp).glob("*.txt"))
-        if not candidates:
-            return None
-        try:
-            text = candidates[0].read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                cached.write_text(text, encoding="utf-8")
-            return text or None
+            cached.write_text(text, encoding="utf-8")
         except OSError:
-            return None
+            pass
+        return text
+    return None
