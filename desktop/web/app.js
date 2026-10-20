@@ -488,6 +488,7 @@ async function openFilePreview(rel) {
   }
 }
 async function scanProject(path) {
+  const projectChanged = state.project !== path;
   state.project = path;
   resetUnderstand();  // 换项目：清空全库理解卡片（结果属于旧项目）
   $("projPath").textContent = path;
@@ -532,7 +533,7 @@ async function scanProject(path) {
   updateComposer();
   await renderSidebar();
   await loadConversations();
-  newChat();
+  if (projectChanged) newChat();
 }
 function updateComposer() {
   const cfg = state.cfg || {};
@@ -634,9 +635,11 @@ function newChat() {
   $("chatThread").hidden = true;
   $("homeHero").hidden = false;
   $("chatState").textContent = "新对话";
-  $("pageTitle").textContent = "新任务";
   $("homeAsk").value = "";
-  $("homeAsk").focus();
+  if (!document.body.classList.contains("panel-open")) {
+    $("pageTitle").textContent = "新任务";
+    $("homeAsk").focus();
+  }
 }
 async function ensureChat() {
   if (state.chatId) return state.chatId;

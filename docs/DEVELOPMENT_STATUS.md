@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `e3ecb86` | Agent 闭环 + 0.3.0 ReAct + 0.4.0 深色工作区 + 0.5.0 对话式 Agent + 0.7.0 摘要/审批 + 0.8.0 多模态文件/查看器；已推送并打 `v0.2.1`~`v0.8.0` tag。 |
+| `feat/agent-runtime` | `e3ecb86` + 未推送提交 | Agent 闭环 + 0.3.0 ReAct + 0.4.0 深色工作区 + 0.5.0 对话式 Agent + 0.7.0 摘要/审批 + 0.8.0 多模态文件/查看器 + 0.8.1 项目文件树优先与标题保持；已打 `v0.2.1`~`v0.8.0` tag，0.8.1 待推送。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.8.0。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.8.1。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.8.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.8.1；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x~0.8.0发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.8.0` | 0.8.0 为当前版，含多模态文件读取、VS Code 式查看器、对话式 UI、摘要技能与可审批动作；旧版保留。 |
-| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.8.0混淆。 |
+| 0.2.x~0.8.1发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.8.1` | 0.8.1 为当前版，含多模态文件读取、VS Code 式查看器、项目树优先布局、对话式 UI、摘要技能与可审批动作；旧版保留。 |
+| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.8.1 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -58,7 +58,7 @@
 
 课堂实验产物在工作区 `C:\Users\Lenovo\.zcode\workspace\default`：`test3_judge_argmax_2130-2330.mp4`（约343MB）、转写、裁判JSONL及报告。原始课堂媒体不随源码包分发。
 
-## 5. 验证快照（2026-10-20 傍晚，0.8.0）
+## 5. 验证快照（2026-10-20 傍晚，0.8.1）
 
 - 完整Python3.10依赖环境：469项测试、**0跳过、469通过**（64.72秒），`compileall`通过，完整CLI仿真通过（14.20秒）。
 - 最小依赖CI模拟：469项发现，428项通过，41项按依赖跳过，编译通过。
@@ -68,6 +68,8 @@
 - 0.2.1真实窗口复测：本地模型生成并保存关注清单、19个有转写会话过滤、0事实问答、会后0候选与模型停机错误提示、设置页本地/自定义厂商验证、短会开始/结束（RTASR连接、8句字幕、录屏缓冲约7.8MB、零命中丢弃）均通过。详见 `docs/BUGFIX_0.2.1.md`。
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
+- 0.8.1 安装版实测：项目抽屉在窄窗口先把“项目文件”树放在最上方，点击图片显示内嵌图片、点击 DOCX 显示带行号的提取文本与“用系统应用打开”；扫描/刷新项目不再把页标题改成“新任务”，也不再抢走隐藏 Composer 的焦点。完整 469 项测试通过（66.96 秒），`compileall` 与 CLI 仿真通过；安装后 `--selftest` 通过（0.8.1）。详见 `docs/FILE_VIEWER_UX_0.8.1.md`。
+- 0.8.1安装包：`meetingVAR-setup-0.8.1.exe` SHA256 `0c5d5e79cc1a0a4c3f911862bddc7b0b504d5f304b26eef96bd71b7bf919014b`；内置 `meetingVAR.exe` SHA256 `9032532733d866241874a5dd573247ecfb7b9c579141440f1d5dbc8b04ed0866`。
 - 0.8.0 多模态文件读取/查看器：PDF（PyMuPDF/pdftotext）、DOCX、PPTX、PPT/DOC（LibreOffice）、XML/TSV/代码等统一文本抽取；项目树点击文件打开右侧查看器（文本行号、图片、PDF/Office 提取文本、音视频、系统打开）；路径越界与符号链接拒绝。实测 PDF 24,938 字、DOCX 21,996 字、PPTX 幻灯片+备注、834 个可读文件扫描约 33 秒。详见 `docs/FILE_MODALITIES_0.8.0.md`。
 - 0.8.0安装包：`meetingVAR-setup-0.8.0.exe` SHA256 `ef5238ac4bc827541aa0cd0c6af719bc300253b5ca074e20a0c65928e27b0aab`；内置 `meetingVAR.exe` SHA256 `9a402a7736dba70c43f36fc5b6556629df330222bafa8f4ab6cce6ebadef4092`；安装后 `--selftest` 通过。
 - 0.7.0 会议技能/审批动作：重复工具调用按名称+参数检测（修复同参数 search_sessions 连跑5次耗尽预算）；最近会议总结走专用 digest skill（5场约7秒、13引用）；会前关注/会后事实/会议起停/全库理解/词表写入变为对话内待确认动作卡；项目/会议库/设置改为覆盖在对话上的抽屉。详见 `docs/CHAT_ACTIONS_0.7.0.md`。

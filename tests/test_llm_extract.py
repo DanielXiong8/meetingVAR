@@ -72,18 +72,28 @@ class LlmExtractTests(unittest.TestCase):
         config.LLM_BASE_URL = f"http://127.0.0.1:{srv.server_port}/v1"
         config.LLM_MODEL = "stub"
         config.LLM_API_KEY = "stub"
+        from meetingvar import llm as llm_module
+        calls = []
+
+        def recording_chat(prompt, *args, **kwargs):
+            result = llm_module.chat_result(prompt, *args, **kwargs)
+            calls.append(result)
+            return result["content"] if result["ok"] else None
+
         with tempfile.TemporaryDirectory() as sandbox:
             old_data = config.DATA_DIR
             config.DATA_DIR = Path(sandbox)
             try:
-                r = llm_extract(SAMPLE)
+                with patch.object(llm_module, "chat", side_effect=recording_chat):
+                    r = llm_extract(SAMPLE)
             finally:
                 config.DATA_DIR = old_data
                 config.LLM_BASE_URL, config.LLM_MODEL, config.LLM_API_KEY = old
                 srv.shutdown()
                 srv.server_close()
                 thread.join(timeout=2)
-        self.assertIsNotNone(r, "桩端点存在时不应回落 None")
+        diagnostics = [(c.get("error_code"), c.get("http_status")) for c in calls]
+        self.assertIsNotNone(r, f"桩端点存在时不应回落 None: {diagnostics}")
         terms, persons = r
         self.assertIn("测序污染", terms)
         self.assertIn("LLM", terms["测序污染"])

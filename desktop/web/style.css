@@ -382,7 +382,8 @@ select.input { padding-right: 24px; }
 @media (max-width: 1120px) {
   .workspace { padding: 22px 20px 32px; }
   .meeting-workspace, .project-grid { grid-template-columns: 1fr; }
-  .project-tree-card { position: static; }
+  /* 窄抽屉里文件树优先：点开项目先看到可点开的文件，而不是先滚过词表。 */
+  .project-tree-card { position: static; order: -1; }
   .usage-metrics { grid-template-columns: repeat(3, 1fr); }
   .usage-metric:nth-child(3) { border-right: 0; }
 }
