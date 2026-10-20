@@ -527,6 +527,15 @@ def cmd_agent_chat_send(folder: Path, conversation_id: str, message: str) -> dic
     except ChatError as exc:
         return {"ok": False, "error_code": exc.code, "error": exc.message}
 
+
+def cmd_agent_chat_action(folder: Path, conversation_id: str, action_id: str) -> dict:
+    from meetingvar.agent.chat import ChatAgent, ChatError
+
+    try:
+        return ChatAgent(folder, conversation_id=conversation_id).execute_action(action_id)
+    except ChatError as exc:
+        return {"ok": False, "error_code": exc.code, "error": exc.message}
+
 def cmd_agent_memory(folder: Path, query: str = "") -> dict:
     from meetingvar.agent.memory import FactStore
 
@@ -595,6 +604,8 @@ def main() -> None:
             payload = cmd_agent_chat_load(Path(sys.argv[2]), sys.argv[3])
         elif cmd == "agent_chat_send":
             payload = cmd_agent_chat_send(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+        elif cmd == "agent_chat_action":
+            payload = cmd_agent_chat_action(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         elif cmd == "agent_memory":
             payload = cmd_agent_memory(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
         else:

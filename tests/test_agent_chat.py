@@ -106,6 +106,61 @@ class ChatTests(unittest.TestCase):
         loaded = ChatStore(self.root).load(result["conversation_id"])
         self.assertEqual(loaded["messages"][-1]["role"], "assistant")
 
+    def test_recent_meeting_summary_uses_digest_skill(self):
+        script = ScriptLLM([
+            _content(json.dumps({
+                "summary": "讨论了交付安排。",
+                "decisions": [{"title": "周五交付初版", "evidence_turns": ["turn_1"]}],
+                "actions": [], "open_questions": [],
+            }, ensure_ascii=False))
+        ])
+        agent = ChatAgent(project_root=self.root, data_dir=self.data, llm=script)
+        result = agent.ask("总结最近会议的主要决定")
+        self.assertEqual(result["message"]["mode"], "skill")
+        self.assertIn("周五交付初版", result["message"]["content"])
+        self.assertTrue(result["message"]["citations"])
+        self.assertEqual(result["message"]["citations"][0]["turn_ids"], ["turn_1"])
+
+    def test_chat_action_start_meeting_is_ui_only(self):
+        agent = ChatAgent(project_root=self.root, data_dir=self.data)
+        action = {"id": "a" * 32, "type": "start_meeting", "label": "开始会议",
+                  "payload": {}, "status": "pending", "created_at": "",
+                  "result": ""}
+        agent.store.add_actions(agent.conversation_id, [action])
+        result = agent.execute_action(action["id"])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["ui_only"])
+        self.assertEqual(result["action"], "start_meeting")
+        again = agent.execute_action(action["id"])
+        self.assertFalse(again["ok"], "同一审批操作不能执行两次")
+
+    def test_chat_action_save_focus_writes_project_memory(self):
+        agent = ChatAgent(project_root=self.root, data_dir=self.data)
+        action = {"id": "b" * 32, "type": "save_focus", "label": "保存关注",
+                  "payload": {"items": [{"title": "确认方案", "why": "项目文档"}],
+                              "sources": ["README.md"]},
+                  "status": "pending", "created_at": "", "result": ""}
+        agent.store.add_actions(agent.conversation_id, [action])
+        result = agent.execute_action(action["id"])
+        self.assertTrue(result["ok"], result)
+        focus = self.root / "meetingvar" / "agent_memory" / "focus.json"
+        self.assertTrue(focus.exists())
+        self.assertIn("确认方案", focus.read_text(encoding="utf-8"))
+
+    def test_chat_action_save_terms_merges_keep_terms(self):
+        path = self.root / "meetingvar" / "terms.txt"
+        path.write_text("#!keep 旧词\n", encoding="utf-8")
+        agent = ChatAgent(project_root=self.root, data_dir=self.data)
+        action = {"id": "c" * 32, "type": "save_terms", "label": "写入词表",
+                  "payload": {"terms": ["新词", "旧词"]}, "status": "pending",
+                  "created_at": "", "result": ""}
+        agent.store.add_actions(agent.conversation_id, [action])
+        result = agent.execute_action(action["id"])
+        self.assertTrue(result["ok"], result)
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("#!keep 旧词", text)
+        self.assertIn("#!keep 新词", text)
+
     def test_general_chat_has_no_tools(self):
         script = ScriptLLM(["这是一段普通回答。"])
         agent = ChatAgent(project_root=self.root, data_dir=self.data, llm=script)

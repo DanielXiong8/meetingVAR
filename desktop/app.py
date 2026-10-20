@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.7.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1460,6 +1460,14 @@ class Backend:
         if not self._agent_valid_session(conversation_id):
             return {"ok": False, "error": "对话 ID 无效"}
         return self._agent_bridge(["agent_chat_load", folder, conversation_id], timeout=30)
+
+    def chat_action(self, folder: str, conversation_id: str, action_id: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not self._agent_valid_session(conversation_id) or not self._agent_valid_session(action_id):
+            return {"ok": False, "error": "对话或操作 ID 无效"}
+        return self._agent_bridge(["agent_chat_action", folder, conversation_id, action_id],
+                                  timeout=180)
 
     def chat_send(self, folder: str, conversation_id: str, message: str) -> dict:
         if not folder or not Path(folder).is_dir():

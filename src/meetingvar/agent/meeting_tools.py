@@ -178,6 +178,113 @@ def _read_project_plan(args: dict, context: ToolContext) -> dict:
             "notes": result.get("notes", [])[:12],
             "files": result.get("files", [])[:20], "error": result.get("error")}
 
+
+def _propose_focus(args: dict, context: ToolContext) -> dict:
+    from .focus import FocusAgent
+
+    agent = FocusAgent(project_root=context.project_root, dry_run=True,
+                       approval=lambda items: True)
+    report = agent.run()
+    if not report.get("ok") or not report.get("items"):
+        return {"ok": False, "error": report.get("error") or "没有生成关注点",
+                "error_code": report.get("error_code") or "focus_failed"}
+    return {"ui_action": "save_focus", "label": f"保存 {len(report['items'])} 条会前关注",
+            "payload": {"items": report["items"], "sources": report.get("sources", [])},
+            "summary": "会前关注清单已生成，确认后写入项目记忆。"}
+
+
+def _propose_facts(args: dict, context: ToolContext) -> dict:
+    import json
+    from .. import config
+    from .postmeeting import PostMeetingAgent, load_transcript
+
+    session_id = str(args.get("session_id") or "")
+    catalog = _catalog(context)
+    if not session_id:
+        for row in catalog.list_sessions(limit=20):
+            try:
+                if catalog.load(row["session_id"])["turns"]:
+                    session_id = row["session_id"]
+                    break
+            except (OSError, ValueError):
+                continue
+    if not session_id:
+        return {"ok": False, "error": "没有可提取事实的会议", "error_code": "no_session"}
+    path = Path(catalog.pool) / session_id / "transcript.json"
+    try:
+        transcript = load_transcript(path)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "该会话没有可读转写", "error_code": "no_transcript"}
+    agent = PostMeetingAgent(session_id=session_id, transcript=transcript,
+                             project_root=context.project_root, dry_run=True,
+                             approval=lambda item, evidence: True)
+    report = agent.preview()
+    if not report.get("ok"):
+        return {"ok": False, "error": report.get("error") or "事实提取失败",
+                "error_code": report.get("error_code") or "facts_failed"}
+    if not report.get("items"):
+        return {"ok": False, "error": "这次会议没有可写入的明确事实", "error_code": "no_facts"}
+    return {"ui_action": "save_meeting_facts",
+            "label": f"写入 {len(report['items'])} 条会议事实",
+            "payload": {"session_id": session_id, "items": report["items"]},
+            "summary": f"{session_id} 已提取 {len(report['items'])} 条候选事实。"}
+
+
+def _propose_meeting(args: dict, context: ToolContext) -> dict:
+    return {"ui_action": "start_meeting", "label": "开始会议",
+            "payload": {"project": str(context.project_root)},
+            "summary": "请求开始会议；需要你在对话里确认。"}
+
+
+def _propose_stop(args: dict, context: ToolContext) -> dict:
+    return {"ui_action": "stop_meeting", "label": "结束会议",
+            "payload": {}, "summary": "请求结束会议；需要你在对话里确认。"}
+
+
+def _propose_reading(args: dict, context: ToolContext) -> dict:
+    return {"ui_action": "start_project_reading", "label": "开始全库理解",
+            "payload": {"project": str(context.project_root)},
+            "summary": "请求开始全库理解；需要你在对话里确认。"}
+
+
+def _read_project_terms(args: dict, context: ToolContext) -> dict:
+    import json
+
+    terms = []
+    try:
+        payload = json.loads((context.project_root / "meetingvar" / "interest_context.json").read_text(encoding="utf-8"))
+        for item in (payload.get("terms") or [])[:80]:
+            if isinstance(item, dict) and item.get("term"):
+                terms.append({"term": str(item["term"])[:80],
+                              "why": str(item.get("why", ""))[:200],
+                              "count": item.get("count", 0)})
+    except (OSError, ValueError):
+        pass
+    existing = []
+    try:
+        for line in (context.project_root / "meetingvar" / "terms.txt").read_text(encoding="utf-8").splitlines():
+            if line.startswith("#!keep "):
+                existing.append(line[len("#!keep "):].strip())
+    except OSError:
+        pass
+    return {"candidates": terms, "confirmed_terms": existing,
+            "hint": "这些是全库理解候选；确认后用 save_project_terms 写入 #!keep 词表"}
+
+
+def _propose_terms(args: dict, context: ToolContext) -> dict:
+    terms = args.get("terms")
+    if not isinstance(terms, list) or not terms:
+        return {"ok": False, "error": "没有选择要写入的词", "error_code": "empty_terms"}
+    clean = []
+    for value in terms[:80]:
+        if isinstance(value, str) and value.strip():
+            clean.append(value.strip()[:80])
+    if not clean:
+        return {"ok": False, "error": "没有有效词", "error_code": "empty_terms"}
+    return {"ui_action": "save_terms", "label": f"写入 {len(clean)} 个确认词",
+            "payload": {"terms": clean},
+            "summary": "确认后把词合并写入项目 #!keep 词表。"}
+
 def build_meeting_registry(*, trace=None) -> ToolRegistry:
     """Register the read-only tool surface. Write tools stay in the controlled workflow."""
     registry = ToolRegistry(trace=trace)
@@ -286,5 +393,61 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
         input_schema={"type": "object", "additionalProperties": False,
                       "properties": {}},
     ), _read_project_plan)
+
+
+    registry.register(ToolSpec(
+        name="prepare_focus",
+        description="读取项目材料并生成会前关注清单候选；不会直接写入，确认后在对话卡片里保存",
+        read_only=True, side_effect_scope="none", timeout_s=180, max_output_chars=5000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {}},
+    ), _propose_focus)
+
+    registry.register(ToolSpec(
+        name="prepare_meeting_facts",
+        description="从最近或指定会议提取行动项/决定/承诺/风险/未决问题候选；不会直接写入，确认后在对话卡片里保存",
+        read_only=True, side_effect_scope="none", timeout_s=180, max_output_chars=8000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"session_id": {"type": "string", "maxLength": 120}}},
+    ), _propose_facts)
+
+    registry.register(ToolSpec(
+        name="start_meeting",
+        description="请求开始会议；只产生待确认操作，不会自己录音",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=1000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {}},
+    ), _propose_meeting)
+
+    registry.register(ToolSpec(
+        name="stop_meeting",
+        description="请求结束当前会议；只产生待确认操作",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=1000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {}},
+    ), _propose_stop)
+
+    registry.register(ToolSpec(
+        name="start_project_reading",
+        description="请求开始项目全库理解；只产生待确认操作，不直接写词表",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=1000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {}},
+    ), _propose_reading)
+
+
+    registry.register(ToolSpec(
+        name="get_project_terms",
+        description="读取项目全库理解候选词和已确认词表；不写文件",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=8000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {}},
+    ), _read_project_terms)
+
+    registry.register(ToolSpec(
+        name="save_project_terms",
+        description="请求把确认词合并写入项目 #!keep 词表；只产生待确认操作",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=1000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"terms": {"type": "array", "minItems": 1, "maxItems": 80,
+                                                "items": {"type": "string", "minLength": 1,
+                                                          "maxLength": 80}}},
+                      "required": ["terms"]},
+    ), _propose_terms)
 
     return registry

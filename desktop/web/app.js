@@ -54,8 +54,20 @@ function toast(msg, ms = 5000) {
 }
 const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", settings: "设置" };
 function switchPage(name, push = true) {
-  if (!document.getElementById("page-" + name)) return;
-  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));
+  const target = document.getElementById("page-" + name);
+  if (!target) return;
+  const home = document.getElementById("page-home");
+  if (name === "home") {
+    document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-home"));
+    document.body.classList.remove("panel-open");
+    $("panelScrim").hidden = true;
+  } else {
+    if (home) home.classList.add("active");
+    document.querySelectorAll(".page.panel").forEach((p) => p.classList.toggle("active", p === target));
+    target.classList.add("active");
+    document.body.classList.add("panel-open");
+    $("panelScrim").hidden = false;
+  }
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
   const workspace = document.querySelector(".workspace");
   if (workspace) { workspace.scrollLeft = 0; workspace.scrollTop = 0; }
@@ -492,6 +504,26 @@ function chatCitations(msg) {
     : "";
   return `<div class="chat-cites">${stateText ? stateText + " · " : ""}依据：${parts.map((p) => `<span class="cite">${p}</span>`).join("")}</div>`;
 }
+function chatActions(msg) {
+  const actions = msg.actions || [];
+  if (!actions.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "chat-actions";
+  for (const action of actions) {
+    const card = document.createElement("div");
+    card.className = "chat-action-card";
+    const pending = !action.status || action.status === "pending";
+    card.innerHTML = `<span class="action-copy"><b>${agentEsc(action.label || "待确认操作")}</b><span class="muted">${pending ? "需要你确认后执行" : "已处理"}</span></span>`;
+    const btn = document.createElement("button");
+    btn.className = "btn btn-primary chat-action-btn";
+    btn.textContent = pending ? "确认" : "已处理";
+    btn.disabled = !pending;
+    btn.onclick = () => executeChatAction(action.id, btn);
+    card.appendChild(btn);
+    wrap.appendChild(card);
+  }
+  return wrap;
+}
 function chatNode(msg) {
   const row = document.createElement("div");
   row.className = "chat-msg " + (msg.role === "user" ? "user" : "assistant");
@@ -517,6 +549,8 @@ function chatNode(msg) {
     if (tools) body.insertAdjacentHTML("beforeend", tools);
     const cites = chatCitations(msg);
     if (cites) body.insertAdjacentHTML("beforeend", cites);
+    const actions = chatActions(msg);
+    if (actions) body.appendChild(actions);
   }
   row.appendChild(avatar);
   row.appendChild(body);
@@ -599,6 +633,52 @@ async function sendChat(text) {
     state.chatBusy = false;
     $("btnComposerSend").disabled = false;
     $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+  }
+}
+async function executeChatAction(actionId, button) {
+  if (!state.chatId) { toast("对话尚未保存"); return; }
+  button.disabled = true;
+  button.textContent = "执行中…";
+  try {
+    const r = await pywebview.api.chat_action(state.project, state.chatId, actionId);
+    if (!r || !r.ok) {
+      button.disabled = false;
+      button.textContent = "重试";
+      toast("操作失败：" + ((r && r.error) || "未知错误"), 9000);
+      return;
+    }
+    if (r.ui_only) {
+      if (r.action === "start_meeting") {
+        if (state.running) toast("会议已经在进行中");
+        else {
+          switchPage("home", false);
+          openMeetingConsole();
+          $("btnRec").click();
+        }
+      } else if (r.action === "stop_meeting") {
+        if (state.running) $("btnRec").click();
+        else toast("会议未在运行");
+      } else if (r.action === "start_project_reading") {
+        const plan = await pywebview.api.understand_plan(state.project);
+        if (!plan || !plan.ok) {
+          toast("全库理解无法开始：" + ((plan && plan.error) || "未知错误"), 9000);
+        } else {
+          const started = await pywebview.api.understand_start(state.project, 0);
+          toast(started && started.ok ? "已在后台开始全库理解" : "全库理解启动失败", 9000);
+        }
+      }
+    }
+    if (r.message) {
+      state.chatMessages.push(r.message);
+      appendChatMessage(r.message);
+    }
+    button.textContent = "已处理";
+    button.disabled = true;
+    await loadConversations();
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = "重试";
+    toast("操作失败：" + e, 9000);
   }
 }
 async function loadConversations() {
@@ -1420,6 +1500,20 @@ document.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() === "n") { e.preventDefault(); $("btnNewTask").click(); }
   if (e.key.toLowerCase() === "k") { e.preventDefault(); $("btnSideSearch").click(); }
 });
+
+/* 管理页改为对话上方抽屉，不再替换整个工作区 */
+document.querySelectorAll(".page").forEach((page) => {
+  if (page.id === "page-home") return;
+  page.classList.add("panel");
+  const close = document.createElement("button");
+  close.className = "panel-close";
+  close.type = "button";
+  close.textContent = "×";
+  close.title = "关闭";
+  close.onclick = () => switchPage("home");
+  page.prepend(close);
+});
+$("panelScrim").onclick = () => switchPage("home");
 
 /* ---------- 启动 ---------- */
 async function boot() {

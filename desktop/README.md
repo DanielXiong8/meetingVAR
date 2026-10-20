@@ -1,4 +1,12 @@
-# meetingVAR 桌面壳 v0.5.0
+# meetingVAR 桌面壳 v0.7.0
+
+## 0.7.0：可审批会议动作、专用摘要技能与抽屉管理页
+
+重复工具调用按“工具名+参数”检测，不再被不同 call_id 绕过；最近会议总结改为 digest skill，5 场会议约 7 秒完成；会前关注/会后事实/会议起停/全库理解/词表写入变成对话内待确认动作卡；项目/会议库/设置改为覆盖在对话上的抽屉，不再替换聊天工作区。
+
+## 0.6.0：会议技能与可审批动作
+
+最近会议总结改为专用 digest skill，避免通用工具循环耗尽步数；新增会前关注/会后事实/开始会议/停止会议/全库理解的待确认动作卡，模型只能提议，用户确认后才执行。
 
 ## 0.5.0：对话即产品
 
@@ -37,7 +45,7 @@
 - 项目全库理解完成后保存 `meetingvar/interest_context.json`；会中复用该摘要。未完成阅读时只提供已确认词和用户关注事项，不声称读懂全部项目。
 
 会议采集控制台、项目页与会议库。UI 启动独立 CLI 引擎，使用结构化事件显示字幕和采集状态。
-构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.5.0.exe`（安装包，自制、免管理员）。
+构建产物：`meetingVAR.exe`（壳）→ `meetingVAR-setup-0.7.0.exe`（安装包，自制、免管理员）。
 
 ## 字幕与轻量录屏
 
@@ -74,21 +82,21 @@
 | `web/` | 前端三件套（index/style/app.js）：主页 / 项目页 / 会议库 / 设置 / 点名弹窗 / 命中 toast |
 | `assets/make_icon.py` | 生成 icon.ico（多尺寸）+ logo.png |
 | `build/build_exe.bat` | 打包 `dist\meetingVAR.exe`（PyInstaller，需 D:\env\ui-venv） |
-| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.5.0.exe`（内嵌上面的 exe） |
+| `build/build_setup.bat` | 打包安装器 `dist_installer\meetingVAR-setup-0.7.0.exe`（内嵌上面的 exe） |
 | `build/setup_app.py` | 安装器/卸载器三合一：GUI 向导 + `--silent --dir X` + `--uninstall` |
 
 ## 构建
 
 ```bat
 desktop\build\build_exe.bat      :: dist\meetingVAR.exe
-desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.5.0.exe
+desktop\build\build_setup.bat    :: dist_installer\meetingVAR-setup-0.7.0.exe
 ```
 
 安装/卸载（免管理员，装到 %LOCALAPPDATA%\Programs\meetingVAR，建桌面+开始菜单快捷方式）：
 
 ```bat
-meetingVAR-setup-0.5.0.exe                          :: GUI 向导
-meetingVAR-setup-0.5.0.exe --silent --dir D:\apps\mv :: 静默
+meetingVAR-setup-0.7.0.exe                          :: GUI 向导
+meetingVAR-setup-0.7.0.exe --silent --dir D:\apps\mv :: 静默
 "%LOCALAPPDATA%\Programs\meetingVAR\uninstall.exe" --uninstall
 ```
 

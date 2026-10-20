@@ -17,10 +17,12 @@ from typing import Callable
 
 from .. import config
 from ..llm import chat_result
+from .digest_skill import MeetingDigestSkill
 from .loop import AgentLoop
 
 _SAFE_ID = re.compile(r"[0-9a-f]{32}")
 _GREETING = re.compile(r"^(你好|您好|hi|hello|在吗|早上好|下午好|晚上好|谢谢|好的|ok)[!！。.\s]*$", re.I)
+_SUMMARY = re.compile(r"总结|纪要|复盘|主要决定|行动项|未决问题|决议", re.I)
 _MEETING = re.compile(
     r"会议|项目|纪要|交付|决定|承诺|风险|进度|任务|上次|哪次|谁|什么时候|讨论|记录|"
     r"证据|转写|关注|事实|记忆|检索|总结|复盘|安排|负责|截止|方案|评审|结论|行动项|"
@@ -66,7 +68,7 @@ class ChatStore:
         now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         payload = {"version": 1, "id": conversation_id,
                    "title": (title.strip()[:80] or "新对话"),
-                   "created_at": now, "updated_at": now, "messages": []}
+                   "created_at": now, "updated_at": now, "messages": [], "pending_actions": []}
         _atomic_json(self._path(conversation_id), payload)
         return payload
 
@@ -82,6 +84,14 @@ class ChatStore:
             raise ChatError("conversation_unreadable", "conversation format is invalid")
         if not isinstance(payload.get("messages"), list):
             payload["messages"] = []
+        if not isinstance(payload.get("pending_actions"), list):
+            payload["pending_actions"] = []
+        status = {a.get("id"): a.get("status", "pending")
+                  for a in payload.get("pending_actions") or [] if isinstance(a, dict)}
+        for message in payload["messages"]:
+            for action in message.get("actions") or []:
+                if isinstance(action, dict):
+                    action["status"] = status.get(action.get("id"), "pending")
         return payload
 
     def append(self, conversation_id: str, message: dict) -> dict:
@@ -118,6 +128,32 @@ class ChatStore:
                          "messages": len(messages)})
         rows.sort(key=lambda row: row.get("updated_at", ""), reverse=True)
         return rows[:max(1, min(100, int(limit)))]
+
+    def add_actions(self, conversation_id: str, actions: list[dict]) -> dict:
+        payload = self.load(conversation_id)
+        payload["pending_actions"] = (payload.get("pending_actions") or [])[-40:] + actions
+        payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _atomic_json(self._path(conversation_id), payload)
+        return payload
+
+    def action(self, conversation_id: str, action_id: str) -> dict | None:
+        payload = self.load(conversation_id)
+        for action in payload.get("pending_actions") or []:
+            if action.get("id") == action_id:
+                return action
+        return None
+
+    def set_action_status(self, conversation_id: str, action_id: str, status: str,
+                          result: str = "") -> dict:
+        payload = self.load(conversation_id)
+        for action in payload.get("pending_actions") or []:
+            if action.get("id") == action_id:
+                action["status"] = status
+                action["result"] = result[:500]
+                break
+        payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _atomic_json(self._path(conversation_id), payload)
+        return payload
 
 
 class ChatAgent:
@@ -168,6 +204,71 @@ class ChatAgent:
                             str(result.get("error") or "模型调用失败"))
         return str(result.get("content", "")).strip()
 
+    def execute_action(self, action_id: str) -> dict:
+        action = self.store.action(self.conversation_id, action_id)
+        if not action:
+            return {"ok": False, "error": "操作不存在"}
+        if action.get("status") != "pending":
+            return {"ok": False, "error": "该操作已处理"}
+        kind, payload = action.get("type"), action.get("payload") or {}
+        result = {}
+        try:
+            if kind in {"start_meeting", "stop_meeting", "start_project_reading"}:
+                result = {"ok": True, "ui_only": True, "action": kind}
+                status = "confirmed"
+                text = {"start_meeting": "已确认开始会议。",
+                        "stop_meeting": "已确认结束会议。",
+                        "start_project_reading": "已确认开始全库理解。"}[kind]
+            elif kind == "save_focus":
+                from .focus import FocusAgent
+                agent = FocusAgent(project_root=self.project_root, dry_run=False,
+                                   approval=lambda items: True)
+                result = agent.save_items(payload.get("items") or [],
+                                          payload.get("sources") or [])
+                status = "done" if result.get("ok") else "failed"
+                text = ("关注清单已保存。" if result.get("ok")
+                        else "关注清单保存失败：" + str(result.get("error") or result.get("error_code") or ""))
+            elif kind == "save_meeting_facts":
+                from .postmeeting import PostMeetingAgent, load_transcript
+                session_id = str(payload.get("session_id") or "")
+                path = Path(config.POOL_DIR) / session_id / "transcript.json"
+                transcript = load_transcript(path)
+                agent = PostMeetingAgent(session_id=session_id, transcript=transcript,
+                                         project_root=self.project_root, dry_run=False,
+                                         approval=lambda item, evidence: True)
+                result = agent.save_items(payload.get("items") or [])
+                status = "done" if result.get("ok") else "failed"
+                text = (f"已写入 {result.get('written', 0)} 条会议事实。"
+                        if result.get("ok") else "会议事实写入失败。")
+            elif kind == "save_terms":
+                from ..memory.probe import write_terms
+                terms = [str(t).strip() for t in (payload.get("terms") or []) if str(t).strip()]
+                existing = []
+                try:
+                    for line in (self.project_root / "meetingvar" / "terms.txt").read_text(encoding="utf-8").splitlines():
+                        if line.startswith("#!keep "):
+                            existing.append(line[len("#!keep "):].strip())
+                except OSError:
+                    pass
+                merged = list(dict.fromkeys(existing + terms))
+                write_terms(self.project_root, merged)
+                result = {"ok": True, "count": len(terms), "total": len(merged)}
+                status = "done"
+                text = f"已写入 {len(terms)} 个确认词（词表共 {len(merged)} 个）。"
+            else:
+                raise ChatError("unknown_action", "未知操作")
+        except Exception as exc:
+            result = {"ok": False, "error": type(exc).__name__}
+            status = "failed"
+            text = "操作失败：" + type(exc).__name__
+        self.store.set_action_status(self.conversation_id, action_id, status, text)
+        assistant = {"role": "assistant", "content": text, "ts": round(time.time(), 3),
+                     "mode": "action", "action_id": action_id, "status": status}
+        self.conversation = self.store.append(self.conversation_id, assistant)
+        return {"ok": bool(result.get("ok")), "ui_only": bool(result.get("ui_only")),
+                "action": kind, "result": result, "message": assistant,
+                "conversation_id": self.conversation_id}
+
     def ask(self, message: str) -> dict:
         text = str(message or "").strip()
         if not text:
@@ -179,12 +280,30 @@ class ChatAgent:
             answer = ("你好，我是 meetingVAR。可以帮你查会议原话、项目记忆和项目进度。"
                       "例如：\n• 上次说周五交付，这次谁改了口？\n• 项目现在有哪些未决问题？\n• 列出最近会议的主要决定。")
             meta = {"mode": "greeting"}
+        elif _SUMMARY.search(text) and re.search(r"最近|每场|会议|这几场", text):
+            digest = MeetingDigestSkill(self.project_root, self.data_dir, limit=5,
+                                        llm=self.llm).run()
+            answer = digest.get("answer") or "根据现有会议记录无法总结。"
+            meta = {"mode": "skill", "citations": digest.get("citations", []),
+                    "observations": digest.get("observations", []),
+                    "usage": digest.get("usage", {}), "plan": digest.get("plan", []),
+                    "grounded": digest.get("grounded"), "answered": digest.get("answered"),
+                    "stop_reason": digest.get("stop_reason", "")}
         elif _MEETING.search(text):
             loop = AgentLoop(project_root=self.project_root, question=text,
                              data_dir=self.data_dir, llm=self.llm, mode="auto",
                              max_steps=self.max_steps, history=history)
             report = loop.run()
             answer = report.get("answer") or "根据现有证据无法回答。"
+            action_rows = []
+            for raw in report.get("ui_actions", []) or []:
+                action_rows.append({"id": uuid.uuid4().hex, "type": raw.get("type"),
+                                    "label": raw.get("label", "待确认操作"),
+                                    "payload": raw.get("payload", {}),
+                                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                    "status": "pending", "result": ""})
+            if action_rows:
+                self.store.add_actions(self.conversation_id, action_rows)
             meta = {"mode": "agent", "citations": report.get("citations", []),
                     "invalid_citations": report.get("invalid_citations", []),
                     "plan": report.get("plan", []),
@@ -192,7 +311,9 @@ class ChatAgent:
                     "usage": report.get("usage", {}),
                     "grounded": report.get("grounded"), "answered": report.get("answered"),
                     "stop_reason": report.get("stop_reason", ""),
-                    "task_id": report.get("task_id", ""), "trace": report.get("trace", "")}
+                    "task_id": report.get("task_id", ""), "trace": report.get("trace", ""),
+                    "actions": [{"id": a["id"], "type": a["type"], "label": a["label"]}
+                                for a in action_rows]}
         else:
             try:
                 answer = self._direct_answer(text)

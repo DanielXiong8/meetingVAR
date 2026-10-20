@@ -440,3 +440,19 @@ select.input { padding-right: 24px; }
   .chat-thread, .composer { width: 100%; }
   .chat-body { max-width: 90%; }
 }
+
+.chat-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.chat-action-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid #3a3a3a; background: #242424; border-radius: 9px; padding: 7px 9px; }
+.chat-action-card .action-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.chat-action-card .action-copy b { font-size: 11px; color: var(--text-2); }
+.chat-action-card .action-copy .muted { font-size: 9px; }
+
+
+/* ---------- management panels as drawers over the conversation ---------- */
+.panel-scrim { position: fixed; top: 50px; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.48); z-index: 45; }
+.page.panel { position: fixed; top: 50px; right: 0; bottom: 0; width: min(1120px, calc(100vw - 268px)); max-width: none; margin: 0; background: var(--bg); border-left: 1px solid #303030; box-shadow: -24px 0 70px rgba(0,0,0,.38); z-index: 50; overflow-y: auto; padding: 28px 34px 40px; display: none; }
+.page.panel.active { display: block; animation: panelin .18s ease; }
+@keyframes panelin { from { transform: translateX(18px); opacity: .4; } to { transform: none; opacity: 1; } }
+.panel-close { position: absolute; top: 14px; right: 16px; width: 28px; height: 28px; border: 1px solid #393939; background: #242424; color: #bbb; border-radius: 7px; font-size: 14px; line-height: 1; z-index: 2; }
+.panel-close:hover { background: #303030; color: #fff; }
+body.panel-open .panel-scrim { display: block; }

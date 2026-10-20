@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.5.0。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.7.0。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.5.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.7.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x/0.3.0/0.4.0/0.5.0发布目录 | `meetingvar_release_0.2.*`、`meetingvar_release_0.3.0`、`meetingvar_release_0.4.0`、`meetingvar_release_0.5.0` | 0.5.0 为当前版，含对话式 ZCode 风格 UI 与企业级 Agent Runtime v2；旧版保留。 |
-| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.5.0混淆。 |
+| 0.2.x~0.7.0发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.7.0` | 0.7.0 为当前版，含对话式 UI、专用摘要技能、可审批会议动作与抽屉管理页；旧版保留。 |
+| 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.7.0混淆。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -58,16 +58,18 @@
 
 课堂实验产物在工作区 `C:\Users\Lenovo\.zcode\workspace\default`：`test3_judge_argmax_2130-2330.mp4`（约343MB）、转写、裁判JSONL及报告。原始课堂媒体不随源码包分发。
 
-## 5. 验证快照（2026-10-20 中午，0.5.0）
+## 5. 验证快照（2026-10-20 下午，0.7.0）
 
-- 完整Python3.10依赖环境：457项测试、**0跳过、457通过**（67.78秒），`compileall`通过，完整CLI仿真通过（15.39秒）。
-- 最小依赖CI模拟：457项发现，416项通过，41项按依赖跳过，编译通过。
+- 完整Python3.10依赖环境：462项测试、**0跳过、462通过**（67.14秒），`compileall`通过，完整CLI仿真通过（15.30秒）。
+- 最小依赖CI模拟：462项发现，421项通过，41项按依赖跳过，编译通过。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
 - Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
 - Agent专项：37项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
 - 0.2.1真实窗口复测：本地模型生成并保存关注清单、19个有转写会话过滤、0事实问答、会后0候选与模型停机错误提示、设置页本地/自定义厂商验证、短会开始/结束（RTASR连接、8句字幕、录屏缓冲约7.8MB、零命中丢弃）均通过。详见 `docs/BUGFIX_0.2.1.md`。
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
+- 0.7.0 会议技能/审批动作：重复工具调用按名称+参数检测（修复同参数 search_sessions 连跑5次耗尽预算）；最近会议总结走专用 digest skill（5场约7秒、13引用）；会前关注/会后事实/会议起停/全库理解/词表写入变为对话内待确认动作卡；项目/会议库/设置改为覆盖在对话上的抽屉。详见 `docs/CHAT_ACTIONS_0.7.0.md`。
+- 0.7.0安装包：`meetingVAR-setup-0.7.0.exe` SHA256 `e81597d5b2e7e3d1c918db9ea23dbe392285a8b08ba016731f9a50de1ec090eb`；内置 `meetingVAR.exe` SHA256 `1b4e297d36796f7e1376405b091dfc6446f0ef368b6c35ed8f1b6d6652264c0a`；安装后 `--selftest` 通过。
 - 0.5.0 对话式 UI：主页为真实会话线程（用户/助手气泡、工具轨迹、引用、会话持久化、侧栏最近对话）；Composer 不再跳转旧 Agent 页；会议纪要/项目进展/技能直接发消息；聊天支持 greetings 本地回复、会议问题有界 ReAct、普通问题直答。安装版实测“p 一在课堂里被记作什么？”返回“p 后面加星号”并引用 `t3_base_B:turn_242`，引用已校验。详见 `docs/CHAT_UI_0.5.0.md`。
 - 0.5.0安装包：`meetingVAR-setup-0.5.0.exe` SHA256 `f2a0cd1a562cc0c84a2fcf94a8351e214bd952d5aaaca3ca5250347aaca64af9`；内置 `meetingVAR.exe` SHA256 `6cb9926c495c164c5c447bedb70ec7019bb9e44e1a522f8a39cffb20347785c6`；安装后 `--selftest` 通过。
 - 0.4.0 UI 重构：ZCode 式深色工作区（左侧项目/会议导航 + 中央 Composer + Agent/会议库/项目/设置分区 + 真实 Token 使用统计）；安装版 0.4.0 已验证主页、项目、Agent、设置/使用统计切换与 1050×680 DIP 窗口尺寸。详见 `docs/UI_REDESIGN_0.4.0.md`。

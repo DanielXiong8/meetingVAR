@@ -153,6 +153,18 @@ class AgentLoopTests(unittest.TestCase):
         self.assertFalse(report["grounded"])
         self.assertFalse(report["answered"])
 
+    def test_identical_tool_call_is_not_executed_twice(self):
+        script = [
+            self._plan(),
+            _tool_call("search_sessions", {"query": "周五"}, "call_1"),
+            _tool_call("search_sessions", {"query": "周五"}, "call_2"),
+            _tool_call("search_sessions", {"query": "周五"}, "call_3"),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=6)
+        report = loop.run()
+        self.assertEqual(report["stop_reason"], "repeated_tool_call")
+        self.assertEqual(report["tool_calls"], 1)
+
     def test_step_budget_stops_the_loop(self):
         script = [
             self._plan(),

@@ -138,6 +138,7 @@ class AgentLoop:
                                   max_output_tokens=self.max_output_tokens,
                                   max_seconds=self.max_seconds)
         self.observations: list[dict] = []
+        self.ui_actions: list[dict] = []
         self.messages: list[dict] = []
         self.plan: list[dict] = []
         self.task = None
@@ -368,6 +369,11 @@ class AgentLoop:
         self.observations.append({"tool": name, "arguments": arguments,
                                   "value": value, "text": text[:4000],
                                   "step": self.budget.steps})
+        if isinstance(value, dict) and value.get("ui_action"):
+            self.ui_actions.append({"type": value["ui_action"],
+                                    "label": value.get("label", value["ui_action"]),
+                                    "payload": value.get("payload", {}),
+                                    "tool": name})
         self.trace.record("agent_tool_observation", tool=name,
                           result_chars=len(text), truncated=bool(result.truncated))
         return {"ok": True, "value": value}, text
@@ -575,6 +581,7 @@ class AgentLoop:
             "tool_calls": self.budget.tool_calls,
             "observations": [{"tool": o["tool"], "arguments": o["arguments"],
                               "step": o["step"]} for o in self.observations],
+            "ui_actions": self.ui_actions,
             "usage": self.trace.usage_totals(), "budget": self.budget.as_dict(),
             "mode": self.mode, "status": status, "stop_reason": stop_reason,
             "elapsed_ms": round((time.monotonic() - getattr(
@@ -652,8 +659,11 @@ class AgentLoop:
             self.budget.consume(reply.get("usage"))
 
             if native and reply.get("tool_calls"):
-                call_key = hashlib.sha256(json.dumps(reply["tool_calls"], sort_keys=True,
-                                                     ensure_ascii=False).encode()).hexdigest()[:16]
+                call_key = hashlib.sha256(json.dumps(
+                    [{"name": c.get("function", {}).get("name", ""),
+                      "arguments": c.get("function", {}).get("arguments", "")}
+                     for c in reply["tool_calls"]], sort_keys=True,
+                    ensure_ascii=False).encode()).hexdigest()[:16]
                 repeated = repeated + 1 if call_key == last_call else 0
                 last_call = call_key
                 self.messages.append(reply["message"])
@@ -664,11 +674,11 @@ class AgentLoop:
                         self.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                                               "name": "unknown", "content": '{"ok":false,"error":"unknown tool"}'})
                         continue
-                    if repeated >= 2:
+                    if repeated >= 1:
                         errors.append({"stage": "tool", "code": "repeated_tool_call"})
                         self.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                                               "name": name, "content": json.dumps(
-                                                  {"ok": False, "error": "repeated tool call; change strategy or finalize"},
+                                                  {"ok": False, "error": "identical tool call already tried; change query/strategy or finalize"},
                                                   ensure_ascii=False)})
                         continue
                     outcome, text = self._run_tool(name, args)
@@ -693,7 +703,7 @@ class AgentLoop:
                     return self._result(status="stopped", stop_reason="no_progress",
                                         final=self._best_effort_final(),
                                         errors=errors + [{"stage": "loop", "code": "no_progress"}])
-                if repeated >= 3:
+                if repeated >= 2:
                     self._save_state("stopped", "repeated_tool_call")
                     self.runtime.fail(self.task, "repeated_tool_call")
                     return self._result(status="stopped", stop_reason="repeated_tool_call",
