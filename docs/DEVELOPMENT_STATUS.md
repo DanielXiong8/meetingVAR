@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `689da23` | 本地 Agent 闭环 + 0.2.x 桌面页/全库理解容错 + 0.3.0 企业级 ReAct Runtime；已推送并打 `v0.2.1`/`v0.2.2`/`v0.3.0` tag。 |
+| `feat/agent-runtime` | `372ad2f` | Agent 闭环 + 0.3.0 ReAct Runtime + 0.4.0 ZCode 式深色工作区；已推送并打 `v0.2.1`/`v0.2.2`/`v0.3.0`/`v0.4.0` tag。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
@@ -39,7 +39,7 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x/0.3.0/0.4.0发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.2.*` 与 `meetingvar_release_0.3.0` | 0.4.0 为当前版，含 ZCode 式深色 UI 与企业级 Agent Runtime v2；0.2.x/0.3.0 保留旧版。 |
+| 0.2.x/0.3.0/0.4.0发布目录 | `meetingvar_release_0.2.*`、`meetingvar_release_0.3.0`、`meetingvar_release_0.4.0` | 0.4.0 为当前版，含 ZCode 式深色 UI 与企业级 Agent Runtime v2；0.2.x/0.3.0 保留旧版。 |
 | 仓库旧构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 早期0.1.0产物，建议确认后归档或清理；不要与0.4.0混淆。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
