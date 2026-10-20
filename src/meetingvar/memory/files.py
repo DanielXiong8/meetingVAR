@@ -49,6 +49,129 @@ def project_files(root: Path, suffixes: set[str]):
 
 
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_ARCHIVE_SUFFIXES = frozenset({".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"})
+_TYPE_INFO = {
+    "text": ("文本", "TXT", True),
+    "pdf": ("PDF", "PDF", True),
+    "docx": ("Word 文档", "DOCX", True),
+    "pptx": ("PowerPoint 演示文稿", "PPTX", True),
+    "xlsx": ("Excel 工作簿", "XLSX", True),
+    "doc": ("Word 97-2003 文档", "DOC", True),
+    "ppt": ("PowerPoint 97-2003", "PPT", True),
+    "xls": ("Excel 97-2003", "XLS", True),
+    "zip": ("ZIP 压缩包", "ZIP", False),
+    "image": ("图片", "IMG", False),
+    "video": ("视频", "VIDEO", False),
+    "audio": ("音频", "AUDIO", False),
+    "ole": ("OLE 复合文档", "OLE", False),
+    "binary": ("二进制文件", "BIN", False),
+    "empty": ("空文件", "EMPTY", False),
+}
+
+
+def _read_head(path: Path, size: int = 64) -> bytes:
+    try:
+        with open(path, "rb") as stream:
+            return stream.read(size)
+    except OSError:
+        return b""
+
+
+def _zip_members_kind(path: Path) -> str:
+    """Distinguish OOXML from a plain zip by central-directory member names."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return "zip"
+    if "word/document.xml" in names:
+        return "docx"
+    if any(re.fullmatch(r"ppt/slides/slide[0-9]+\.xml", name) for name in names):
+        return "pptx"
+    if "xl/workbook.xml" in names:
+        return "xlsx"
+    return "zip"
+
+
+def detect_file_type(path: Path, suffix: str | None = None) -> dict:
+    """Classify by content first, extension second.
+
+    A file named ``.txt`` whose bytes are a ZIP is a ZIP. Office files that were
+    renamed still count as Office and remain readable; a plain archive is not
+    text. ``mismatch`` is only set when the content type has a canonical
+    extension that differs from the name.
+    """
+    path = Path(path)
+    suffix = str(suffix if suffix is not None else path.suffix).lower()
+    head = _read_head(path)
+    if not head:
+        kind, actual_suffix = "empty", suffix
+    else:
+        kind = ""
+        actual_suffix = suffix
+        if head[:4] in _ZIP_MAGICS:
+            kind = _zip_members_kind(path)
+            actual_suffix = {"docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx", "zip": ".zip"}[kind]
+        elif head.startswith(b"%PDF-"):
+            kind, actual_suffix = "pdf", ".pdf"
+        elif head[:8] == _OLE_MAGIC:
+            kind = suffix[1:] if suffix in {".doc", ".ppt", ".xls"} else "ole"
+            actual_suffix = "." + kind if kind in {"doc", "ppt", "xls"} else suffix
+        elif head.startswith(b"\x89PNG\r\n\x1a\n"):
+            kind, actual_suffix = "image", ".png"
+        elif head.startswith((b"GIF87a", b"GIF89a")):
+            kind, actual_suffix = "image", ".gif"
+        elif head.startswith(b"\xff\xd8\xff"):
+            kind, actual_suffix = "image", ".jpg"
+        elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            kind, actual_suffix = "image", ".webp"
+        elif head[:2] == b"BM":
+            kind, actual_suffix = "image", ".bmp"
+        elif head[:4] in (b"II*\x00", b"MM\x00*"):
+            kind, actual_suffix = "image", ".tiff"
+        elif head[:4] == b"\x00\x00\x01\x00":
+            kind, actual_suffix = "image", ".ico"
+        elif len(head) >= 12 and head[4:8] == b"ftyp":
+            if head[8:12] in {b"M4A ", b"M4B "}:
+                kind, actual_suffix = "audio", ".m4a"
+            else:
+                kind, actual_suffix = "video", ".mp4"
+        elif head[:4] == b"\x1aE\xdf\xa3":
+            kind, actual_suffix = "video", ".webm"
+        elif head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+            kind, actual_suffix = "video", ".avi"
+        elif head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+            kind, actual_suffix = "audio", ".wav"
+        elif head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and head[1] in {0xFB, 0xF3, 0xF2}):
+            kind, actual_suffix = "audio", ".mp3"
+        elif head[:4] == b"fLaC":
+            kind, actual_suffix = "audio", ".flac"
+        elif head[:4] == b"OggS":
+            kind, actual_suffix = "audio", ".ogg"
+        elif suffix in SUPPORTED_TEXT_SUFFIXES:
+            kind = "text"
+        elif suffix in _ARCHIVE_SUFFIXES:
+            kind = "zip"
+            actual_suffix = ".zip"
+        else:
+            kind = "binary"
+    label, short, readable = _TYPE_INFO[kind]
+    mismatch = kind not in {"text", "binary", "empty", "ole"} and suffix != actual_suffix
+    return {"kind": kind, "label": label, "short": short, "readable": readable,
+            "actual_suffix": actual_suffix, "mismatch": mismatch}
+
+
+def zip_entries(path: Path, limit: int = 80) -> dict:
+    """List archive members only; never extract them."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+    except (OSError, zipfile.BadZipFile):
+        return {"count": 0, "entries": []}
+    entries = [{"name": info.filename, "size": info.file_size,
+                "dir": info.is_dir()} for info in infos[:limit]]
+    return {"count": len(infos), "entries": entries}
 
 
 def _cache_dir() -> Path:
@@ -72,29 +195,29 @@ def _cache_key(path: Path) -> str:
 def read_text_safely(path: Path, max_bytes: int = 8_000_000) -> str | None:
     """Extract readable text; never raise for binary/corrupt/unsupported files.
 
-    Plain text is decoded with BOM/UTF-8/GBK fallbacks. DOCX/PPTX are parsed from
-    their OOXML zip members. PDF uses PyMuPDF when available, then pdftotext.
+    Content wins over extension: a renamed DOCX/PPTX is still parsed, while a
+    plain ZIP named ``.txt`` stays binary. Plain text is decoded with
+    BOM/UTF-8/GBK fallbacks. PDF uses PyMuPDF when available, then pdftotext.
     Legacy PPT/DOC use LibreOffice headless conversion with a temp cache.
     """
     path = Path(path)
-    suffix = path.suffix.lower()
+    info = detect_file_type(path)
+    kind = info["kind"]
     try:
-        if suffix in IMAGE_SUFFIXES or suffix in VIDEO_SUFFIXES or suffix in AUDIO_SUFFIXES:
-            return None
-        if suffix == ".docx":
+        if kind == "docx":
             return _read_docx(path)
-        if suffix == ".pptx":
+        if kind == "pptx":
             return _read_pptx(path)
-        if suffix == ".pdf":
+        if kind == "pdf":
             return _read_pdf(path)
-        if suffix in {".ppt", ".doc"}:
+        if kind in {"doc", "ppt", "xls", "ole"}:
             return _read_libreoffice(path)
+        if kind != "text":
+            return None
         data = path.read_bytes()[:max_bytes]
     except OSError:
         return None
     if not data:
-        return None
-    if data[:4] in _ZIP_MAGICS:
         return None
     for bom, enc in ((b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
         if data.startswith(bom):

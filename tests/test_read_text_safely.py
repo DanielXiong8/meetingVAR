@@ -1,7 +1,8 @@
-"""健壮文本读取测试（model-free）：二进制伪装 / GBK 回退 / docx 解析 / 回归修复。
+"""健壮文本读取测试（model-free）：内容识别 / GBK 回退 / docx 解析 / 回归修复。
 
 背景（2026-10-15 真机）：一个伪装成 .txt 的 zip 文件曾同时导致
 ① load_memory_docs 严格 utf-8 崩溃（引擎退出码 1）② 词表抽出二进制垃圾词。
+现在按内容识别：伪装成 .txt 的 DOCX 提取正文，普通 ZIP 仍判为非文本。
 """
 from __future__ import annotations
 
@@ -22,11 +23,20 @@ class SafeReadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="mv_safe_"))
 
-    def test_zip_disguised_as_txt_returns_none(self) -> None:
+    def test_ooxml_disguised_as_txt_is_read(self) -> None:
+        """内容优先：伪装成 .txt 的 DOCX 仍可提取正文，不再是二进制。"""
         p = self.tmp / "活动链接.txt"
         with zipfile.ZipFile(p, "w") as z:
             z.writestr("word/document.xml", "<w:p>体育建设</w:p>")
-        self.assertIsNone(read_text_safely(p), "zip 魔数的伪装 txt 必须判为二进制")
+        text = read_text_safely(p)
+        self.assertIsNotNone(text)
+        self.assertIn("体育建设", text)
+
+    def test_plain_zip_disguised_as_txt_returns_none(self) -> None:
+        p = self.tmp / "归档.txt"
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("a.txt", "hello")
+        self.assertIsNone(read_text_safely(p), "普通 zip 不是文本，不解析避免误读")
 
     def test_nul_binary_returns_none(self) -> None:
         p = self.tmp / "bin.txt"

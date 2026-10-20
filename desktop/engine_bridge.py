@@ -21,9 +21,7 @@ _TREE_MAX_DEPTH = 6
 
 def _build_tree(root: Path):
     """VSCode 风格文件树（含被跳过的非文本文件清单）。深度/节点数封顶。"""
-    from meetingvar.memory.files import (SKIP_DIRS, SUPPORTED_TEXT_SUFFIXES,
-                                                IMAGE_SUFFIXES, VIDEO_SUFFIXES, AUDIO_SUFFIXES,
-                                                read_text_safely)
+    from meetingvar.memory.files import SKIP_DIRS, detect_file_type
 
     skipped: list[str] = []
     budget = [_TREE_MAX_NODES]
@@ -51,13 +49,17 @@ def _build_tree(root: Path):
                                   "children": walk(p, depth + 1)})
                 else:
                     suffix = p.suffix.lower()
+                    info = detect_file_type(p, suffix)
                     node = {"name": p.name, "dir": False, "size": p.stat().st_size,
                             "rel": rel, "suffix": suffix,
-                            "readable": suffix in SUPPORTED_TEXT_SUFFIXES,
-                            "image": suffix in IMAGE_SUFFIXES,
-                            "video": suffix in VIDEO_SUFFIXES,
-                            "audio": suffix in AUDIO_SUFFIXES}
-                    if suffix in {".txt", ".md"} and read_text_safely(p) is None:
+                            "actual_suffix": info["actual_suffix"],
+                            "kind": info["kind"], "kind_label": info["label"],
+                            "kind_short": info["short"], "mismatch": info["mismatch"],
+                            "readable": info["readable"],
+                            "image": info["kind"] == "image",
+                            "video": info["kind"] == "video",
+                            "audio": info["kind"] == "audio"}
+                    if suffix in {".txt", ".md"} and not info["readable"]:
                         skipped.append(p.name)
                     nodes.append(node)
             except OSError:
@@ -103,9 +105,7 @@ def _safe_project_path(folder: Path, relative: str) -> Path:
 def cmd_read_project_file(folder: Path, relative: str) -> dict:
     import base64
     import mimetypes
-    from meetingvar.memory.files import (SUPPORTED_TEXT_SUFFIXES, IMAGE_SUFFIXES,
-                                         VIDEO_SUFFIXES, AUDIO_SUFFIXES,
-                                         read_text_safely)
+    from meetingvar.memory.files import detect_file_type, read_text_safely, zip_entries
 
     try:
         path = _safe_project_path(folder, relative)
@@ -116,22 +116,26 @@ def cmd_read_project_file(folder: Path, relative: str) -> dict:
         size = path.stat().st_size
     except OSError:
         return {"ok": False, "error": "文件不可读"}
-    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    info = detect_file_type(path, suffix)
+    kind = info["kind"]
+    mime = (mimetypes.guess_type("preview" + info["actual_suffix"])[0]
+            or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
     result = {"ok": True, "path": relative, "name": path.name, "suffix": suffix,
-              "size": size, "mime": mime, "language": _LANGUAGE.get(suffix, "")}
-    if suffix in IMAGE_SUFFIXES:
+              "actual_suffix": info["actual_suffix"], "kind": kind,
+              "kind_label": info["label"], "kind_short": info["short"],
+              "mismatch": info["mismatch"], "size": size, "mime": mime,
+              "language": _LANGUAGE.get(suffix if kind == "text" else info["actual_suffix"], "")}
+    if kind == "image":
         if size > 15 * 1024 * 1024:
-            result.update(kind="image", too_large=True)
+            result["too_large"] = True
             return result
         try:
-            result.update(kind="image", data_url="data:" + mime + ";base64," +
-                          base64.b64encode(path.read_bytes()).decode("ascii"))
+            result["data_url"] = "data:" + mime + ";base64," + base64.b64encode(
+                path.read_bytes()).decode("ascii")
         except OSError:
             return {"ok": False, "error": "图片读取失败"}
         return result
-    if suffix in VIDEO_SUFFIXES or suffix in AUDIO_SUFFIXES:
-        kind = "video" if suffix in VIDEO_SUFFIXES else "audio"
-        result.update(kind=kind)
+    if kind in {"video", "audio"}:
         if size <= 15 * 1024 * 1024:
             try:
                 result["data_url"] = "data:" + mime + ";base64," + base64.b64encode(
@@ -139,23 +143,27 @@ def cmd_read_project_file(folder: Path, relative: str) -> dict:
             except OSError:
                 pass
         return result
-    if suffix == ".pdf":
+    if kind in {"zip", "xlsx"}:
+        listing = zip_entries(path)
+        result.update(entry_count=listing["count"], entries=listing["entries"])
+        return result
+    if kind == "pdf" or kind in {"docx", "pptx", "doc", "ppt", "xls"}:
         text = read_text_safely(path)
-        result.update(kind="pdf", text=(text or "")[:200_000],
+        result.update(text=(text or "")[:200_000],
                       truncated=bool(text and len(text) > 200_000),
                       has_text=bool(text))
         return result
-    if suffix in {".docx", ".doc", ".pptx", ".ppt"}:
+    if kind == "text":
         text = read_text_safely(path)
-        result.update(kind="office", text=(text or "")[:200_000],
-                      truncated=bool(text and len(text) > 200_000),
-                      has_text=bool(text))
-        return result
-    text = read_text_safely(path) if suffix in SUPPORTED_TEXT_SUFFIXES else None
-    if text is None:
-        result.update(kind="binary")
-        return result
-    result.update(kind="text", text=text[:200_000], truncated=len(text) > 200_000)
+        if text is not None:
+            result.update(text=text[:200_000], truncated=len(text) > 200_000)
+            return result
+    if kind == "text":
+        result.update(kind="binary", kind_label="无法解码的文本", kind_short="BIN")
+    elif kind == "empty":
+        result.update(kind="binary", kind_label="空文件", kind_short="EMPTY")
+    elif kind == "ole":
+        result["kind_label"] = "OLE 复合文档（可能是旧版 Office）"
     return result
 
 def cmd_preview(folder: Path) -> dict:

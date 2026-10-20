@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,15 @@ class FilePreviewTests(unittest.TestCase):
         (self.root / "sub").mkdir()
         (self.root / "sub" / "a.tsv").write_text("a\tb\n", encoding="utf-8")
         (self.root.parent / "outside_preview.txt").write_text("secret", encoding="utf-8")
+        with zipfile.ZipFile(self.root / "links.txt", "w") as archive:
+            archive.writestr("活动链接.txt", "https://example.invalid/a")
+            archive.writestr("readme.md", "# nested")
+        with zipfile.ZipFile(self.root / "plain.zip", "w") as archive:
+            archive.writestr("inner.txt", "plain zip")
+        with zipfile.ZipFile(self.root / "renamed.txt", "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                "<document><body><p>" + "被改名的 Word 正文" + "</p></body></document>")
 
     def test_text_and_code_preview(self):
         text = engine_bridge.cmd_read_project_file(self.root, "README.md")
@@ -52,6 +62,39 @@ class FilePreviewTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["kind"], "binary")
         self.assertNotIn("text", result)
+
+    def test_zip_disguised_as_txt_is_reported_as_zip(self):
+        result = engine_bridge.cmd_read_project_file(self.root, "links.txt")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["kind"], "zip")
+        self.assertEqual(result["kind_label"], "ZIP 压缩包")
+        self.assertTrue(result["mismatch"])
+        self.assertEqual(result["suffix"], ".txt")
+        self.assertEqual(result["actual_suffix"], ".zip")
+        names = {entry["name"] for entry in result["entries"]}
+        self.assertIn("活动链接.txt", names)
+        self.assertEqual(result["entry_count"], 2)
+        self.assertNotIn("text", result)
+
+    def test_plain_zip_has_no_mismatch(self):
+        result = engine_bridge.cmd_read_project_file(self.root, "plain.zip")
+        self.assertEqual(result["kind"], "zip")
+        self.assertFalse(result["mismatch"])
+        self.assertEqual(result["entry_count"], 1)
+
+    def test_renamed_docx_is_read_by_content(self):
+        result = engine_bridge.cmd_read_project_file(self.root, "renamed.txt")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["kind"], "docx")
+        self.assertTrue(result["mismatch"])
+        self.assertIn("被改名的 Word 正文", result["text"])
+
+    def test_tree_marks_renamed_zip(self):
+        nodes, _ = engine_bridge._build_tree(self.root)
+        node = next(item for item in nodes if item["name"] == "links.txt")
+        self.assertEqual(node["kind"], "zip")
+        self.assertEqual(node["kind_short"], "ZIP")
+        self.assertTrue(node["mismatch"])
 
     def test_path_traversal_is_rejected(self):
         for bad in ("../outside_preview.txt", "sub/../../outside_preview.txt",

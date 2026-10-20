@@ -396,7 +396,13 @@ const FILE_GLYPHS = {
   py: "⚙", js: "⚙", ts: "⚙", html: "⚙", css: "⚙", json: "⚙",
   zip: "🗜", rar: "🗜", "7z": "🗜",
 };
-function fileGlyph(name) {
+const KIND_GLYPHS = {
+  zip: "🗜", xlsx: "📊", docx: "📕", doc: "📕", pdf: "📕",
+  pptx: "📊", ppt: "📊", image: "🖼", video: "🎬", audio: "🎵",
+  binary: "📦", ole: "📦",
+};
+function fileGlyph(name, kind) {
+  if (kind && KIND_GLYPHS[kind]) return KIND_GLYPHS[kind];
   const ext = (name.split(".").pop() || "").toLowerCase();
   return FILE_GLYPHS[ext] || "📄";
 }
@@ -413,9 +419,12 @@ function renderTree(nodes, box, depth) {
     row.style.paddingLeft = (6 + depth * 14) + "px";
     row.tabIndex = 0;
     row.setAttribute("role", "button");
+    const typeBadge = !n.dir && n.mismatch
+      ? `<span class="tree-type" title="实际类型：${esc(n.kind_label || n.kind || "")}">${esc(n.kind_short || n.kind_label || "")}</span>`
+      : "";
     row.innerHTML =
-      `<span class="tree-ico">${n.dir ? "📁" : fileGlyph(n.name)}</span>` +
-      `<span class="tree-name">${esc(n.name)}</span>` +
+      `<span class="tree-ico">${n.dir ? "📁" : fileGlyph(n.name, n.kind)}</span>` +
+      `<span class="tree-name">${esc(n.name)}</span>` + typeBadge +
       (!n.dir ? `<span class="tree-size">${fmtSize(n.size)}</span>` : "");
     box.appendChild(row);
     if (n.dir) {
@@ -427,7 +436,8 @@ function renderTree(nodes, box, depth) {
       box.appendChild(kids);
     } else {
       row.classList.add("tree-file");
-      row.title = "点击预览：" + (n.rel || n.name);
+      row.title = "点击预览：" + (n.rel || n.name) +
+        (n.mismatch ? `（实际类型：${n.kind_label || n.kind}）` : "");
       row.onclick = () => openFilePreview(n.rel || n.name);
       row.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); row.click(); } };
     }
@@ -448,7 +458,10 @@ async function openFilePreview(rel) {
       $("fileViewerMeta").textContent = "预览失败";
       return;
     }
-    $("fileViewerMeta").textContent = `${fmtSize(r.size)} · ${r.language || r.kind || ""}`;
+    const typeText = r.mismatch && r.kind_label
+      ? `${r.kind_label}（后缀 ${r.suffix || "无"} 与内容不符）`
+      : (r.language || r.kind_label || r.kind || "");
+    $("fileViewerMeta").textContent = `${fmtSize(r.size)} · ${typeText}`;
     if (r.kind === "image") {
       box.innerHTML = r.data_url
         ? `<div class="file-image-wrap"><img src="${r.data_url}" alt="${esc(r.name)}"></div>`
@@ -465,8 +478,25 @@ async function openFilePreview(rel) {
       }
       return;
     }
-    if (r.kind === "binary") {
-      box.innerHTML = '<div class="file-preview-note">这是二进制文件，文本查看器无法显示；请用系统应用打开。</div>';
+    if (r.kind === "zip") {
+      const entries = r.entries || [];
+      const rows = entries.map((e) =>
+        `<div class="zip-row"><span class="zip-name">${esc(e.name)}</span>` +
+        `<span class="zip-size">${e.dir ? "文件夹" : fmtSize(e.size)}</span></div>`).join("");
+      const mismatch = r.mismatch
+        ? `；文件名后缀 ${r.suffix || "无"} 与内容不符` : "";
+      box.innerHTML = `<div class="preview-note">实际内容为 ${esc(r.kind_label || "ZIP 压缩包")}${esc(mismatch)} · ` +
+        `共 ${r.entry_count || entries.length} 个条目` +
+        `${(r.entry_count || entries.length) > entries.length ? `（显示前 ${entries.length} 个）` : ""}；不会自动解压。</div>` +
+        `<div class="zip-list">${rows || '<div class="muted">压缩包内没有条目</div>'}</div>`;
+      return;
+    }
+    if (r.kind === "xlsx") {
+      box.innerHTML = `<div class="file-preview-note">${esc(r.kind_label || "Excel 工作簿")}暂不支持文本预览；请用系统应用打开。</div>`;
+      return;
+    }
+    if (r.kind === "binary" || r.kind === "ole") {
+      box.innerHTML = `<div class="file-preview-note">这是${esc(r.kind_label || "二进制文件")}，文本查看器无法显示；请用系统应用打开。</div>`;
       return;
     }
     const text = r.text || "";
@@ -476,9 +506,10 @@ async function openFilePreview(rel) {
     }
     const lines = text.split(String.fromCharCode(10)).map((x) => x.endsWith(String.fromCharCode(13)) ? x.slice(0, -1) : x);
     const shown = lines.slice(0, 6000);
+    const richText = ["pdf", "docx", "pptx", "doc", "ppt", "xls"].includes(r.kind);
     const note = r.truncated || lines.length > shown.length
       ? `仅显示前 ${shown.length} 行 / 200,000 字符，完整内容请用系统应用打开。`
-      : (r.kind === "pdf" || r.kind === "office" ? "这是提取的文本预览；完整排版请用系统应用打开。" : "");
+      : (richText ? "这是提取的文本预览；完整排版请用系统应用打开。" : "");
     const sep = String.fromCharCode(10);
     const nums = shown.map((_, i) => i + 1).join(sep);
     box.innerHTML = (note ? `<div class="preview-note">${esc(note)}</div>` : "") +

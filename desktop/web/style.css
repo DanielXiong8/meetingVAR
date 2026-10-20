@@ -275,6 +275,7 @@ select.input { padding-right: 24px; }
 .tree-dir { cursor: pointer; }
 .tree-ico { width: 16px; flex: 0 0 16px; text-align: center; color: var(--muted); }
 .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.tree-type { color: var(--warm); border: 1px solid #4a3a2c; background: #2a2119; border-radius: 4px; padding: 0 4px; font-size: 8px; flex: 0 0 auto; }
 .tree-size { color: var(--faint); font-size: 9px; flex: 0 0 auto; }
 
 /* library */
@@ -473,5 +474,11 @@ body.panel-open .panel-scrim { display: block; }
 .file-image-wrap { display: grid; place-items: center; min-height: 60vh; background: repeating-conic-gradient(#202020 0% 25%, #1b1b1b 0% 50%) 50% / 20px 20px; border: 1px solid #2d2d2d; border-radius: 10px; padding: 16px; }
 .file-image-wrap img { max-width: 100%; max-height: 70vh; object-fit: contain; }
 .file-preview-note { color: var(--muted); font-size: 11px; padding: 18px; border: 1px dashed #333; border-radius: 10px; }
+.zip-list { border: 1px solid #2d2d2d; border-radius: 9px; overflow: hidden; }
+.zip-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-bottom: 1px solid #262626; font-size: 11px; }
+.zip-row:last-child { border-bottom: 0; }
+.zip-row:hover { background: #222; }
+.zip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); color: var(--text-2); }
+.zip-size { color: var(--faint); font-size: 9px; flex: 0 0 auto; }
 .file-viewer video { max-width: 100%; max-height: 70vh; border-radius: 8px; display: block; margin: 0 auto; }
 .file-viewer audio { width: 100%; }
