@@ -370,10 +370,18 @@ class AgentLoop:
                                   "value": value, "text": text[:4000],
                                   "step": self.budget.steps})
         if isinstance(value, dict) and value.get("ui_action"):
-            self.ui_actions.append({"type": value["ui_action"],
-                                    "label": value.get("label", value["ui_action"]),
-                                    "payload": value.get("payload", {}),
-                                    "tool": name})
+            action = {"type": value["ui_action"],
+                      "label": value.get("label", value["ui_action"]),
+                      "payload": value.get("payload", {}),
+                      "summary": value.get("summary", ""),
+                      "tool": name}
+            key = (action["type"], json.dumps(action["payload"], sort_keys=True,
+                                              ensure_ascii=False))
+            known = {(item.get("type"), json.dumps(item.get("payload"), sort_keys=True,
+                                                   ensure_ascii=False))
+                     for item in self.ui_actions}
+            if key not in known:
+                self.ui_actions.append(action)
         self.trace.record("agent_tool_observation", tool=name,
                           result_chars=len(text), truncated=bool(result.truncated))
         return {"ok": True, "value": value}, text
@@ -667,6 +675,7 @@ class AgentLoop:
                 repeated = repeated + 1 if call_key == last_call else 0
                 last_call = call_key
                 self.messages.append(reply["message"])
+                actions_before = len(self.ui_actions)
                 for call in reply["tool_calls"]:
                     name = call.get("function", {}).get("name", "")
                     args = self._arguments(call.get("function", {}).get("arguments"))
@@ -692,6 +701,14 @@ class AgentLoop:
                         empty_results = 0
                     self.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                                           "name": name, "content": text or "{}"})
+                if len(self.ui_actions) > actions_before:
+                    action = self.ui_actions[-1]
+                    answer = (action.get("summary") or
+                              f"已准备{action.get('label') or '待确认操作'}，请在下方确认。")
+                    final = {"answer": answer, "citations": [], "invalid_citations": [],
+                             "unsupported": [], "confidence": 1.0,
+                             "answered": True, "grounded": True}
+                    return self._finish(final, "action_pending", errors)
                 if empty_results >= 2:
                     self.messages.append({"role": "user", "content":
                         "连续两次工具没有返回证据。不要逐场重复同一查询；改用更短的关键词/同义词，"
@@ -778,7 +795,16 @@ class AgentLoop:
                     self.messages.append({"role": "assistant", "content": reply.get("content", "")})
                     self.messages.append({"role": "user", "content": "工具名无效，请重新输出 action JSON。"})
                     continue
+                actions_before = len(self.ui_actions)
                 outcome, text = self._run_tool(name, args)
+                if len(self.ui_actions) > actions_before:
+                    action = self.ui_actions[-1]
+                    answer = (action.get("summary") or
+                              f"已准备{action.get('label') or '待确认操作'}，请在下方确认。")
+                    final = {"answer": answer, "citations": [], "invalid_citations": [],
+                             "unsupported": [], "confidence": 1.0,
+                             "answered": True, "grounded": True}
+                    return self._finish(final, "action_pending", errors)
                 if not outcome.get("ok"):
                     errors.append({"stage": "tool", "code": outcome.get("error_code", "tool_failed")})
                     text = json.dumps({"ok": False, "error_code": outcome.get("error_code"),

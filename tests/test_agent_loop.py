@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from meetingvar.agent.loop import AgentLoop
 from meetingvar.agent.policy import ApprovalBroker, Principal
 from meetingvar.agent.meeting_tools import build_meeting_registry
-from meetingvar.agent.tools import ToolContext, ToolSpec
+from meetingvar.agent.tools import ToolContext, ToolRegistry, ToolSpec
 
 
 def _usage(prompt=10, completion=5):
@@ -152,6 +152,28 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(report["stop_reason"], "completed_no_evidence")
         self.assertFalse(report["grounded"])
         self.assertFalse(report["answered"])
+
+    def test_pending_ui_action_ends_run_instead_of_repeating_tools(self):
+        registry = ToolRegistry()
+        registry.register(ToolSpec(name="prepare_focus", description="propose",
+                                   input_schema={"type": "object", "properties": {}}),
+                          lambda args, ctx: {
+                              "ui_action": "save_focus", "label": "保存 7 条会前关注",
+                              "payload": {"items": [{"title": "x"}]},
+                              "summary": "会前关注清单已生成，确认后写入项目记忆。"})
+        script = [
+            self._plan(),
+            _tool_call("prepare_focus", {}, "call_1"),
+            _tool_call("prepare_focus", {}, "call_2"),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=8)
+        loop.registry = registry
+        report = loop.run()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["stop_reason"], "action_pending")
+        self.assertEqual(report["tool_calls"], 1)
+        self.assertEqual(len(report["ui_actions"]), 1)
+        self.assertIn("确认", report["answer"])
 
     def test_identical_tool_call_is_not_executed_twice(self):
         script = [
