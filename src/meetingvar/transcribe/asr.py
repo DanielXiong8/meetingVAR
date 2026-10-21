@@ -46,7 +46,7 @@ class ASR:
                 # ASR+VAD+speaker+punc need several GiB.  A nominally
                 # available 8 GiB card with other apps resident is not enough;
                 # auto should use CPU rather than die during model loading.
-                if free >= 6.5 * 1024 ** 3 and free / max(total, 1) >= 0.70:
+                if total >= 10 * 1024 ** 3 and free >= 7 * 1024 ** 3 and free / max(total, 1) >= 0.70:
                     return "cuda"
         except (ImportError, OSError, RuntimeError):
             pass
@@ -148,7 +148,15 @@ class ASR:
         # FunASR accepts a normalized waveform directly. Writing and deleting
         # a temporary WAV is still persistence of unpromoted meeting audio.
         waveform = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
-        res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
+        try:
+            res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
+        except Exception as exc:  # noqa: BLE001
+            if not self._fallback_cpu(exc):
+                raise
+            self._model = None
+            self._sv = None
+            self._ensure_loaded()
+            res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
         out: list[dict] = []
         first = res[0] if res else {}
         if "sentence_info" in first:  # 说话人级
