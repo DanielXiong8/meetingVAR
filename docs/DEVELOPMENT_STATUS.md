@@ -60,8 +60,8 @@
 
 ## 5. 验证快照（2026-10-21 晚，0.10.3）
 
-- 完整Python3.10依赖环境：503项测试、**0跳过、503通过**（63.60秒），`compileall`通过，完整CLI仿真通过。
-- 最小依赖CI模拟：503项发现，503项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
+- 完整Python3.10依赖环境：506项测试、**0跳过、506通过**（65.25秒），`compileall`通过，完整CLI仿真通过。
+- 最小依赖CI模拟：506项发现，506项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
 - Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
 - Agent专项：37项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
@@ -69,7 +69,7 @@
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
 - 会议证据基准 v1（2026-10-21）：新增事件级 `evidence_benchmark`（labels/predictions schema、recall、clip precision、每小时误保存分钟、关注点覆盖、引用支持率、20场/40事件/80%召回/≤10分钟误保存发布门禁）；test2 真实会议首次基线（机器预标注，未核验）= 4/6 事件召回 66.7%、漏 evt_005 KG定位大讨论与 evt_006 agent-KG负责人、误保存 3.05 分钟/小时、保存 6.48 分钟/小时。工具 `scripts/meeting_benchmark.py`，方法见 `docs/MEETING_EVIDENCE_BENCHMARK.md`。
-- Test5 12 条考试关注问题 L1/L2/L3 对比（2026-10-21）：同一批 12 个 10 分钟课堂片段、同一份本地转写；L1 热词命中 8/12（66.7%）、L2 关注文档 9/12（75.0%）、L3 本地 4B 裁判 4/12（33.3%）。L1/L2 易把“提到相关词”当命中（F1 课程历史片段 L2=0.408；F2 复合微分片段 L3=no）；L3 受 ASR 数学术语错误影响偏保守。没有方法可单独承担精确验收。另修复 8GB GPU 自动选 CUDA 后模型加载 OOM：auto 要求总显存≥10GB，推理 OOM 也回退 CPU。
+- Test5 12 条考试关注问题 L1/L2/L3 对比（2026-10-21）：同一批 12 个 10 分钟课堂片段、同一份本地转写；L1 热词命中 8/12（66.7%）、L2 关注文档 9/12（75.0%）、L3 本地 4B 裁判 4/12（33.3%）。L1/L2 易把“提到相关词”当命中；L3 受 ASR 数学术语错误影响偏保守。**修正：新增 `meetingvar.lecture.find_focus`，把 10 分钟转写切成 90–120 秒窗口，关键词召回 + 小窗 LLM 裁判，返回带时间戳/证据 turn 的片段；同一批 12 个转写命中 9/12（75%），F1/F5 抽样段本身无该内容、F10 无对应 ODE 课次。** 另修复 8GB GPU 自动选 CUDA 后模型加载/推理 OOM：auto 要求总显存≥10GB，推理 OOM 也回退 CPU。
 - Test5 考试题驱动关注问题 pilot（2026-10-21）：从 2021–2025 期末卷提炼 12 条关注问题（`benchmarks/meeting_evidence/test5_focus_questions.json`）；首轮 4 个 case（F2 链式法则/F4 极值/F6 第一型曲面积分/F9 级数）各抽 600 秒、用关注文档跑 `replay`：**4/4 命中主题**，11 个片段中 9 个关键词相关（81.8%），保存 2,355 秒≈58.9 分钟/小时；F6 的 2 个低分片段经人工查看仍在讲参数化，说明关键词 precision 是下限。结论：能命中主题，但 300 秒回溯窗不精确、样本非盲测。见 `docs/TEST5_EXAM_FOCUS_PILOT.md`。
 - 0.10.3 课堂回放 T5：34 个 MP4/68.66 小时全部可解码且有音频；3 段 3 分钟 ASR 抽样全部完成，CPU RTF 0.176–0.186，转写时间戳单调，高相似重复率 0–1.6%，`transcribe` 片段数 0。修复：8GB GPU 自动设备 OOM（free<6.5GB 走 CPU，显式 cuda OOM 也回退）；`transcribe` 默认关闭热词/兴趣触发，只写全文；`go/record` 增加按层 60 秒片段冷却；重叠 ASR 窗口增加模糊去重（4 秒窗、长句相似度/包含/bigram），10 分钟样本 442→372 行。数学术语命中仍低（2/0/0），见 `docs/TEST5_LECTURE_REPLAY.md`。
 - 0.10.3安装包：`meetingVAR-setup-0.10.3.exe` SHA256 `78b597034b0a177580ae518da31e65204baeed83331108d7f8c9b485f4ac14f3`；内置 `meetingVAR.exe` SHA256 `af245db0673ab2e3dddc2f94322ccf24acd74d537b3be6a4e840067c65c9aaff`。
