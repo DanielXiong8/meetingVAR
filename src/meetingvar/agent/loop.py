@@ -105,7 +105,8 @@ class AgentLoop:
                  principal: Principal | None = None, llm: Callable | None = None,
                  mode: str = "auto", max_steps: int = 8, max_tool_calls: int = 12,
                  max_seconds: float = 180.0, max_input_tokens: int = 60000,
-                 max_output_tokens: int = 16000, approval=None, history: list[dict] | None = None):
+                 max_output_tokens: int = 16000, approval=None, history: list[dict] | None = None,
+                 max_continuations: int = 1):
         self.project_root = Path(project_root).resolve()
         self.question = str(question or "").strip()
         if not self.question:
@@ -115,8 +116,13 @@ class AgentLoop:
         self._llm = llm or chat_messages
         self.mode = mode if mode in {"auto", "native", "json"} else "auto"
         self.approval = approval
-        self.max_steps = max(1, min(20, int(max_steps)))
-        self.max_tool_calls = max(1, min(30, int(max_tool_calls)))
+        raw_steps = int(max_steps)
+        raw_tools = int(max_tool_calls)
+        self.max_steps = 0 if raw_steps <= 0 else min(100, raw_steps)
+        self.max_tool_calls = 0 if raw_tools <= 0 else min(100, raw_tools)
+        self.max_continuations = max(0, min(3, int(max_continuations)))
+        self._continuations = 0
+        self._observation_summary = ""
         self.max_seconds = max(10.0, float(max_seconds))
         self.max_input_tokens = max(1000, int(max_input_tokens))
         self.max_output_tokens = max(500, int(max_output_tokens))
@@ -126,7 +132,7 @@ class AgentLoop:
         trace_dir = self.project_root / "meetingvar" / "agent_memory" / "trace"
         self.trace = TraceRecorder(trace_dir / "agent_run.jsonl")
         self.runtime = AgentRuntime(trace_dir / "tasks", trace=self.trace,
-                                    max_steps=max(24, self.max_steps * 4))
+                                    max_steps=max(24, self.max_steps * 4) if self.max_steps else 400)
         self.registry = build_meeting_registry(trace=self.trace)
         self.context = ToolContext(project_root=self.project_root, fact_store=self.fact_store,
                                    principal=self.principal,
@@ -299,6 +305,10 @@ class AgentLoop:
                 {"role": "user", "content": user}]
 
     def _fit_messages(self, messages: list[dict], tools=None) -> list[dict]:
+        if self._observation_summary and messages and messages[0].get("role") == "system":
+            base = str(messages[0].get("content", "")).split("\n\n[早期工具观察摘要]")[0]
+            messages[0]["content"] = (base + "\n\n[早期工具观察摘要]\n" +
+                                      self._observation_summary[-5000:])
         limit = token_budget().input_limit
         def size(rows):
             payload = json.dumps(rows, ensure_ascii=False).encode("utf-8")
@@ -324,6 +334,50 @@ class AgentLoop:
         if compacted:
             self.trace.record("context_compacted", messages=len(messages))
         return messages
+
+    def _compact_observations(self, force: bool = False) -> str:
+        """Summarize old observations for the model while keeping evidence intact.
+
+        ``self.observations`` is never discarded because citation verification
+        and the audit trace still need the original values.  Only the model
+        context is compacted.
+        """
+        if len(self.observations) <= 10 and not force:
+            return self._observation_summary
+        older = self.observations[:-8] if len(self.observations) > 8 else self.observations
+        lines = []
+        for observation in older[-40:]:
+            value = observation.get("value")
+            snippet = ""
+            if isinstance(value, dict):
+                for key in ("facts", "results", "turns", "matches", "sessions", "summary"):
+                    item = value.get(key)
+                    if isinstance(item, list) and item:
+                        snippet = "；".join(str(x)[:120] for x in item[:3])
+                        break
+                    if isinstance(item, str) and item.strip():
+                        snippet = item[:240]
+                        break
+            if not snippet:
+                snippet = str(observation.get("text", ""))[:240]
+            lines.append(f"- {observation.get('tool')} {json.dumps(observation.get('arguments', {}), ensure_ascii=False)}: {snippet}")
+        self._observation_summary = "\n".join(lines)[-6000:]
+        self.trace.record("observations_compacted", total=len(self.observations),
+                          summarized=len(older))
+        return self._observation_summary
+
+    def _continuation_messages(self, reason: str) -> list[dict]:
+        summary = self._compact_observations(force=True)
+        plan_text = json.dumps(self.plan, ensure_ascii=False) if self.plan else "（无预设计划）"
+        user = (
+            f"项目：{self.project_root}\n问题：{self.question}\n计划：{plan_text}\n"
+            f"上一段因 {reason} 到达控制上限，系统已自动续跑，不需要重新开始。\n"
+            f"早期观察摘要（证据原文仍在审计记录中）：\n{summary or '（无）'}\n"
+            "请从中断处继续：已有证据足够就直接输出最终 JSON；不足再调用工具。"
+        )
+        system = _SYSTEM + "\n" + _JSON_ACTION if self.mode == "json" else _SYSTEM
+        return [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
 
     # ---------- state ----------
     def _state_path(self, task_id: str) -> Path:
@@ -354,7 +408,7 @@ class AgentLoop:
 
     # ---------- tools ----------
     def _run_tool(self, name: str, arguments: dict) -> tuple[dict, str]:
-        if self.budget.tool_calls >= self.budget.max_tool_calls:
+        if 0 < self.budget.max_tool_calls <= self.budget.tool_calls:
             return {"ok": False, "error_code": "tool_budget_exhausted",
                     "error": "tool call budget exhausted"}, ""
         outcome = self.runtime.run_tool(
@@ -592,6 +646,7 @@ class AgentLoop:
             "ui_actions": self.ui_actions,
             "usage": self.trace.usage_totals(), "budget": self.budget.as_dict(),
             "mode": self.mode, "status": status, "stop_reason": stop_reason,
+            "continuations": self._continuations,
             "elapsed_ms": round((time.monotonic() - getattr(
                 self, "_started_at", time.monotonic())) * 1000, 1),
             "errors": errors or [], "trace": str(self.trace.path),
@@ -637,10 +692,30 @@ class AgentLoop:
         while True:
             can, reason = self.budget.can_step()
             if not can:
+                if self._continuations < self.max_continuations:
+                    self._continuations += 1
+                    self.trace.record("agent_continued", reason=reason,
+                                      continuation=self._continuations)
+                    self.messages = self._continuation_messages(reason)
+                    self.budget.steps = 0
+                    self.budget.tool_calls = 0
+                    self.budget.input_tokens = 0
+                    self.budget.output_tokens = 0
+                    self.budget.started_at = time.monotonic()
+                    self._save_state("running", f"continued:{reason}")
+                    continue
                 final = self._best_effort_final()
-                self._save_state("stopped", reason)
-                self.runtime.fail(self.task, reason)
-                return self._result(status="stopped", stop_reason=reason, final=final,
+                if self.max_continuations == 0:
+                    self._save_state("stopped", reason)
+                    self.runtime.fail(self.task, reason)
+                    return self._result(status="stopped", stop_reason=reason, final=final,
+                                        errors=errors + [{"stage": "budget", "code": reason}])
+                self._save_state("completed", "best_effort")
+                self.runtime.complete(self.task, {"steps": self.budget.steps,
+                                                  "tool_calls": self.budget.tool_calls,
+                                                  "partial": True})
+                return self._result(status="completed", stop_reason="best_effort",
+                                    final=final,
                                     errors=errors + [{"stage": "budget", "code": reason}])
 
             native = self.mode != "json"
@@ -701,6 +776,8 @@ class AgentLoop:
                         empty_results = 0
                     self.messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                                           "name": name, "content": text or "{}"})
+                if len(self.observations) > 16:
+                    self._compact_observations()
                 if len(self.ui_actions) > actions_before:
                     action = self.ui_actions[-1]
                     answer = (action.get("summary") or
@@ -736,7 +813,7 @@ class AgentLoop:
                     evidence_text = "\n".join(o.get("text", "") for o in self.observations
                                                 if o.get("text"))[:4000]
                     if (not final.get("answered") and evidence_text and not evidence_retry
-                            and self.budget.steps < self.max_steps):
+                            and self._has_step_room()):
                         evidence_retry = True
                         self.messages.append({"role": "assistant", "content": content})
                         self.messages.append({"role": "user", "content":
@@ -746,7 +823,7 @@ class AgentLoop:
                         self._save_state("running")
                         continue
                     missing = self._missing_terms()
-                    if missing and not final.get("answered") and not missing_retry and self.budget.steps < self.max_steps:
+                    if missing and not final.get("answered") and not missing_retry and self._has_step_room():
                         missing_retry = True
                         self.messages.append({"role": "assistant", "content": content})
                         self.messages.append({"role": "user", "content":
@@ -797,6 +874,8 @@ class AgentLoop:
                     continue
                 actions_before = len(self.ui_actions)
                 outcome, text = self._run_tool(name, args)
+                if len(self.observations) > 16:
+                    self._compact_observations()
                 if len(self.ui_actions) > actions_before:
                     action = self.ui_actions[-1]
                     answer = (action.get("summary") or
@@ -832,7 +911,7 @@ class AgentLoop:
                 evidence_text = "\n".join(o.get("text", "") for o in self.observations
                                             if o.get("text"))[:4000]
                 if (not final.get("answered") and evidence_text and not evidence_retry
-                        and self.budget.steps < self.max_steps):
+                        and self._has_step_room()):
                     evidence_retry = True
                     self.messages.append({"role": "assistant", "content": reply.get("content", "")})
                     self.messages.append({"role": "user", "content":
@@ -842,7 +921,7 @@ class AgentLoop:
                     self._save_state("running")
                     continue
                 missing = self._missing_terms()
-                if missing and not final.get("answered") and not missing_retry and self.budget.steps < self.max_steps:
+                if missing and not final.get("answered") and not missing_retry and self._has_step_room():
                     missing_retry = True
                     self.messages.append({"role": "assistant", "content": reply.get("content", "")})
                     self.messages.append({"role": "user", "content":
@@ -871,13 +950,55 @@ class AgentLoop:
                                     errors=errors + [{"stage": "action", "code": "unknown_action"}])
             correction_attempts += 1
 
+    def _has_step_room(self) -> bool:
+        return self.max_steps <= 0 or self.budget.steps < self.max_steps
+
     def _best_effort_final(self) -> dict:
-        if not self.observations:
-            return {"answer": "根据现有证据无法回答。", "answered": False, "grounded": False,
-                    "citations": [], "invalid_citations": [], "unsupported": [], "confidence": 0.0}
-        return {"answer": "已达到本轮 Agent 预算，未能形成完整答案。", "answered": False,
-                "grounded": False, "citations": [], "invalid_citations": [],
-                "unsupported": [], "confidence": 0.0}
+        snippets: list[str] = []
+        for observation in self.observations[-16:]:
+            value = observation.get("value")
+            text = str(observation.get("text", ""))
+            if isinstance(value, dict):
+                facts = value.get("facts")
+                if isinstance(facts, list):
+                    for fact in facts[:3]:
+                        if isinstance(fact, dict):
+                            snippets.append(f"{fact.get('name', '事实')}：{fact.get('description', '')}"[:240])
+                        elif isinstance(fact, str):
+                            snippets.append(fact[:240])
+                results = value.get("results")
+                if isinstance(results, list):
+                    for result in results[:2]:
+                        if isinstance(result, dict):
+                            for match in (result.get("matches") or [])[:2]:
+                                if isinstance(match, dict) and match.get("text"):
+                                    snippets.append(str(match["text"])[:240])
+                turns = value.get("turns")
+                if isinstance(turns, list):
+                    for turn in turns[:3]:
+                        if isinstance(turn, dict) and turn.get("text"):
+                            snippets.append(str(turn["text"])[:240])
+                summary = value.get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    snippets.append(summary[:240])
+            if not snippets and text:
+                snippets.append(text[:240])
+        unique = []
+        for snippet in snippets:
+            snippet = " ".join(str(snippet).split())
+            if snippet and snippet not in unique:
+                unique.append(snippet)
+            if len(unique) >= 6:
+                break
+        if not unique:
+            return {"answer": "已查询项目和会议记录，但没有找到可引用的明确证据。可以缩小问题范围或指定会议后再问。",
+                    "answered": False, "grounded": False, "citations": [],
+                    "invalid_citations": [], "unsupported": ["没有可引用证据"], "confidence": 0.0}
+        answer = ("我先从已查到的证据里整理出这些要点：\n- " + "\n- ".join(unique) +
+                  "\n\n这还不是完整核对后的结论；如需确定答案，可以继续追问或指定会议。")
+        return {"answer": answer, "answered": True, "grounded": False, "citations": [],
+                "invalid_citations": [], "unsupported": ["未完成全部交叉核对"],
+                "confidence": 0.35}
 
     def _finish(self, final: dict, status: str, errors: list) -> dict:
         self._save_state("completed", status)

@@ -636,6 +636,7 @@ function chatNode(msg) {
     const bits = [];
     if (msg.mode === "agent") bits.push("Agent", `${msg.observations ? msg.observations.length : 0} 次工具`);
     if (msg.stop_reason) bits.push(msg.stop_reason);
+    if (msg.continuations) bits.push(`自动续跑 ${msg.continuations} 次`);
     if (msg.ts) bits.push(chatTime(msg.ts));
     meta.textContent = bits.join(" · ");
     if (meta.textContent) body.appendChild(meta);

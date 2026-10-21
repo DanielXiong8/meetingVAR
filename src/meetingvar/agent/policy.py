@@ -130,9 +130,11 @@ class AgentBudget:
     started_at: float = field(default_factory=time.monotonic)
 
     def can_step(self) -> tuple[bool, str]:
-        if self.steps >= self.max_steps:
+        # max_steps/max_tool_calls <= 0 means "no fixed cap"; semantic stops
+        # (no progress, repeated calls, user cancel, approval wait) still apply.
+        if self.max_steps > 0 and self.steps >= self.max_steps:
             return False, "step_budget_exhausted"
-        if self.tool_calls >= self.max_tool_calls:
+        if self.max_tool_calls > 0 and self.tool_calls >= self.max_tool_calls:
             return False, "tool_budget_exhausted"
         if time.monotonic() - self.started_at > self.max_seconds:
             return False, "time_budget_exhausted"

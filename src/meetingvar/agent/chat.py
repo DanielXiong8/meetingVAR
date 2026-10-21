@@ -164,7 +164,9 @@ class ChatAgent:
         self.store = ChatStore(self.project_root)
         self.llm = llm
         self.data_dir = Path(data_dir) if data_dir else Path(config.DATA_DIR)
-        self.max_steps = max(1, min(12, int(max_steps)))
+        raw_steps = int(max_steps)
+        self.max_steps = 0 if raw_steps <= 0 else min(100, raw_steps)
+        self.max_tool_calls = 0 if self.max_steps == 0 else 12
         if conversation_id:
             self.conversation = self.store.load(conversation_id)
         else:
@@ -292,7 +294,10 @@ class ChatAgent:
         elif _MEETING.search(text):
             loop = AgentLoop(project_root=self.project_root, question=text,
                              data_dir=self.data_dir, llm=self.llm, mode="auto",
-                             max_steps=self.max_steps, history=history)
+                             max_steps=self.max_steps,
+                             max_tool_calls=self.max_tool_calls,
+                             max_seconds=900.0 if self.max_steps == 0 else 180.0,
+                             max_continuations=1, history=history)
             report = loop.run()
             answer = report.get("answer") or "根据现有证据无法回答。"
             action_rows = []
@@ -311,6 +316,7 @@ class ChatAgent:
                     "usage": report.get("usage", {}),
                     "grounded": report.get("grounded"), "answered": report.get("answered"),
                     "stop_reason": report.get("stop_reason", ""),
+                    "continuations": report.get("continuations", 0),
                     "task_id": report.get("task_id", ""), "trace": report.get("trace", ""),
                     "actions": [{"id": a["id"], "type": a["type"], "label": a["label"]}
                                 for a in action_rows]}

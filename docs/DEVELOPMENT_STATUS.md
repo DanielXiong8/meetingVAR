@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.1。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.2。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.1；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.2；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x~0.10.1发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.1` | 0.10.1 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
-| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.1 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
+| 0.2.x~0.10.2发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.2` | 0.10.2 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
+| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.2 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -58,16 +58,18 @@
 
 课堂实验产物在工作区 `C:\Users\Lenovo\.zcode\workspace\default`：`test3_judge_argmax_2130-2330.mp4`（约343MB）、转写、裁判JSONL及报告。原始课堂媒体不随源码包分发。
 
-## 5. 验证快照（2026-10-21 上午，0.10.1）
+## 5. 验证快照（2026-10-21 中午，0.10.2）
 
-- 完整Python3.10依赖环境：493项测试、**0跳过、493通过**（69.72秒），`compileall`通过，完整CLI仿真通过。
-- 最小依赖CI模拟：493项发现，493项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
+- 完整Python3.10依赖环境：495项测试、**0跳过、495通过**（72.66秒），`compileall`通过，完整CLI仿真通过。
+- 最小依赖CI模拟：495项发现，495项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
 - Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
 - Agent专项：37项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
 - 0.2.1真实窗口复测：本地模型生成并保存关注清单、19个有转写会话过滤、0事实问答、会后0候选与模型停机错误提示、设置页本地/自定义厂商验证、短会开始/结束（RTASR连接、8句字幕、录屏缓冲约7.8MB、零命中丢弃）均通过。详见 `docs/BUGFIX_0.2.1.md`。
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
+- 0.10.2 主对话去固定步数：`ChatAgent` 默认 `max_steps=0`、`max_tool_calls=0`（不设固定上限），只保留无进展、重复调用、权限等待、用户取消、时间/上下文上限等语义停止；`AgentBudget` 对 0 视为不设限。到达控制上限时先自动 checkpoint 续跑一次：压缩旧 observations 为摘要、保留原始证据用于引用校验、重置分段预算并继续同一任务；仍无法完成时用 `_best_effort_final()` 基于已查证据生成尽力答案并标注“尚未完整核对”，不再输出“已达到本轮 Agent 预算”。聊天元信息显示“自动续跑 N 次”。新增无限步数、自动续跑/观察压缩、尽力答案三项回归；完整 495 项测试通过（72.66 秒），0 跳过；0.10.2 `--selftest` 通过。
+- 0.10.2安装包：`meetingVAR-setup-0.10.2.exe` SHA256 `6bd0a97bd7119dcfe375617c07561ce7f4ae85c3acdbd6c8431214f2af58adfc`；内置 `meetingVAR.exe` SHA256 `d8026553fc937a86dfea17479eb2d5681f463b645326b958cbdfa3690953ea60`。
 - 0.10.1 Agent 审批动作闭环：工具返回 `ui_action`（如 prepare_focus 生成 7 条会前关注）后立即以 `action_pending` 完成本轮，回答“已准备…请确认”，不再继续重复调用 project_status/search_memory/prepare_focus 直至 `repeated_tool_call`/预算耗尽；ui_action 按类型+payload 去重；原生 tool calling 与 JSON 兜底两条路径都生效。新增回归测试断言一次工具调用、一个 action、`stop_reason=action_pending`。完整 493 项测试通过（69.72 秒），0 跳过；安装后 `--selftest` 通过（0.10.1）。
 - 0.10.1安装包：`meetingVAR-setup-0.10.1.exe` SHA256 `9425732ab195b710b0b01df83edc4fe8f57ea13cbc6f54204d3dfd71fce462ce`；内置 `meetingVAR.exe` SHA256 `cb2af7eb1a9e45b8b2b32e795a9bfb06899fa83daeaaeda5e0e36a56b40e5ed8`。
 - 0.10.0 商业与合规层：离线 Ed25519 许可证（签发/验签/机器绑定/到期/试用）、商业与合规设置页（激活/移除/状态）；HTTPS 更新清单 + SHA256 下载校验 + 安装启动；本机脱敏崩溃报告与默认关闭的遥测上传；项目数据分类统计/ZIP 导出/`DELETE` 确认删除；隐私说明、服务条款、第三方许可证与商业就绪矩阵；移除 AGPL PyMuPDF，PDF 改 pdfminer.six（MIT）/pypdf；代码签名钩子 `desktop/build/sign.ps1`。详见 `docs/COMMERCIAL_READINESS.md`。

@@ -192,18 +192,42 @@ class AgentLoopTests(unittest.TestCase):
             self._plan(),
             _tool_call("search_sessions", {"query": "周五"}),
         ]
-        loop, _ = self._loop(script, mode="native", max_steps=1)
+        loop, _ = self._loop(script, mode="native", max_steps=1, max_continuations=0)
         report = loop.run()
         self.assertEqual(report["stop_reason"], "step_budget_exhausted")
         self.assertEqual(report["tool_calls"], 1)
         self.assertFalse(report["ok"])
+        self.assertNotIn("预算", report["answer"])
+        self.assertIn("周五", report["answer"])
+
+    def test_unlimited_steps_do_not_hit_step_budget(self):
+        loop, _ = self._loop([], mode="native", max_steps=0)
+        loop.budget.steps = 50
+        can, reason = loop.budget.can_step()
+        self.assertTrue(can, reason)
+        self.assertEqual(reason, "")
+
+    def test_step_budget_auto_continues_with_compacted_observations(self):
+        script = [
+            self._plan(),
+            _tool_call("search_sessions", {"query": "周五"}),
+            self._final(cite_turn_2=False),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=1, max_continuations=1)
+        report = loop.run()
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(loop._continuations, 1)
+        self.assertTrue(any("自动续跑" in str(m.get("content", "")) for m in loop.messages))
+        self.assertTrue(any("早期观察摘要" in str(m.get("content", "")) for m in loop.messages))
+        self.assertIn("search_sessions", loop._observation_summary)
+        self.assertEqual(report["stop_reason"], "completed")
 
     def test_resume_continues_from_persisted_tool_observation(self):
         first_script = [
             self._plan(),
             _tool_call("search_sessions", {"query": "周五"}),
         ]
-        loop, _ = self._loop(first_script, mode="native", max_steps=1)
+        loop, _ = self._loop(first_script, mode="native", max_steps=1, max_continuations=0)
         first = loop.run()
         self.assertEqual(first["stop_reason"], "step_budget_exhausted")
         task_id = first["task_id"]
