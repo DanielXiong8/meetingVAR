@@ -95,7 +95,7 @@ def cmd_transcribe(args) -> None:
         raise SystemExit("[transcribe] 必须给 --out <转写txt路径>（这是转写模式与 replay 的唯一区别）")
     summary = replay(
         Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
-        correction_terms=_correction_terms_arg(args),
+        correction_terms=_correction_terms_arg(args), auto_triggers=False,
     )
     print(f"[done] 转写 {summary['lines']} 句 / 纠错 {len(summary['corrections'])} 处 -> {out}")
     if summary["clips"]:

@@ -40,37 +40,76 @@ class ASR:
             import torch
 
             if torch.cuda.is_available():
-                return "cuda"
+                if device == "cuda":
+                    return "cuda"
+                free, total = torch.cuda.mem_get_info()
+                # ASR+VAD+speaker+punc need several GiB.  A nominally
+                # available 8 GiB card with other apps resident is not enough;
+                # auto should use CPU rather than die during model loading.
+                if free >= 6.5 * 1024 ** 3 and free / max(total, 1) >= 0.70:
+                    return "cuda"
         except (ImportError, OSError, RuntimeError):
             pass
         return "cpu"
+
+    def _fallback_cpu(self, error: Exception) -> bool:
+        if self._device != "cuda":
+            return False
+        text = str(error).lower()
+        if "out of memory" not in text and "cuda" not in text:
+            return False
+        self._device = "cpu"
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except (ImportError, OSError, RuntimeError):
+            pass
+        print("[asr] CUDA 显存不足，已自动降级到 CPU", flush=True)
+        return True
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
             return
         from funasr import AutoModel
 
-        self._model = AutoModel(
-            model=config.find_model_dir(config.ASR_MODEL_KEYWORD),
-            vad_model=config.find_model_dir(config.VAD_KEYWORD),
-            spk_model=config.find_model_dir(config.SPK_KEYWORD),
-            punc_model=config.find_model_dir(config.PUNC_KEYWORD),
-            device=self._device,
-            disable_update=True,
-            disable_pbar=True,
-        )
+        def build():
+            return AutoModel(
+                model=config.find_model_dir(config.ASR_MODEL_KEYWORD),
+                vad_model=config.find_model_dir(config.VAD_KEYWORD),
+                spk_model=config.find_model_dir(config.SPK_KEYWORD),
+                punc_model=config.find_model_dir(config.PUNC_KEYWORD),
+                device=self._device,
+                disable_update=True,
+                disable_pbar=True,
+            )
+
+        try:
+            self._model = build()
+        except Exception as exc:  # noqa: BLE001
+            if not self._fallback_cpu(exc):
+                raise
+            self._model = build()
 
     def _ensure_sv(self):
         """独立的 CAM++ 声纹模型：只做 embedding 抽取（不带聚类后端）。"""
         if self._sv is None:
             from funasr import AutoModel
 
-            self._sv = AutoModel(
-                model=config.find_model_dir(config.SPK_KEYWORD),
-                device=self._device,
-                disable_update=True,
-                disable_pbar=True,
-            )
+            def build():
+                return AutoModel(
+                    model=config.find_model_dir(config.SPK_KEYWORD),
+                    device=self._device,
+                    disable_update=True,
+                    disable_pbar=True,
+                )
+
+            try:
+                self._sv = build()
+            except Exception as exc:  # noqa: BLE001
+                if not self._fallback_cpu(exc):
+                    raise
+                self._sv = build()
         return self._sv
 
     def _embedding(self, waveform, start_ms: int, end_ms: int):

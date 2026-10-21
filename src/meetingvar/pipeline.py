@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
+from difflib import SequenceMatcher
 from collections import deque
 from pathlib import Path
 
@@ -24,6 +26,62 @@ from .transcribe.speaker import OnlineSpeakerCluster
 
 LOOKBACK_SECONDS = config.LOOKBACK_SECONDS  # 命中回溯窗（config 可调，env MEETINGVAR_LOOKBACK）
 _PCM_BYTES_PER_SECOND = config.ASR_RATE * 2  # 接口约定：16bit 单声道 PCM，1 秒 = 32000 字节
+
+
+_DEDUP_PUNCT = re.compile(r"[\s，。？！、,.?!;；:：\"'“”‘’()（）\[\]【】—-]")
+
+
+def _normalized_line(text: str) -> str:
+    return _DEDUP_PUNCT.sub("", str(text or "")).casefold()
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(max(0, len(text) - 1))}
+
+
+def is_duplicate_transcript(transcript: list[dict], text: str, ts: float,
+                            window: float = 4.0) -> bool:
+    """Fuzzy duplicate check for overlapping ASR windows.
+
+    Local ASR re-decodes a 3 s tail; the same sentence often comes back with a
+    different word ending and a timestamp shifted by 0–3 s.  Exact text/time
+    matching therefore misses most duplicates.  Compare normalized text against
+    nearby lines; skip the later occurrence before it can trigger or be saved.
+    """
+    normalized = _normalized_line(text)
+    if not normalized:
+        return False
+    for old in reversed(transcript):
+        if old.get("ts", 0) < ts - window:
+            break
+        if abs(float(old.get("ts", 0)) - ts) > window:
+            continue
+        previous = _normalized_line(old.get("text", ""))
+        if not previous:
+            continue
+        if previous == normalized:
+            return True
+        if len(previous) < 4 or len(normalized) < 4:
+            continue
+        # Short Chinese sentences differing by one character are often
+        # different sentences ("第一段" vs "第二段").  Only exact matches are
+        # safe below 10 characters.
+        ratio = SequenceMatcher(None, previous, normalized).ratio()
+        if max(len(previous), len(normalized)) < 10:
+            if ratio >= 0.92:
+                return True
+            continue
+        if abs(len(previous) - len(normalized)) > max(10, int(max(len(previous), len(normalized)) * 0.55)):
+            continue
+        if ratio >= 0.80:
+            return True
+        shorter, longer = sorted((previous, normalized), key=len)
+        if len(shorter) >= 8 and shorter in longer and len(shorter) / len(longer) >= 0.70:
+            return True
+        a, b = _bigrams(previous), _bigrams(normalized)
+        if a and b and len(a & b) / len(a | b) >= 0.72:
+            return True
+    return False
 
 
 class Session:
@@ -88,6 +146,8 @@ class Session:
         self._processed_until: float | None = None
         self.transcript: list[dict] = []
         self.clips: list[dict] = []
+        self._last_clip_trigger_ts: dict[str, float] = {}
+        self._last_clip_id = ""
         # 每条纠错记录 = {src,dst,status,reason,rule_id,ts,termset_id}（correct() 产出、此处补 ts/termset_id）
         self.corrections: list[dict] = []
         # 整行原文快照（F1 恢复机制）：纠错发生过的行，逐行记录改写前后全文，
@@ -203,11 +263,10 @@ class Session:
             orig_text = seg["text"]
             fixed, fixes = correct(orig_text, self.correction_terms)
             line_ts = start_ts + seg["start"]
-            # Overlapping ASR windows can repeat a sentence. Do not duplicate
-            # that sentence (or its triggers); later occurrences remain valid.
-            if any(abs(old["ts"] - line_ts) <= 0.5 and old["text"] == fixed
-                   for old in reversed(self.transcript)
-                   if old["ts"] >= start_ts - 0.5):
+            # Overlapping ASR windows can repeat a sentence with a slightly
+            # different ending and shifted timestamp.  Drop fuzzy duplicates
+            # before correction, speaker clustering, monitoring or persistence.
+            if is_duplicate_transcript(self.transcript, fixed, line_ts):
                 continue
             # 说话人：有句级声纹（emb）走会话级聚类——跨块全局编号 spk0/spk1/…；
             # 声纹模式开启但该句太短（<0.25s 不给声纹下结论）→ 标 spk?（宁标未知，
@@ -383,6 +442,10 @@ class Session:
         return [{**line, "ts": self._relative_ts(line["ts"])} for line in self.transcript]
 
     def _make_clip(self, layer: str, evidence: str, trigger_ts: float, explanation: str = "") -> str:
+        last = self._last_clip_trigger_ts.get(layer)
+        if (layer != "L3" and last is not None and
+                trigger_ts - last < config.CLIP_MIN_GAP_SECONDS):
+            return self._last_clip_id
         if self.hd is not None and not self.hd.is_recording():
             self.hd.start()  # 高清层：命中后 ≤90s 预算内高帧率补录（帧缩至 1280 宽）
         start_ts = trigger_ts - LOOKBACK_SECONDS
@@ -429,6 +492,8 @@ class Session:
         self.clips.append(
             {"clip_id": clip_id, "layer": layer, "evidence": evidence, "at": self._relative_ts(trigger_ts)}
         )
+        self._last_clip_trigger_ts[layer] = trigger_ts
+        self._last_clip_id = clip_id
         if self.echo:
             print(f"  >>> VAR! [{layer}] {evidence} → clip {clip_id[:8]}（回溯{LOOKBACK_SECONDS}s，{len(lines)}句）")
         return clip_id

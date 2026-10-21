@@ -59,6 +59,7 @@ LOOKBACK_SECONDS = int(__import__("os").environ.get("MEETINGVAR_LOOKBACK", "300"
 
 HOTWORD_DEBOUNCE_SECONDS = 300  # 同一热词 5 分钟内不重复触发
 L2_SIM_THRESHOLD = 0.25         # TF-IDF 兴趣相似度触发阈值（v0 拍脑袋值，用反馈校准）
+CLIP_MIN_GAP_SECONDS = float(os.environ.get("MEETINGVAR_CLIP_MIN_GAP", "60"))         # TF-IDF 兴趣相似度触发阈值（v0 拍脑袋值，用反馈校准）
 
 # ---- 说话人（会话级在线声纹聚类）----
 # 句级 CAM++ 声纹的余弦相似度阈值：≥ 归入既有说话人，不够像且句子够长 → 新说话人。
