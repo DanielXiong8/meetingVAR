@@ -60,15 +60,16 @@
 
 ## 5. 验证快照（2026-10-21 中午，0.10.2）
 
-- 完整Python3.10依赖环境：495项测试、**0跳过、495通过**（72.66秒），`compileall`通过，完整CLI仿真通过。
-- 最小依赖CI模拟：495项发现，495项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
+- 完整Python3.10依赖环境：497项测试、**0跳过、497通过**（72.26秒），`compileall`通过，完整CLI仿真通过。
+- 最小依赖CI模拟：497项发现，497项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
 - Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
 - Agent专项：37项通过（工具审批/超时/幂等、Trace脱敏、检查点、事实记忆、五类事实核对/审批/dry-run、记忆问答、会前关注清单、CLI）。
 - 0.2.1真实窗口复测：本地模型生成并保存关注清单、19个有转写会话过滤、0事实问答、会后0候选与模型停机错误提示、设置页本地/自定义厂商验证、短会开始/结束（RTASR连接、8句字幕、录屏缓冲约7.8MB、零命中丢弃）均通过。详见 `docs/BUGFIX_0.2.1.md`。
 - 0.2.1安装包：`meetingVAR-setup-0.2.1.exe` SHA256 `467eb81aecf04aab5c828c148967eec8ff71c0d816510f2fa019d3c0a74f8cde`；内置 `meetingVAR.exe` SHA256 `3cc0f8512178d9b6310df2c5b93bf7667315bc04162ca6a5cabdf668e4fc5950`；安装后 `--selftest` 通过。
 - 0.2.2全库理解冷启动：清空项目 `meetingvar/understand` 与 `interest_context.json` 后，真实 UI 对 `D:\项目\数据结构` 读完 **14/14 块、60156/60156 字、100%**，写入 `interest_context.json`；其中密集合块自动降级为精简关键词模式。详见 `docs/BUGFIX_0.2.2.md`。
-- 0.10.2 主对话去固定步数：`ChatAgent` 默认 `max_steps=0`、`max_tool_calls=0`（不设固定上限），只保留无进展、重复调用、权限等待、用户取消、时间/上下文上限等语义停止；`AgentBudget` 对 0 视为不设限。到达控制上限时先自动 checkpoint 续跑一次：压缩旧 observations 为摘要、保留原始证据用于引用校验、重置分段预算并继续同一任务；仍无法完成时用 `_best_effort_final()` 基于已查证据生成尽力答案并标注“尚未完整核对”，不再输出“已达到本轮 Agent 预算”。聊天元信息显示“自动续跑 N 次”。新增无限步数、自动续跑/观察压缩、尽力答案三项回归；完整 495 项测试通过（72.66 秒），0 跳过；0.10.2 `--selftest` 通过。
+- 会议证据基准 v1（2026-10-21）：新增事件级 `evidence_benchmark`（labels/predictions schema、recall、clip precision、每小时误保存分钟、关注点覆盖、引用支持率、20场/40事件/80%召回/≤10分钟误保存发布门禁）；test2 真实会议首次基线（机器预标注，未核验）= 4/6 事件召回 66.7%、漏 evt_005 KG定位大讨论与 evt_006 agent-KG负责人、误保存 3.05 分钟/小时、保存 6.48 分钟/小时。工具 `scripts/meeting_benchmark.py`，方法见 `docs/MEETING_EVIDENCE_BENCHMARK.md`。
+- 0.10.2 主对话去固定步数：`ChatAgent` 默认 `max_steps=0`、`max_tool_calls=0`（不设固定上限），只保留无进展、重复调用、权限等待、用户取消、时间/上下文上限等语义停止；`AgentBudget` 对 0 视为不设限。到达控制上限时先自动 checkpoint 续跑一次：压缩旧 observations 为摘要、保留原始证据用于引用校验、重置分段预算并继续同一任务；仍无法完成时用 `_best_effort_final()` 基于已查证据生成尽力答案并标注“尚未完整核对”，不再输出“已达到本轮 Agent 预算”。聊天元信息显示“自动续跑 N 次”。新增无限步数、自动续跑/观察压缩、尽力答案三项回归；完整 497 项测试通过（72.26 秒），0 跳过；0.10.2 `--selftest` 通过。
 - 0.10.2安装包：`meetingVAR-setup-0.10.2.exe` SHA256 `6bd0a97bd7119dcfe375617c07561ce7f4ae85c3acdbd6c8431214f2af58adfc`；内置 `meetingVAR.exe` SHA256 `d8026553fc937a86dfea17479eb2d5681f463b645326b958cbdfa3690953ea60`。
 - 0.10.1 Agent 审批动作闭环：工具返回 `ui_action`（如 prepare_focus 生成 7 条会前关注）后立即以 `action_pending` 完成本轮，回答“已准备…请确认”，不再继续重复调用 project_status/search_memory/prepare_focus 直至 `repeated_tool_call`/预算耗尽；ui_action 按类型+payload 去重；原生 tool calling 与 JSON 兜底两条路径都生效。新增回归测试断言一次工具调用、一个 action、`stop_reason=action_pending`。完整 493 项测试通过（69.72 秒），0 跳过；安装后 `--selftest` 通过（0.10.1）。
 - 0.10.1安装包：`meetingVAR-setup-0.10.1.exe` SHA256 `9425732ab195b710b0b01df83edc4fe8f57ea13cbc6f54204d3dfd71fce462ce`；内置 `meetingVAR.exe` SHA256 `cb2af7eb1a9e45b8b2b32e795a9bfb06899fa83daeaaeda5e0e36a56b40e5ed8`。

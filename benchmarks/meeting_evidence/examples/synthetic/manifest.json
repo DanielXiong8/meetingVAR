@@ -1,0 +1,8 @@
+{
+  "case_id": "synthetic_demo",
+  "title": "Synthetic benchmark example (not a real meeting)",
+  "duration_s": 3600,
+  "labels": "labels.json",
+  "labels_status": "unverified",
+  "predictions": "predictions.json"
+}

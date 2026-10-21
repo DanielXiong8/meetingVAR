@@ -1,0 +1,5 @@
+{"events": [
+  {"event_id": "evt_001", "start_time": 600, "end_time": 660, "event_type": "DECISION", "focus_ids": ["focus_1"], "requires_capture": true},
+  {"event_id": "evt_002", "start_time": 1200, "end_time": 1260, "event_type": "COMMITMENT", "focus_ids": ["focus_2"], "requires_capture": true},
+  {"event_id": "evt_003", "start_time": 2400, "end_time": 2460, "event_type": "RISK_BLOCKER", "focus_ids": ["focus_3"], "requires_capture": true}
+]}
