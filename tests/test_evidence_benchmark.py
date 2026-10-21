@@ -52,6 +52,13 @@ class EvidenceBenchmarkTests(unittest.TestCase):
         self.assertEqual(report["focus_total"], 3)
         self.assertEqual(report["focus_covered"], 2)
 
+    def test_test5_exam_focus_set_is_complete(self):
+        data = json.loads((ROOT / "benchmarks" / "meeting_evidence"
+                           / "test5_focus_questions.json").read_text(encoding="utf-8"))
+        ids = [row["id"] for row in data["questions"]]
+        self.assertEqual(ids, [f"F{i}" for i in range(1, 13)])
+        self.assertTrue(all(row.get("question") for row in data["questions"]))
+
     def test_root_gate_requires_real_meetings(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._case(Path(tmp))
