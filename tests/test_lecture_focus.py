@@ -34,6 +34,16 @@ class LectureFocusTests(unittest.TestCase):
         self.assertIn("极值", windows[0]["text"])
         self.assertTrue(any("拉格朗日" in row["text"] for row in windows))
 
+    def test_parse_accepts_minute_only_timestamps(self):
+        # Whisper-style output omits the hour field; it must map to the same
+        # second offsets instead of being silently dropped.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lecture.txt"
+            path.write_text("[00:30] spk0: 极值\n[61:05] spk0: 拉格朗日\n",
+                            encoding="utf-8")
+            turns = parse_transcript(path)
+        self.assertEqual([row.ts for row in turns], [30.0, 3665.0])
+
     def test_find_focus_returns_timestamped_segment(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "lecture.txt"

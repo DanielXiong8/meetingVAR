@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-_LINE = re.compile(r"\[(\d+):(\d+):(\d+)\]\s+([^:]+):\s+(.*)")
+_LINE = re.compile(r"\[(?:(\d+):)?(\d+):(\d+)\]\s+([^:]+):\s+(.*)")
 
 
 @dataclass
@@ -32,7 +32,7 @@ def parse_transcript(path: str | Path) -> list[LectureTurn]:
         match = _LINE.match(line)
         if not match:
             continue
-        ts = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + int(match.group(3))
+        ts = int(match.group(1) or 0) * 3600 + int(match.group(2)) * 60 + int(match.group(3))
         rows.append(LectureTurn(f"turn_{index}", float(ts), float(ts + 2),
                                 match.group(4), match.group(5)))
     for index, row in enumerate(rows[:-1]):
@@ -44,12 +44,47 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", "", text).casefold()
 
 
+_GLOSSARY: list[str] | None = None
+
+
+def _glossary_terms() -> list[str]:
+    global _GLOSSARY
+    if _GLOSSARY is None:
+        path = Path(__file__).resolve().parents[2] / "configs" / "lecture_math_terms.txt"
+        try:
+            _GLOSSARY = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+                         if line.strip() and not line.strip().startswith("#")]
+        except OSError:
+            _GLOSSARY = []
+    return _GLOSSARY
+
+
 def _terms(question: str, keywords: list[str] | None) -> list[str]:
     words = [str(x).strip() for x in (keywords or []) if str(x).strip()]
     if words:
         return list(dict.fromkeys(words))
     chunks = re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_.+-]+", question)
-    return list(dict.fromkeys(chunks))
+    # Without caller-supplied keywords, a whole Chinese question is useless as
+    # a literal search term.  Recover known domain terms first
+    # ("多元复合函数链式法则" -> 链式法则), then split the residue on
+    # interrogative/functional words.
+    stop = re.compile(r"怎么|如何|为什么|什么|哪些|定义|计算|求|推导|解释|讲解|请|一下|"
+                      r"与|和|及|的|是|吗|呢|了")
+    glossary = sorted(_glossary_terms(), key=len, reverse=True)
+    terms = []
+    for chunk in chunks:
+        residual = chunk
+        matched = [term for term in glossary if term in chunk]
+        for term in matched:
+            if term not in terms:
+                terms.append(term)
+            residual = residual.replace(term, "")
+        parts = [part for part in stop.split(residual) if 2 <= len(part) <= 8]
+        if parts:
+            terms.extend(parts)
+        elif residual and not stop.search(residual) and 2 <= len(residual) <= 8:
+            terms.append(residual)
+    return list(dict.fromkeys(terms))
 
 
 def build_windows(turns: list[LectureTurn], window: float = 90.0,
@@ -64,7 +99,9 @@ def build_windows(turns: list[LectureTurn], window: float = 90.0,
         if selected:
             text = " ".join(turn.text for turn in selected)
             rows.append({"start": round(start, 2), "end": round(start + window, 2),
-                         "turn_ids": [turn.id for turn in selected], "text": text})
+                         "turn_ids": [turn.id for turn in selected], "text": text,
+                         "lines": [{"id": turn.id, "ts": turn.ts, "text": turn.text}
+                                   for turn in selected]})
         start += stride
     return rows
 
@@ -80,13 +117,24 @@ def _bigrams(text: str) -> set[str]:
 
 
 def _judge(chat_fn: Callable, question: str, window: dict, timeout: int = 120) -> dict:
+    # The judge must see the same evidence IDs it is asked to cite.  Without
+    # the prefixes a small model invents "turn_1", which then fails validation.
+    lines = window.get("lines") or []
+    rendered, used = [], 0
+    for row in lines:
+        line = f"[{row['id']}] {row['text']}"
+        if used + len(line) + 1 > 2400:
+            break
+        rendered.append(line)
+        used += len(line) + 1
+    transcript = "\n".join(rendered) or window["text"][:2400]
     prompt = (
         "你是课堂内容裁判。判断下面这段课堂转写是否在实质讲解或回答关注问题。\n"
         "同义表达、举例、推导、板书口述都算命中；不要要求关注问题里的原词逐字出现。\n"
         "只有纯闲聊、课程安排、只出现一个词但没有解释时才算不命中。\n"
         "只输出 JSON：{\"hit\":true/false,\"reason\":\"简短理由\",\"evidence_ids\":[\"turn_1\"]}；"
-        "没有命中时 evidence_ids 为空数组。\n\n"
-        f"关注问题：{question}\n转写：\n{window['text'][:2800]}"
+        "没有命中时 evidence_ids 为空数组。evidence_ids 只能从下列方括号里的 ID 中选择。\n\n"
+        f"关注问题：{question}\n转写：\n{transcript}"
     )
     raw = chat_fn(prompt, temperature=0, timeout=timeout)
     if raw is None:
@@ -120,7 +168,10 @@ def find_focus(turns: list[LectureTurn], question: str, *,
     for row in windows:
         hits = keyword_hits(row["text"], terms)
         overlap = _bigrams(row["text"])
-        lexical = len(hits) * 10 + len(query_bigrams & overlap)
+        # Frequency matters: the window that defines 方向导数 says it six
+        # times, while a passing mention says it once.
+        occurrences = sum(_normalize(row["text"]).count(_normalize(term)) for term in hits)
+        lexical = occurrences * 6 + len(hits) * 4 + len(query_bigrams & overlap)
         scored.append((lexical, hits, row))
     scored.sort(key=lambda item: (-item[0], item[2]["start"]))
     # If there are keyword-bearing windows, judge those first; otherwise take
@@ -144,16 +195,27 @@ def find_focus(turns: list[LectureTurn], question: str, *,
         hit = bool(judged.get("hit")) or len(hits) >= 2
         if hit:
             reasons = [x for x in (judged.get("reason", ""), "关键词:" + "+".join(hits) if hits else "") if x]
-            results.append({"start": row["start"], "end": row["end"],
-                            "text": row["text"], "turn_ids": row["turn_ids"],
+            evidence = [str(x) for x in (judged.get("evidence_ids") or [])]
+            lines = row["lines"]
+            first = next((i for i, line in enumerate(lines) if line["id"] in set(evidence)), 0)
+            lines = lines[first:]
+            start = lines[0]["ts"] if lines else row["start"]
+            results.append({"start": start, "end": row["end"],
+                            "text": " ".join(line["text"] for line in lines),
+                            "turn_ids": [line["id"] for line in lines],
+                            "lines": lines,
                             "keywords": hits, "reason": "；".join(reasons),
-                            "evidence_ids": judged.get("evidence_ids") or row["turn_ids"][:1]})
-    # Merge overlapping/touching hit windows into segments.
+                            "evidence_ids": evidence or [lines[0]["id"]] if lines else []})
+    # Merge overlapping/touching hit windows into segments.  Windows overlap by
+    # design, so rebuild the text from de-duplicated turn lines instead of
+    # concatenating the same 60 seconds twice.
     merged = []
     for row in results:
         if merged and row["start"] <= merged[-1]["end"] + 1:
             merged[-1]["end"] = max(merged[-1]["end"], row["end"])
-            merged[-1]["text"] += " " + row["text"]
+            seen = {line["id"] for line in merged[-1]["lines"]}
+            merged[-1]["lines"].extend(line for line in row["lines"] if line["id"] not in seen)
+            merged[-1]["text"] = " ".join(line["text"] for line in merged[-1]["lines"])
             merged[-1]["turn_ids"] = list(dict.fromkeys(merged[-1]["turn_ids"] + row["turn_ids"]))
             merged[-1]["keywords"] = list(dict.fromkeys(merged[-1]["keywords"] + row["keywords"]))
         else:

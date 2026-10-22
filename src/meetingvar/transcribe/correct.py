@@ -137,7 +137,6 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
                     # ASR sometimes duplicates one character ("方向导导数" /
                     # "方方向导数").  Deduplicating adjacent repeats is safe and
                     # recovers a known glossary term exactly.
-                    dedup = re.sub(r"(.)+", r"", seg)
                     dedup = "".join(ch for j, ch in enumerate(seg) if j == 0 or ch != seg[j - 1])
                     if dedup == term:
                         pos = m.start() + i

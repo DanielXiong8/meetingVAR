@@ -108,19 +108,42 @@ def cmd_transcribe(args) -> None:
     out = Path(args.out) if args.out else None
     if out is None:
         raise SystemExit("[transcribe] 必须给 --out <转写txt路径>（这是转写模式与 replay 的唯一区别）")
-    if args.offline or args.lecture:
-        from .replay import transcribe_full
+    wav_path = Path(args.wav)
+    temp_wav = None
+    if args.denoise:
+        import tempfile
 
-        summary = transcribe_full(
-            Path(args.wav), out, terms=terms,
-            correction_terms=_correction_terms_arg(args) or terms,
-            device=args.device,
-        )
-    else:
-        summary = replay(
-            Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
-            correction_terms=_correction_terms_arg(args), auto_triggers=False,
-        )
+        from .transcribe.frontend import preprocess_wav
+
+        fd, name = tempfile.mkstemp(prefix="mv_frontend_", suffix=".wav")
+        import os
+
+        os.close(fd)
+        temp_wav = Path(name)
+        if not preprocess_wav(wav_path, temp_wav):
+            temp_wav.unlink(missing_ok=True)
+            temp_wav = None
+            print("[frontend] 降噪/归一化失败，使用原始音频", flush=True)
+        else:
+            wav_path = temp_wav
+            print(f"[frontend] 已预处理 -> {temp_wav}", flush=True)
+    try:
+        if args.offline or args.lecture:
+            from .replay import transcribe_full
+
+            summary = transcribe_full(
+                wav_path, out, terms=terms,
+                correction_terms=_correction_terms_arg(args) or terms,
+                device=args.device,
+            )
+        else:
+            summary = replay(
+                wav_path, session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
+                correction_terms=_correction_terms_arg(args), auto_triggers=False,
+            )
+    finally:
+        if temp_wav is not None:
+            temp_wav.unlink(missing_ok=True)
     print(f"[done] 转写 {summary['lines']} 句 / 纠错 {len(summary['corrections'])} 处 -> {out}")
     if summary.get("clips"):
         print(f"[next] meetingvar digest --session {session_id}  （命中片段纪要）")
@@ -613,6 +636,7 @@ def main() -> None:
     tr.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     tr.add_argument("--lecture", action="store_true", help="课堂模式：SeACo Paraformer + 数学术语表 hotwords")
     tr.add_argument("--offline", action="store_true", help="离线整段转写（不按 8 秒切块；课堂模式自动启用）")
+    tr.add_argument("--denoise", action="store_true", help="ASR 前做高通/降噪/响度归一化（保留原文件，临时文件自动删除）")
 
     rc = sub.add_parser("record", help="实时采集（系统声音）")
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")

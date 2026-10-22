@@ -10,8 +10,9 @@
 - 支持 wav/flac/mp3/opus/m4a/aac/ogg/amr…（≤500MB、≤5 小时）；roleType=1 通用角色分离。
 
 用法：
-  python xfyun_lfasr.py --wav <16k mono wav> --out <txt> [--role] [--hotword "词1 词2"]
-凭证从 .env 读取，不落盘、不打印。
+  python xfyun_lfasr.py --wav <16k mono wav> --out <txt> [--role] [--hotword "词1|词2"]
+凭证从 .env 读取，不落盘、不打印。热词分隔符是竖线 `|`（官方文档），
+不是空格；单次最多 200 个，每个 2–16 字。
 """
 from __future__ import annotations
 
@@ -185,7 +186,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--start", type=float, default=0.0)
     ap.add_argument("--role", action="store_true", help="开启角色分离 roleType=1")
-    ap.add_argument("--hotword", default=None, help='热词，空格分隔，如 "AnswerALS KG"')
+    ap.add_argument("--hotword", default=None, help='热词，竖线分隔，如 "方向导数|偏导数"')
     ap.add_argument("--order-id", default=None, help="跳过上传，直接查询已有订单（72h 内有效）")
     a = ap.parse_args()
 
