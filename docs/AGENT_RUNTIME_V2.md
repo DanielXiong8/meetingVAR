@@ -63,12 +63,14 @@ Question
 | `search_sessions` | 跨会话关键词检索，返回 session/turn/原文片段、`definition_turns` 候选 |
 | `list_sessions` | 最近会话、句数、片段数 |
 | `get_transcript_window` | 按 turn id 读原始发言，引用核对的唯一来源 |
-| `search_memory` | 项目事实记忆检索 |
-| `read_fact` | 读完整事实 |
+| `search_memory` | 项目事实记忆检索（FTS5/BM25，支持类型/状态过滤，返回 score/why） |
+| `read_fact` | 读完整事实（含状态、版本、来源） |
+| `search_conversations` | 跨对话检索标题、滚动摘要与消息片段 |
+| `read_conversation` | 读取某个历史对话的摘要与最近消息 |
 | `compare_sessions` | 同一查询下对比两个会议 |
 | `get_session_overview` | 会话概览、说话人、开头几轮 |
 
-写入仍然走 `PostMeetingAgent` 的确定性流程，避免模型自由写入项目记忆。未来若增加写工具，必须使用 `ApprovalBroker` 的一次性参数绑定 token。
+写入仍走受控流程：会后 `PostMeetingAgent`、聊天“记住…”动作卡、会后快速候选，全部需要用户确认；模型没有自由写记忆的工具。新增写工具必须使用 `ApprovalBroker` 的一次性参数绑定 token。
 
 ## 4. 身份、作用域与审批
 

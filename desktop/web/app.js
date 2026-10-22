@@ -7,7 +7,7 @@ const state = {
   speakers: new Set(), project: "", scan: null, mediaBase: "",
   askQueue: [], askOpen: false, ticker: [], phase: "idle", follow: true, captionCount: 0,
   lastCaptionAt: null, screen: {}, starting: false, polling: false, partials: new Map(),
-  agentFocus: [], agentFocusSources: [], agentFacts: [], agentBusy: false,
+  agentFocus: [], agentFocusSources: [], agentFacts: [], agentMemoryFacts: [], agentBusy: false,
   pageHistory: ["home"], pageIndex: 0, usage: null, usageRange: 7, libraryGroups: [], consolePinned: false,
   chatId: "", chatMessages: [], chatBusy: false,
 };
@@ -237,6 +237,9 @@ function handleEvent(ev) {
     else if (ev.last_log) msg += " · 最后一条：" + ev.last_log.slice(0, 110);
     toast(msg, 9000);
     pushTicker("", "系统", msg, ev.code === 0 ? "sys" : "err");
+    if (ev.code === 0 && state.project) {
+      setTimeout(() => offerPostMeetingMemory(), 600);
+    }
   } else if (ev.type === "understand_done") {
     if (ev.ok) toast("全库理解完成——回「项目」页勾选候选词并写入词表", 9000);
     else if (ev.partial) toast(`全库理解部分完成：${ev.chunks_read}/${ev.chunks_total} 块，覆盖 ${ev.coverage_pct}%——候选词已显示，可重跑续读`, 12000);
@@ -591,6 +594,7 @@ function chatCitations(msg) {
   if (!cites.length) return "";
   const parts = cites.map((c) => {
     if (c.kind === "turn") return `${agentEsc(c.session_id || "")}:${agentEsc((c.turn_ids || []).join(","))}`;
+    if (c.kind === "conversation") return `对话:${agentEsc(c.conversation_id || "")}`;
     return agentEsc(c.name || "");
   });
   const stateText = msg.mode === "agent"
@@ -794,6 +798,23 @@ async function loadConversations() {
     });
   } catch (e) { box.innerHTML = '<div class="side-empty">对话暂不可用</div>'; }
 }
+async function offerPostMeetingMemory() {
+  if (!state.project) return;
+  try {
+    const r = await pywebview.api.chat_postmeeting_offer(state.project, state.chatId || "");
+    if (!r || !r.ok) return;
+    state.chatId = r.conversation_id;
+    state.chatMessages = (r.conversation && r.conversation.messages) || [r.message];
+    $("chatThread").innerHTML = "";
+    setChatActive(true);
+    for (const msg of state.chatMessages) appendChatMessage(msg, false);
+    switchPage("home", false);
+    $("chatState").textContent = (r.conversation && r.conversation.title) || "会后记忆";
+    $("chatScroll").scrollTop = $("chatScroll").scrollHeight;
+    await loadConversations();
+    toast("我从本次会议里找到可写入的记忆，请确认", 9000);
+  } catch (e) { /* best-effort; the Agent page remains available */ }
+}
 async function openConversation(id) {
   if (!id || state.chatBusy) return;
   try {
@@ -967,7 +988,8 @@ function renderAgentStatus(st) {
   if (!st || !st.ok) { $("agentStatusLine").textContent = "Agent 状态不可用：" + ((st && st.error) || "未知错误"); return; }
   const counts = st.by_type || {};
   const dist = Object.keys(counts).map((k) => `${agentType(k)} ${counts[k]}`).join(" · ");
-  $("agentStatusLine").textContent = `项目记忆 ${st.facts || 0} 条${dist ? "（" + dist + "）" : ""} · 会前关注 ${(st.focus || []).length} 项`;
+  const pending = st.pending_conflicts ? ` · 待确认冲突 ${st.pending_conflicts}` : "";
+  $("agentStatusLine").textContent = `项目记忆 ${st.facts || 0} 条${dist ? "（" + dist + "）" : ""}${pending} · 会前关注 ${(st.focus || []).length} 项`;
 }
 function renderFocus(items, sources) {
   state.agentFocus = Array.isArray(items) ? items : [];
@@ -1007,14 +1029,84 @@ function renderFacts(items) {
   }).join("");
   $("btnFactsSave").disabled = state.agentBusy;
 }
-function renderMemory(facts) {
-  const box = $("agentMemory");
-  if (!facts || !facts.length) { box.className = "agent-list muted"; box.textContent = "暂无项目记忆"; return; }
-  box.className = "agent-list";
-  box.innerHTML = facts.map((f) =>
-    `<div class="agent-item"><span class="agent-type">${agentEsc(agentType(f.type))}</span><span class="title">${agentEsc(f.name)}</span>
-     <div class="meta">${agentEsc(f.description || "")}${f.origin_meeting ? " · " + agentEsc(f.origin_meeting) : ""}</div></div>`).join("");
+function memoryStatusLabel(status) {
+  return { active: "生效中", "pending-conflict": "待确认冲突", superseded: "已被替代",
+           expired: "已过期", rejected: "已否决", deleted: "已删除" }[status] || status || "生效中";
 }
+function renderMemory(payload) {
+  const facts = Array.isArray(payload) ? payload : ((payload && payload.facts) || []);
+  state.agentMemoryFacts = facts;
+  const box = $("agentMemory");
+  const stats = (!Array.isArray(payload) && payload && payload.stats) || {};
+  if ($("memoryStats")) {
+    const by = stats.by_status || {};
+    const dist = Object.keys(by).map((k) => `${memoryStatusLabel(k)} ${by[k]}`).join(" · ");
+    $("memoryStats").textContent = stats.total != null
+      ? `共 ${stats.total} 条${dist ? "（" + dist + "）" : ""}` : "";
+  }
+  if (!facts.length) { box.className = "agent-list muted"; box.textContent = "暂无项目记忆"; return; }
+  box.className = "agent-list";
+  box.innerHTML = facts.map((f, i) => {
+    const status = f.status || "active";
+    const meta = [f.description || "", f.origin_meeting ? "来源 " + f.origin_meeting : "",
+                  "v" + (f.version || 1), f.score ? "相关度 " + Number(f.score).toFixed(2) : "",
+                  (f.why || []).length ? "命中 " + f.why.join("/") : ""].filter(Boolean).join(" · ");
+    const actions = [];
+    if (status === "pending-conflict") {
+      actions.push(`<button class="btn btn-mini" data-mem-action="keep_new" data-index="${i}">采用新事实</button>`);
+      actions.push(`<button class="btn btn-mini" data-mem-action="keep_old" data-index="${i}">保留旧事实</button>`);
+      actions.push(`<button class="btn btn-mini" data-mem-action="merge" data-index="${i}">合并</button>`);
+    }
+    actions.push(`<button class="btn btn-mini" data-mem-action="edit" data-index="${i}">编辑</button>`);
+    actions.push(`<button class="btn btn-mini" data-mem-action="pin" data-index="${i}">${f.pinned ? "取消置顶" : "置顶"}</button>`);
+    actions.push(`<button class="btn btn-mini danger" data-mem-action="delete" data-index="${i}">删除</button>`);
+    return `<div class="agent-item memory-item"><div><span class="agent-type">${agentEsc(agentType(f.type))}</span>` +
+      `<span class="title">${agentEsc(f.name)}</span>` +
+      `<span class="memory-status ${agentEsc(status)}">${agentEsc(memoryStatusLabel(status))}</span>` +
+      `${f.pinned ? '<span class="memory-pin">置顶</span>' : ""}</div>` +
+      `<div class="meta">${agentEsc(meta)}</div>` +
+      `<div class="memory-actions">${actions.join("")}</div></div>`;
+  }).join("");
+  $("agentMemory").onclick = (event) => {
+    const button = event.target.closest("[data-mem-action]");
+    if (!button) return;
+    memoryAction(button.dataset.memAction, Number(button.dataset.index));
+  };
+}
+async function reloadMemory() {
+  if (!state.project) return;
+  const query = ($("agentMemoryQuery") && $("agentMemoryQuery").value.trim()) || "";
+  const status = ($("memoryFilter") && $("memoryFilter").value) || "active";
+  const r = await pywebview.api.agent_memory(state.project, query, status);
+  renderMemory(r || {});
+}
+function openMemoryEditor(index) {
+  const fact = state.agentMemoryFacts[index];
+  if (!fact) return;
+  $("memoryEditor").hidden = false;
+  $("memEditTitle").textContent = "编辑记忆 · " + fact.name;
+  $("memEditDesc").value = fact.description || "";
+  $("memEditBody").value = fact.body || "";
+  $("memEditStatus").value = fact.status === "expired" ? "expired" : "active";
+  $("memoryEditor").dataset.index = String(index);
+}
+async function memoryAction(action, index) {
+  const fact = state.agentMemoryFacts[index];
+  if (!fact) return;
+  if (action === "edit") { openMemoryEditor(index); return; }
+  if (action === "delete" && !confirm(`删除记忆「${fact.name}」？`)) return;
+  setAgentBusy(true, "正在更新项目记忆…");
+  try {
+    let r;
+    if (action === "pin") r = await pywebview.api.agent_memory_pin(state.project, fact.name, !fact.pinned);
+    else if (action === "delete") r = await pywebview.api.agent_memory_delete(state.project, fact.name, false);
+    else r = await pywebview.api.agent_memory_resolve(state.project, fact.name, action);
+    if (!r || !r.ok) { toast("记忆操作失败：" + ((r && r.error) || "未知错误"), 9000); return; }
+    await reloadMemory();
+    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
+  } finally { setAgentBusy(false); }
+}
+
 async function loadAgentPage() {
   const project = state.project || "";
   $("agentProject").textContent = project || "（未选择项目——先去「项目」页选择）";
@@ -1026,8 +1118,9 @@ async function loadAgentPage() {
     renderFocus(st && st.ok ? st.focus : [], st && st.ok ? st.focus_sources : []);
     const sessions = await pywebview.api.list_sessions();
     renderSessions(sessions);
-    const mem = await pywebview.api.agent_memory(project, "");
-    renderMemory(mem && mem.ok ? mem.facts : []);
+    const mem = await pywebview.api.agent_memory(project, "",
+      ($("memoryFilter") && $("memoryFilter").value) || "active");
+    renderMemory(mem && mem.ok ? mem : {});
   } catch (e) {
     $("agentStatusLine").textContent = "当前安装版本不支持 Agent 页面，请重新安装新版。";
   } finally { setAgentBusy(false); }
@@ -1111,7 +1204,8 @@ function renderAgentRun(r) {
   const answer = $("agentRunAnswer");
   answer.hidden = false;
   const citations = (r.citations || []).map((c) =>
-    c.kind === "turn" ? `${c.session_id}:${(c.turn_ids || []).join(",")}` : c.name).join("、");
+    c.kind === "turn" ? `${c.session_id}:${(c.turn_ids || []).join(",")}` :
+    (c.kind === "conversation" ? `对话:${c.conversation_id}` : c.name)).join("、");
   const stateText = !r.answered ? "没有足够依据" :
     r.grounded ? "回答完成（引用已校验）" : "回答完成（引用未通过校验）";
   answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
@@ -1144,9 +1238,33 @@ $("btnMemory").onclick = async () => {
   if (!state.project) { toast("先选择项目"); return; }
   setAgentBusy(true, "检索项目记忆…");
   try {
-    const r = await pywebview.api.agent_memory(state.project, $("agentMemoryQuery").value.trim());
-    renderMemory(r && r.ok ? r.facts : []);
+    await reloadMemory();
     $("agentStatusLine").textContent = "项目记忆已刷新";
+  } finally { setAgentBusy(false); }
+};
+$("memoryFilter").onchange = () => { if (state.project) reloadMemory(); };
+$("agentMemoryQuery").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); $("btnMemory").click(); }
+});
+$("btnMemEditClose").onclick = () => { $("memoryEditor").hidden = true; };
+$("btnMemEditSave").onclick = async () => {
+  const index = Number($("memoryEditor").dataset.index);
+  const fact = state.agentMemoryFacts[index];
+  if (!fact) return;
+  setAgentBusy(true, "保存记忆…");
+  try {
+    const r = await pywebview.api.agent_memory_update(state.project, fact.name, {
+      description: $("memEditDesc").value.trim(),
+      body: $("memEditBody").value,
+      status: $("memEditStatus").value,
+      type: fact.type,
+      pinned: !!fact.pinned,
+    });
+    if (!r || !r.ok) { toast("保存失败：" + ((r && r.error) || "未知错误"), 9000); return; }
+    $("memoryEditor").hidden = true;
+    toast("记忆已保存");
+    await reloadMemory();
+    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
   } finally { setAgentBusy(false); }
 };
 

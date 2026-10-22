@@ -63,7 +63,7 @@ def _reference_material(memory_dir: Path | None, repo_dir: Path | None) -> str:
             )
             symbols += [a or b for a, b in found]
         if symbols:
-            parts.append("[代码高频定义（仅供参考上下文，不是热词）]\n" + ", ".join(symbols[:80]))
+            parts.append("[代码高频定义（仅供参考上下文，不是热词）]\n" + ", ".join(symbols[:200]))
     return "\n\n---\n\n".join(parts)
 
 

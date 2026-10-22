@@ -92,12 +92,21 @@ def _read_window(args: dict, context: ToolContext) -> dict:
 
 def _read_search_memory(args: dict, context: ToolContext) -> dict:
     store = _facts(context)
-    rows = store.search(args["query"], limit=max(1, min(20, int(args.get("limit", 6)))))
+    rows = store.search(
+        args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
+        types=args.get("types") or None,
+        status=str(args.get("status") or "active"),
+    )
     return {"query": args["query"], "facts": [{
         "name": fact.get("name", ""),
         "description": fact.get("description", ""),
         "type": fact.get("metadata", {}).get("type", ""),
+        "status": fact.get("metadata", {}).get("status", "active"),
         "origin_meeting": fact.get("metadata", {}).get("origin_meeting", ""),
+        "version": fact.get("metadata", {}).get("version", 1),
+        "updated_at": fact.get("metadata", {}).get("updated_at", ""),
+        "score": fact.get("_score", 0),
+        "why": fact.get("_why", []),
         "body": str(fact.get("body", ""))[:1600],
     } for fact in rows], "trust": "project-memory"}
 
@@ -110,8 +119,34 @@ def _read_fact(args: dict, context: ToolContext) -> dict:
         raise ToolError("fact_not_found", "no such fact") from None
     return {"name": fact.get("name", ""), "description": fact.get("description", ""),
             "type": fact.get("metadata", {}).get("type", ""),
+            "status": fact.get("metadata", {}).get("status", "active"),
+            "version": fact.get("metadata", {}).get("version", 1),
             "origin_meeting": fact.get("metadata", {}).get("origin_meeting", ""),
+            "updated_at": fact.get("metadata", {}).get("updated_at", ""),
             "body": str(fact.get("body", ""))[:4000], "trust": "project-memory"}
+
+
+def _read_search_conversations(args: dict, context: ToolContext) -> dict:
+    from .chat import ChatStore
+
+    store = ChatStore(context.project_root)
+    rows = store.search_conversations(
+        args["query"], limit=max(1, min(20, int(args.get("limit", 5)))))
+    return {"query": args["query"], "conversations": rows,
+            "trust": "local-conversation"}
+
+
+def _read_conversation(args: dict, context: ToolContext) -> dict:
+    from .chat import ChatError, ChatStore
+
+    store = ChatStore(context.project_root)
+    try:
+        data = store.read_conversation(
+            args["conversation_id"],
+            max_messages=max(1, min(60, int(args.get("max_messages", 20)))))
+    except (ChatError, OSError, ValueError):
+        raise ToolError("conversation_not_found", "no such conversation") from None
+    return {"conversation": data, "trust": "local-conversation"}
 
 
 def _read_compare(args: dict, context: ToolContext) -> dict:
@@ -135,11 +170,14 @@ def _read_overview(args: dict, context: ToolContext) -> dict:
 def _read_project_status(args: dict, context: ToolContext) -> dict:
     """Project-progress memory: facts, focus, overview and recent meetings."""
     store = _facts(context)
-    facts = store.list_facts(limit=300)
-    by_type = {}
-    for fact in facts:
+    all_facts = store.list_facts(limit=1000, status="all", include_inactive=True)
+    facts = [fact for fact in all_facts if fact.get("status", "active") == "active"]
+    by_type, by_status = {}, {}
+    for fact in all_facts:
         kind = fact.get("metadata", {}).get("type", "fact")
         by_type[kind] = by_type.get(kind, 0) + 1
+        state = fact.get("status", "active")
+        by_status[state] = by_status.get(state, 0) + 1
     focus = []
     try:
         import json
@@ -157,10 +195,14 @@ def _read_project_status(args: dict, context: ToolContext) -> dict:
         pass
     catalog = _catalog(context)
     sessions = catalog.list_sessions(limit=6)
+    pending = [fact for fact in all_facts if fact.get("status") == "pending-conflict"]
     return {"project": str(context.project_root), "facts": len(facts), "by_type": by_type,
+            "by_status": by_status, "pending_conflicts": len(pending),
             "recent_facts": [{"name": f.get("name", ""),
                               "description": f.get("description", ""),
                               "type": f.get("metadata", {}).get("type", ""),
+                              "status": f.get("status", "active"),
+                              "version": f.get("metadata", {}).get("version", 1),
                               "origin_meeting": f.get("metadata", {}).get("origin_meeting", "")}
                              for f in facts[:10]],
             "focus": focus, "project_overview": overview,
@@ -334,7 +376,9 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
         input_schema={
             "type": "object", "additionalProperties": False,
             "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 300},
-                           "limit": {"type": "integer"}},
+                           "limit": {"type": "integer"},
+                           "types": {"type": "array", "items": {"type": "string"}},
+                           "status": {"type": "string"}},
             "required": ["query"],
         },
     ), _read_search_memory)
@@ -349,6 +393,30 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": ["name"],
         },
     ), _read_fact)
+
+    registry.register(ToolSpec(
+        name="search_conversations",
+        description="检索历史对话的标题、滚动摘要和消息片段，用于跨会话回忆",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=8000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 300},
+                           "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+    ), _read_search_conversations)
+
+    registry.register(ToolSpec(
+        name="read_conversation",
+        description="读取某个历史对话的摘要和最近消息",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=12000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"conversation_id": {"type": "string", "minLength": 1, "maxLength": 64},
+                           "max_messages": {"type": "integer"}},
+            "required": ["conversation_id"],
+        },
+    ), _read_conversation)
 
     registry.register(ToolSpec(
         name="compare_sessions",

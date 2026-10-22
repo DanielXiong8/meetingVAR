@@ -19,6 +19,7 @@ from .. import config
 from ..llm import chat_result
 from .digest_skill import MeetingDigestSkill
 from .loop import AgentLoop
+from .memory_intent import is_memory_request, propose_memory
 
 _SAFE_ID = re.compile(r"[0-9a-f]{32}")
 _GREETING = re.compile(r"^(你好|您好|hi|hello|在吗|早上好|下午好|晚上好|谢谢|好的|ok)[!！。.\s]*$", re.I)
@@ -28,6 +29,17 @@ _MEETING = re.compile(
     r"证据|转写|关注|事实|记忆|检索|总结|复盘|安排|负责|截止|方案|评审|结论|行动项|"
     r"课堂|老师|同学|上课|讲座|原话|记作|看成|提到|定义|编码|公式|符号|概念|"
     r"第一版|初版|改口|变动|冲突", re.I)
+
+
+def _query_terms(text: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_.+-]+|[一-鿿]{2,}", str(text or ""))
+    terms = []
+    for word in words:
+        folded = word.casefold()
+        terms.append(folded)
+        if re.fullmatch(r"[一-鿿]+", word):
+            terms.extend(word[i:i + 2] for i in range(len(word) - 1))
+    return list(dict.fromkeys(term for term in terms if len(term) >= 2))
 
 
 class ChatError(RuntimeError):
@@ -68,7 +80,9 @@ class ChatStore:
         now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         payload = {"version": 1, "id": conversation_id,
                    "title": (title.strip()[:80] or "新对话"),
-                   "created_at": now, "updated_at": now, "messages": [], "pending_actions": []}
+                   "created_at": now, "updated_at": now,
+                   "summary": "", "summary_until": 0,
+                   "messages": [], "pending_actions": []}
         _atomic_json(self._path(conversation_id), payload)
         return payload
 
@@ -86,6 +100,10 @@ class ChatStore:
             payload["messages"] = []
         if not isinstance(payload.get("pending_actions"), list):
             payload["pending_actions"] = []
+        if not isinstance(payload.get("summary"), str):
+            payload["summary"] = ""
+        if not isinstance(payload.get("summary_until"), int):
+            payload["summary_until"] = 0
         status = {a.get("id"): a.get("status", "pending")
                   for a in payload.get("pending_actions") or [] if isinstance(a, dict)}
         for message in payload["messages"]:
@@ -128,6 +146,58 @@ class ChatStore:
                          "messages": len(messages)})
         rows.sort(key=lambda row: row.get("updated_at", ""), reverse=True)
         return rows[:max(1, min(100, int(limit)))]
+
+    def update_summary(self, conversation_id: str, summary: str,
+                       until: int) -> dict:
+        payload = self.load(conversation_id)
+        payload["summary"] = str(summary or "")[:4000]
+        payload["summary_until"] = max(0, int(until))
+        payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _atomic_json(self._path(conversation_id), payload)
+        return payload
+
+    def search_conversations(self, query: str, limit: int = 5) -> list[dict]:
+        """Small cross-conversation recall index over summaries and messages."""
+        terms = _query_terms(query)
+        if not terms:
+            return []
+        rows = []
+        for path in self.root.glob("*.json"):
+            if not _SAFE_ID.fullmatch(path.stem):
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            messages = payload.get("messages") or []
+            haystack = "\n".join(
+                [str(payload.get("title", "")), str(payload.get("summary", ""))]
+                + [str(m.get("content", "")) for m in messages if m.get("role") in {"user", "assistant"}])
+            folded = haystack.casefold()
+            score = sum(folded.count(term) for term in terms)
+            if not score:
+                continue
+            snippet = ""
+            for message in reversed(messages):
+                text = str(message.get("content", ""))
+                if any(term in text.casefold() for term in terms):
+                    snippet = text.replace("\n", " ")[:180]
+                    break
+            if not snippet and payload.get("summary"):
+                snippet = str(payload["summary"])[-180:]
+            rows.append({"conversation_id": path.stem,
+                         "title": payload.get("title") or "新对话",
+                         "updated_at": payload.get("updated_at", ""),
+                         "score": score, "snippet": snippet})
+        rows.sort(key=lambda row: (-row["score"], row.get("updated_at", "")), reverse=False)
+        return rows[:max(1, min(20, int(limit)))]
+
+    def read_conversation(self, conversation_id: str, max_messages: int = 30) -> dict:
+        payload = self.load(conversation_id)
+        return {"conversation_id": conversation_id,
+                "title": payload.get("title") or "新对话",
+                "summary": payload.get("summary", ""),
+                "messages": payload.get("messages", [])[-max(1, min(60, int(max_messages))):]}
 
     def add_actions(self, conversation_id: str, actions: list[dict]) -> dict:
         payload = self.load(conversation_id)
@@ -177,9 +247,35 @@ class ChatAgent:
         return self.conversation["id"]
 
     def _history(self) -> list[dict]:
-        return [{"role": m["role"], "content": m.get("content", "")}
-                for m in self.conversation.get("messages", [])[-10:]
-                if m.get("role") in {"user", "assistant"} and m.get("content")]
+        rows = []
+        summary = str(self.conversation.get("summary", "") or "").strip()
+        if summary:
+            rows.append({"role": "assistant", "content": "对话滚动摘要：\n" + summary})
+        rows.extend({"role": m["role"], "content": m.get("content", "")}
+                    for m in self.conversation.get("messages", [])[-8:]
+                    if m.get("role") in {"user", "assistant"} and m.get("content"))
+        return rows
+
+    def _roll_summary(self) -> None:
+        """Extractive rolling summary; cheap enough to run every 12 messages."""
+        messages = self.conversation.get("messages", [])
+        until = int(self.conversation.get("summary_until", 0) or 0)
+        if len(messages) - until < 12:
+            return
+        batch = messages[until:]
+        lines = []
+        for message in batch:
+            text = str(message.get("content", "")).replace("\n", " ").strip()
+            if not text:
+                continue
+            prefix = "用户" if message.get("role") == "user" else "助手"
+            lines.append(f"{prefix}：{text[:140]}")
+        previous = str(self.conversation.get("summary", "") or "").strip()
+        summary = "\n".join(x for x in [previous] + lines if x)
+        if len(summary) > 1800:
+            summary = summary[-1800:]
+        self.conversation = self.store.update_summary(
+            self.conversation_id, summary, len(messages))
 
     def _direct_answer(self, question: str) -> str:
         if self.llm is not None:
@@ -206,6 +302,62 @@ class ChatAgent:
                             str(result.get("error") or "模型调用失败"))
         return str(result.get("content", "")).strip()
 
+    def _quick_memory_action(self) -> dict | None:
+        """Find the latest saved meeting and offer model-free fact candidates."""
+        try:
+            from .postmeeting import PostMeetingAgent
+            from .sessions import SessionCatalog
+
+            catalog = SessionCatalog(self.data_dir)
+            for row in catalog.list_sessions(limit=12):
+                session_id = row["session_id"]
+                session = catalog.load(session_id)
+                if not session.get("turns"):
+                    continue
+                agent = PostMeetingAgent(session_id=session_id,
+                                         transcript=session["turns"],
+                                         project_root=self.project_root, dry_run=True)
+                report = agent.quick_preview()
+                items = report.get("items") or []
+                if not items:
+                    continue
+                for existing in (self.conversation.get("pending_actions") or []):
+                    if (existing.get("type") == "save_meeting_facts"
+                            and (existing.get("payload") or {}).get("session_id") == session_id):
+                        return None
+                action = {
+                    "id": uuid.uuid4().hex,
+                    "type": "save_meeting_facts",
+                    "label": f"写入本次会议 {len(items)} 条记忆",
+                    "payload": {"session_id": session_id, "items": items},
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "status": "pending", "result": "",
+                }
+                self.store.add_actions(self.conversation_id, [action])
+                return action
+        except Exception:
+            return None
+        return None
+
+    def postmeeting_offer(self) -> dict:
+        """Create a chat thread card after a meeting ends (record button path)."""
+        action = self._quick_memory_action()
+        if not action:
+            return {"ok": False, "error": "no_memory_candidates"}
+        count = len(action["payload"].get("items") or [])
+        assistant = {
+            "role": "assistant",
+            "content": (f"会议已结束。我从本次会议里找到 {count} 条可写入的项目记忆，"
+                        "确认后才会保存；不会自动写入。"),
+            "ts": round(time.time(), 3), "mode": "memory_offer",
+            "actions": [{"id": action["id"], "type": action["type"],
+                         "label": action["label"]}],
+        }
+        self.conversation = self.store.append(self.conversation_id, assistant)
+        self._roll_summary()
+        return {"ok": True, "conversation_id": self.conversation_id,
+                "message": assistant, "conversation": self.conversation}
+
     def execute_action(self, action_id: str) -> dict:
         action = self.store.action(self.conversation_id, action_id)
         if not action:
@@ -214,6 +366,7 @@ class ChatAgent:
             return {"ok": False, "error": "该操作已处理"}
         kind, payload = action.get("type"), action.get("payload") or {}
         result = {}
+        actions_out = []
         try:
             if kind in {"start_meeting", "stop_meeting", "start_project_reading"}:
                 result = {"ok": True, "ui_only": True, "action": kind}
@@ -221,6 +374,50 @@ class ChatAgent:
                 text = {"start_meeting": "已确认开始会议。",
                         "stop_meeting": "已确认结束会议。",
                         "start_project_reading": "已确认开始全库理解。"}[kind]
+                if kind == "stop_meeting":
+                    memory_action = self._quick_memory_action()
+                    if memory_action:
+                        actions_out.append(memory_action)
+                        text += ("\n我从本次会议里找到 "
+                                 f"{len(memory_action['payload']['items'])} 条可写入的记忆，"
+                                 "确认后保存到项目记忆。")
+            elif kind == "save_memory":
+                from .memory import FACT_TYPES, FactStore
+                items = payload.get("items") if isinstance(payload.get("items"), list) else []
+                store = FactStore(self.project_root)
+                written, pending, errors = 0, 0, []
+                for item in items[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("title") or "").strip()[:200]
+                    body = str(item.get("body") or "").strip()
+                    if not title or not body:
+                        continue
+                    fact_type = str(item.get("fact_type") or "project-fact")
+                    if fact_type not in FACT_TYPES:
+                        fact_type = "project-fact"
+                    try:
+                        path = store.write(
+                            name=title, description=str(item.get("description") or title),
+                            body=body, fact_type=fact_type,
+                            source_refs=list(item.get("source_refs") or []),
+                            confidence=float(item.get("confidence") or 0.9),
+                            origin_meeting=str(item.get("origin_meeting") or
+                                                f"chat:{self.conversation_id}"),
+                            metadata={"channel": "chat"},
+                            conflict_policy="auto")
+                        written += 1
+                        if store.read_path(path).get("status") == "pending-conflict":
+                            pending += 1
+                    except (OSError, ValueError, TypeError) as exc:
+                        errors.append(type(exc).__name__)
+                result = {"ok": written > 0, "written": written,
+                          "pending_conflicts": pending, "errors": errors}
+                status = "done" if written else "failed"
+                text = (f"已记住 {written} 条项目记忆。"
+                        if written else "没有写入记忆，请检查内容。")
+                if pending:
+                    text += f" 其中 {pending} 条与现有事实冲突，已放入待确认队列。"
             elif kind == "save_focus":
                 from .focus import FocusAgent
                 agent = FocusAgent(project_root=self.project_root, dry_run=False,
@@ -233,7 +430,7 @@ class ChatAgent:
             elif kind == "save_meeting_facts":
                 from .postmeeting import PostMeetingAgent, load_transcript
                 session_id = str(payload.get("session_id") or "")
-                path = Path(config.POOL_DIR) / session_id / "transcript.json"
+                path = Path(self.data_dir) / "pool" / session_id / "transcript.json"
                 transcript = load_transcript(path)
                 agent = PostMeetingAgent(session_id=session_id, transcript=transcript,
                                          project_root=self.project_root, dry_run=False,
@@ -242,6 +439,8 @@ class ChatAgent:
                 status = "done" if result.get("ok") else "failed"
                 text = (f"已写入 {result.get('written', 0)} 条会议事实。"
                         if result.get("ok") else "会议事实写入失败。")
+                if result.get("pending_conflicts"):
+                    text += f" 其中 {result['pending_conflicts']} 条待确认冲突。"
             elif kind == "save_terms":
                 from ..memory.probe import write_terms
                 terms = [str(t).strip() for t in (payload.get("terms") or []) if str(t).strip()]
@@ -266,7 +465,11 @@ class ChatAgent:
         self.store.set_action_status(self.conversation_id, action_id, status, text)
         assistant = {"role": "assistant", "content": text, "ts": round(time.time(), 3),
                      "mode": "action", "action_id": action_id, "status": status}
+        if actions_out:
+            assistant["actions"] = [{"id": a["id"], "type": a["type"],
+                                     "label": a["label"]} for a in actions_out]
         self.conversation = self.store.append(self.conversation_id, assistant)
+        self._roll_summary()
         return {"ok": bool(result.get("ok")), "ui_only": bool(result.get("ui_only")),
                 "action": kind, "result": result, "message": assistant,
                 "conversation_id": self.conversation_id}
@@ -277,6 +480,35 @@ class ChatAgent:
             raise ChatError("empty_message", "请输入消息")
         history = self._history()
         self.store.append(self.conversation_id, {"role": "user", "content": text})
+
+        if is_memory_request(text):
+            proposals = propose_memory(text, history, self.conversation_id)
+            if proposals:
+                action_rows = [{
+                    "id": uuid.uuid4().hex,
+                    "type": "save_memory",
+                    "label": "记住：" + proposals[0]["title"],
+                    "payload": {"items": proposals},
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "status": "pending", "result": "",
+                }]
+                self.store.add_actions(self.conversation_id, action_rows)
+                answer = ("我准备把这条写入项目记忆：\n"
+                          f"「{proposals[0]['title']}」\n"
+                          "确认后才会保存；你也可以在下方取消。")
+                assistant = {"role": "assistant", "content": answer,
+                             "ts": round(time.time(), 3), "mode": "memory",
+                             "actions": [{"id": a["id"], "type": a["type"],
+                                          "label": a["label"]} for a in action_rows]}
+            else:
+                answer = "要记住什么？请把内容写在“记住”后面，例如：记住：项目周五交付第一版。"
+                assistant = {"role": "assistant", "content": answer,
+                             "ts": round(time.time(), 3), "mode": "memory"}
+            self.conversation = self.store.append(self.conversation_id, assistant)
+            self._roll_summary()
+            return {"ok": True, "conversation_id": self.conversation_id,
+                    "title": self.conversation.get("title", "新对话"),
+                    "message": assistant, "conversation": self.conversation}
 
         if _GREETING.fullmatch(text):
             answer = ("你好，我是 meetingVAR。可以帮你查会议原话、项目记忆和项目进度。"
@@ -330,6 +562,7 @@ class ChatAgent:
         assistant = {"role": "assistant", "content": answer,
                      "ts": round(time.time(), 3), **meta}
         self.conversation = self.store.append(self.conversation_id, assistant)
+        self._roll_summary()
         return {"ok": True, "conversation_id": self.conversation_id,
                 "title": self.conversation.get("title", "新对话"),
                 "message": assistant, "conversation": self.conversation}

@@ -487,3 +487,14 @@ body.panel-open .panel-scrim { display: block; }
 .zip-size { color: var(--faint); font-size: 9px; flex: 0 0 auto; }
 .file-viewer video { max-width: 100%; max-height: 70vh; border-radius: 8px; display: block; margin: 0 auto; }
 .file-viewer audio { width: 100%; }
+
+/* memory governance */
+.memory-filter { max-width: 132px; }
+.memory-editor { margin-top: 10px; padding: 10px; border: 1px solid rgba(255,255,255,.10); border-radius: 10px; background: rgba(255,255,255,.025); }
+.memory-item .memory-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.btn-mini { padding: 3px 8px; font-size: 11px; line-height: 1.4; }
+.btn-mini.danger { color: #ffb4b4; border-color: rgba(255,90,90,.35); }
+.memory-status { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; color: var(--muted, #9aa3b2); border: 1px solid rgba(255,255,255,.12); }
+.memory-status.pending-conflict { color: #ffd18a; border-color: rgba(255,180,60,.45); }
+.memory-status.expired, .memory-status.superseded, .memory-status.rejected, .memory-status.deleted { color: #8b93a3; text-decoration: line-through; }
+.memory-pin { margin-left: 6px; font-size: 10px; color: #9fd6ff; }

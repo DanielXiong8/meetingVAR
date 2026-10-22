@@ -156,7 +156,62 @@ def _merge(items: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+_QUICK_RULES = (
+    ("decision", re.compile(r"决定|定了|确定|拍板|结论|采用|改成|改为"), 0.60),
+    ("commitment", re.compile(r"承诺|答应|保证|一定完成"), 0.58),
+    ("risk", re.compile(r"风险|担心|延期|阻塞|依赖|来不及"), 0.55),
+    ("open-question", re.compile(r"待定|未决|还没定|需要确认|要不要|待确认"), 0.55),
+    ("action-item", re.compile(r"负责|交付|截止|跟进|完成|排期|下周|明天|周五|月底"), 0.50),
+)
+_OWNER = re.compile(r"(?:负责人|由|请)\s*([一-鿿A-Za-z]{2,8})")
+_DUE = re.compile(r"(周[一二三四五六日天]|下周[一二三四五六日天]?|明天|后天|月底|"
+                  r"\d{1,2}月\d{1,2}日|\d{4}-\d{1,2}-\d{1,2})")
+
+
+def quick_candidates(transcript: list[dict], max_items: int = 8) -> list[dict]:
+    """Fast, deterministic candidates for the post-meeting confirmation card.
+
+    This is intentionally conservative and model-free: it only surfaces turns
+    containing explicit decision/commitment/risk/action language.  The Agent
+    page can still run the deeper LLM extraction on demand.
+    """
+    rows = []
+    for turn in transcript:
+        text = str(turn.get("text", "")).strip()
+        if len(text) < 6:
+            continue
+        kind, confidence = "", 0.0
+        for candidate, pattern, score in _QUICK_RULES:
+            if pattern.search(text):
+                kind, confidence = candidate, score
+                break
+        if not kind:
+            continue
+        title = text[:80].strip("，。；; ")
+        owner = (_OWNER.search(text) or [None, ""])[1] if _OWNER.search(text) else ""
+        due = _DUE.search(text)
+        rows.append({
+            "fact_type": kind, "title": title, "owner": owner.strip(),
+            "due": due.group(1) if due else "", "rationale": "",
+            "severity": "", "confidence": confidence,
+            "evidence_turn_ids": [turn["id"]],
+        })
+        if len(rows) >= max_items * 3:
+            break
+    merged, seen = [], set()
+    for row in rows:
+        key = re.sub(r"[\s\W_]+", "", row["title"].casefold())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+        if len(merged) >= max_items:
+            break
+    return merged
+
+
 class PostMeetingAgent:
+
     def __init__(self, *, session_id: str, transcript: list[dict], project_root: Path,
                  approval: Callable[[dict, list[dict]], bool] | None = None,
                  dry_run: bool = False, max_chars: int = 12000,
@@ -314,6 +369,25 @@ class PostMeetingAgent:
                 "severity": fields["severity"], "confidence": float(confidence),
                 "evidence_turn_ids": list(dict.fromkeys(ids))}
 
+    def quick_preview(self) -> dict:
+        """Model-free candidates with evidence already resolved from the transcript."""
+        task = self.runtime.create("postmeeting_quick_preview", {"session_id": self.session_id})
+        self.runtime.start(task)
+        by_id = {turn["id"]: turn for turn in self.transcript}
+        items = []
+        for row in quick_candidates(self.transcript):
+            evidence = [by_id[tid] for tid in row["evidence_turn_ids"] if tid in by_id]
+            if not evidence:
+                continue
+            item = dict(row)
+            item["evidence_text"] = "\n".join(
+                f"[{turn['id']}] {turn['speaker']}: {turn['text']}" for turn in evidence)
+            items.append(item)
+        self.runtime.complete(task, {"candidates": len(items)})
+        return {"ok": True, "session_id": self.session_id, "items": items,
+                "candidates": len(items), "verified": len(items), "chunks": 0,
+                "task_id": task.task_id, "errors": [], "mode": "quick"}
+
     def preview(self) -> dict:
         """Extract and verify candidates without writing any fact."""
         task = self.runtime.create("postmeeting_preview", {"session_id": self.session_id})
@@ -357,7 +431,8 @@ class PostMeetingAgent:
         task = self.runtime.create("postmeeting_save", {"session_id": self.session_id})
         self.runtime.start(task)
         report = {"ok": False, "session_id": self.session_id, "written": 0,
-                  "skipped": 0, "written_by_type": {}, "task_id": task.task_id, "errors": []}
+                  "pending_conflicts": 0, "skipped": 0,
+                  "written_by_type": {}, "task_id": task.task_id, "errors": []}
         context = ToolContext(session_id=self.session_id, project_root=self.project_root,
                               transcript=self.transcript, fact_store=self.fact_store,
                               dry_run=self.dry_run)
@@ -395,6 +470,13 @@ class PostMeetingAgent:
                     report["written"] += 1
                     report["written_by_type"][item["fact_type"]] = (
                         report["written_by_type"].get(item["fact_type"], 0) + 1)
+                    path = (created.get("result").value or {}).get("path") if created.get("result") else ""
+                    if path:
+                        try:
+                            if self.fact_store.read_path(Path(path)).get("status") == "pending-conflict":
+                                report["pending_conflicts"] += 1
+                        except (OSError, ValueError):
+                            pass
             else:
                 report["skipped"] += 1
                 report["errors"].append({"stage": "write", "code": created.get("error_code")})

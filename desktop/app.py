@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.10.7"
+APP_VERSION = "0.11.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1651,6 +1651,14 @@ class Backend:
             return {"ok": False, "error": "对话 ID 无效"}
         return self._agent_bridge(["agent_chat_load", folder, conversation_id], timeout=30)
 
+    def chat_postmeeting_offer(self, folder: str, conversation_id: str = "") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        cid = conversation_id if (conversation_id and
+                                   self._agent_valid_session(conversation_id)) else ""
+        return self._agent_bridge(["agent_chat_postmeeting_offer", folder, cid],
+                                  timeout=120)
+
     def chat_action(self, folder: str, conversation_id: str, action_id: str) -> dict:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
@@ -1669,13 +1677,53 @@ class Backend:
         return self._agent_bridge(["agent_chat_send", folder, conversation_id,
                                    message.strip()[:2000]], use_llm=True, timeout=300)
 
-    def agent_memory(self, folder: str, query: str = "") -> dict:
+    def agent_memory(self, folder: str, query: str = "", status: str = "active") -> dict:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
-        args = ["agent_memory", folder]
-        if isinstance(query, str) and query.strip():
-            args.append(query.strip()[:200])
+        args = ["agent_memory", folder,
+                query.strip()[:200] if isinstance(query, str) else "",
+                status if status in {"active", "all", "pending-conflict", "superseded",
+                                     "expired"} else "active"]
         return self._agent_bridge(args, timeout=60)
+
+    def agent_memory_update(self, folder: str, name: str, payload: dict) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(name, str) or not name.strip() or not isinstance(payload, dict):
+            return {"ok": False, "error": "记忆参数无效"}
+        temp = self._agent_payload_file(payload)
+        try:
+            return self._agent_bridge(["agent_memory_update", folder,
+                                       name.strip()[:300], str(temp)], timeout=60)
+        finally:
+            try:
+                temp.unlink()
+            except OSError:
+                pass
+
+    def agent_memory_delete(self, folder: str, name: str, hard: bool = False) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(name, str) or not name.strip():
+            return {"ok": False, "error": "记忆名称无效"}
+        return self._agent_bridge(["agent_memory_delete", folder, name.strip()[:300],
+                                   "true" if hard else "false"], timeout=60)
+
+    def agent_memory_pin(self, folder: str, name: str, pinned: bool = True) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(name, str) or not name.strip():
+            return {"ok": False, "error": "记忆名称无效"}
+        return self._agent_bridge(["agent_memory_pin", folder, name.strip()[:300],
+                                   "true" if pinned else "false"], timeout=60)
+
+    def agent_memory_resolve(self, folder: str, name: str, resolution: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if resolution not in {"keep_new", "keep_old", "merge"}:
+            return {"ok": False, "error": "冲突处理方式无效"}
+        return self._agent_bridge(["agent_memory_resolve", folder, name.strip()[:300],
+                                   resolution], timeout=60)
 
 
 def _install_crash_handler(backend: "Backend") -> None:

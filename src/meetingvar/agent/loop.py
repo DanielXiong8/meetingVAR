@@ -75,9 +75,10 @@ _SYSTEM = """你是 meetingVAR 的企业会议证据 Agent。你只能依据工�
 5. 一次搜索没有结果时，不要逐场重复同一查询；改用更短的关键词、同义词，或先 list_sessions 看会话。连续两次没有新证据就停止并说明无法回答。
 6. 规则/编码/定义/“分别是什么”类问题，必须找到含“记作/看成/对应/等于”的原文并读取该 turn；不能只引用主题相关的片段。
 7. 用户问“会议/课堂里说过什么、某词被记作什么、谁说过什么”时，必须使用 search_sessions 或系统预检索给出的候选 turn，再用 get_transcript_window 核对；项目记忆为空不代表会议里没有，不能只查 search_memory 就拒答。
-8. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
-{"answer":"回答（≤500字）","citations":[{"kind":"turn","session_id":"...","turn_ids":["turn_1"],"quote":"原文短引"} 或 {"kind":"fact","name":"事实名"}],"unsupported":[],"confidence":0.0}
-citations 只能引用工具实际返回过的 turn 或事实；没有引用就填 []。confidence 是 0 到 1 的数字。
+8. 用户问“之前聊过什么、上次对话、我们讨论到哪”时，使用 search_conversations 检索，再用 read_conversation 读取；不要凭空回忆。
+9. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
+{"answer":"回答（≤500字）","citations":[{"kind":"turn","session_id":"...","turn_ids":["turn_1"],"quote":"原文短引"} 或 {"kind":"fact","name":"事实名"} 或 {"kind":"conversation","conversation_id":"..."}],"unsupported":[],"confidence":0.0}
+citations 只能引用工具实际返回过的 turn、事实或对话；没有引用就填 []。confidence 是 0 到 1 的数字。
 """
 
 _JSON_ACTION = """当前服务不支持原生工具调用，改用 JSON 动作协议。每轮只输出一个 JSON：
@@ -500,8 +501,8 @@ class AgentLoop:
         return False
 
     # ---------- citation verification ----------
-    def _allowed_citations(self) -> tuple[set[tuple[str, str]], set[str]]:
-        turns, facts = set(), set()
+    def _allowed_citations(self) -> tuple[set[tuple[str, str]], set[str], set[str]]:
+        turns, facts, conversations = set(), set(), set()
         for obs in self.observations:
             value = obs.get("value")
             tool = obs.get("tool")
@@ -535,7 +536,15 @@ class AgentLoop:
             elif tool == "read_fact" and isinstance(value, dict):
                 if value.get("name"):
                     facts.add(value["name"])
-        return turns, facts
+            elif tool == "search_conversations" and isinstance(value, dict):
+                for row in value.get("conversations", []):
+                    if row.get("conversation_id"):
+                        conversations.add(str(row["conversation_id"]))
+            elif tool == "read_conversation" and isinstance(value, dict):
+                row = value.get("conversation") or {}
+                if row.get("conversation_id"):
+                    conversations.add(str(row["conversation_id"]))
+        return turns, facts, conversations
 
     @staticmethod
     def _turn_text(session_id: str, turn_id: str, observations: list[dict]) -> str:
@@ -556,7 +565,7 @@ class AgentLoop:
         return ""
 
     def _verify_citations(self, citations: list) -> tuple[list[dict], list[dict]]:
-        allowed_turns, allowed_facts = self._allowed_citations()
+        allowed_turns, allowed_facts, allowed_conversations = self._allowed_citations()
         valid, invalid = [], []
         for item in citations[:12] if isinstance(citations, list) else []:
             if isinstance(item, str):
@@ -575,6 +584,14 @@ class AgentLoop:
                     valid.append({"kind": "fact", "name": name})
                 else:
                     invalid.append({"kind": "fact", "name": name})
+            elif kind == "conversation" or item.get("conversation_id"):
+                conversation_id = item.get("conversation_id")
+                if isinstance(conversation_id, str) and conversation_id in allowed_conversations:
+                    valid.append({"kind": "conversation",
+                                  "conversation_id": conversation_id})
+                else:
+                    invalid.append({"kind": "conversation",
+                                    "conversation_id": conversation_id})
             elif kind == "turn" or item.get("turn_ids"):
                 sid = item.get("session_id")
                 ids = item.get("turn_ids")

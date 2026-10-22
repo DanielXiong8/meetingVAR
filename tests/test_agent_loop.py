@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from meetingvar.agent.chat import ChatStore
 from meetingvar.agent.loop import AgentLoop
 from meetingvar.agent.policy import ApprovalBroker, Principal
 from meetingvar.agent.meeting_tools import build_meeting_registry
@@ -111,6 +112,32 @@ class AgentLoopTests(unittest.TestCase):
         # The tool contract is actually sent to the model.
         self.assertTrue(llm.calls[1]["tools"])
         self.assertEqual(llm.calls[1]["tools"][0]["type"], "function")
+
+    def test_conversation_recall_tool_and_citation(self):
+        from meetingvar.agent.chat import ChatStore
+
+        store = ChatStore(self.root)
+        conversation = store.create("第二方案讨论")
+        store.append(conversation["id"], {"role": "user", "content": "我们决定采用第二方案"})
+        script = [
+            _content(json.dumps({"steps": [
+                {"goal": "回忆历史对话", "tool": "search_conversations", "why": "跨会话"},
+            ]}, ensure_ascii=False)),
+            _tool_call("search_conversations", {"query": "第二方案"}),
+            _content(json.dumps({
+                "answer": "之前讨论过第二方案。",
+                "citations": [{"kind": "conversation",
+                               "conversation_id": conversation["id"]}],
+                "unsupported": [], "confidence": 0.8,
+            }, ensure_ascii=False)),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=4,
+                             question="之前我们聊过第二方案吗？")
+        report = loop.run()
+        self.assertTrue(report["ok"], report)
+        self.assertTrue(report["grounded"], report)
+        self.assertEqual(report["citations"][0]["kind"], "conversation")
+        self.assertEqual(report["citations"][0]["conversation_id"], conversation["id"])
 
     def test_json_action_fallback_is_a_real_react_loop(self):
         script = [

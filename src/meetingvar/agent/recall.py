@@ -17,30 +17,6 @@ from .runtime import AgentRuntime
 from .tools import ToolContext, ToolError, ToolRegistry, ToolSpec
 from .trace import TraceRecorder
 
-_STOP = {"的", "了", "是", "在", "和", "与", "我们", "你们", "他们", "这个", "那个",
-         "怎么", "如何", "什么", "是否", "关于", "以及", "一个", "项目"}
-
-
-def _terms(question: str) -> list[str]:
-    words = re.findall(r"[A-Za-z][A-Za-z0-9_.-]+|[\u4e00-\u9fff]+", question)
-    terms = []
-    for word in words:
-        if word.lower() in _STOP or word in _STOP:
-            continue
-        if re.fullmatch(r"[\u4e00-\u9fff]+", word):
-            if len(word) <= 4:
-                terms.append(word)
-            terms.extend(word[i:i + 2] for i in range(max(0, len(word) - 1)))
-        else:
-            terms.append(word.lower())
-    return list(dict.fromkeys(term for term in terms if term))
-
-
-def _score(fact: dict, terms: list[str]) -> int:
-    text = "\n".join(str(fact.get(key, "")) for key in ("name", "description", "body")).casefold()
-    return sum(1 for term in terms if term.casefold() in text)
-
-
 class MemoryQAAgent:
     def __init__(self, *, project_root: Path, question: str,
                  llm: Callable[[str], object] | None = None, limit: int = 8):
@@ -83,19 +59,14 @@ class MemoryQAAgent:
         ), self._read)
 
     def _search(self, args: dict, context: ToolContext):
-        terms = _terms(args["query"])
-        facts = []
-        for fact in context.fact_store.list_facts(limit=500):
-            score = _score(fact, terms)
-            if score:
-                facts.append((score, fact))
-        facts.sort(key=lambda pair: (-pair[0], str(pair[1].get("name", ""))))
-        result = []
-        for score, fact in facts[:max(1, int(args.get("limit", self.limit)))]:
-            result.append({"name": fact.get("name", ""), "description": fact.get("description", ""),
-                           "type": fact.get("metadata", {}).get("type", ""),
-                           "score": score, "body": str(fact.get("body", ""))[:1200]})
-        return result
+        # Same ranked retrieval as the main Agent; do not keep a second,
+        # weaker scoring path that returns different answers page by page.
+        facts = context.fact_store.search(
+            args["query"], limit=max(1, int(args.get("limit", self.limit))))
+        return [{"name": fact.get("name", ""), "description": fact.get("description", ""),
+                 "type": fact.get("metadata", {}).get("type", ""),
+                 "score": fact.get("_score", 0), "why": fact.get("_why", []),
+                 "body": str(fact.get("body", ""))[:1200]} for fact in facts]
 
     @staticmethod
     def _read(args: dict, context: ToolContext):

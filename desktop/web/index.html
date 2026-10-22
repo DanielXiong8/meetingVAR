@@ -286,9 +286,28 @@
           </div>
 
           <div class="card">
-            <div class="card-head"><div><b>项目记忆</b><div class="muted">按关键词检索事实记忆。</div></div></div>
-            <div class="row"><input id="agentMemoryQuery" class="input" placeholder="按关键词检索（留空显示最近）"><button id="btnMemory" class="btn">检索</button></div>
+            <div class="card-head"><div><b>项目记忆</b><div class="muted">FTS5 排序、来源/版本、冲突与生命周期治理。</div></div></div>
+            <div class="row">
+              <input id="agentMemoryQuery" class="input" placeholder="按关键词检索（留空显示最近）">
+              <select id="memoryFilter" class="input memory-filter">
+                <option value="active">生效中</option>
+                <option value="pending-conflict">待确认冲突</option>
+                <option value="superseded">已被替代</option>
+                <option value="expired">已过期</option>
+                <option value="all">全部状态</option>
+              </select>
+              <button id="btnMemory" class="btn">检索</button>
+            </div>
+            <div id="memoryStats" class="muted"></div>
             <div id="agentMemory" class="agent-list muted">暂无记忆</div>
+            <div id="memoryEditor" class="memory-editor" hidden>
+              <div class="row"><b id="memEditTitle">编辑记忆</b><button id="btnMemEditClose" class="btn">关闭</button></div>
+              <label class="field"><span>描述</span><input id="memEditDesc" class="input"></label>
+              <label class="field"><span>内容</span><textarea id="memEditBody" class="input" rows="5"></textarea></label>
+              <div class="row"><select id="memEditStatus" class="input memory-filter">
+                <option value="active">生效中</option><option value="expired">已过期</option>
+              </select><button id="btnMemEditSave" class="btn btn-primary">保存</button></div>
+            </div>
           </div>
         </div>
       </section>

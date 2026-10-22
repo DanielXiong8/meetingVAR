@@ -26,10 +26,13 @@
 ### 3. 项目记忆（`agent/memory.py`）
 
 - 一个事实一个 Markdown 文件，带 frontmatter（name/description/metadata）。
-- 元数据含 type、scope、origin_meeting、source_refs、confidence、version、时间。
-- `MEMORY.md` 是**可重建索引**，不是事实源。
-- 原子写入（临时文件 + `os.replace`），路径穿越/符号链接拒绝，同名更新版本递增。
+- 元数据含 type、scope、origin_meeting、source_refs、confidence、version、时间，以及 0.11.0 的 status、valid_from/valid_to、canonical_key、supersedes、conflict_with、source_meetings、pinned/tags。
+- `MEMORY.md` 是**可重建索引**，不是事实源；`memory.sqlite3` 是可删除的 FTS5 检索索引。
+- 原子写入（临时文件 + `os.replace`），路径穿越/符号链接拒绝；同名更新版本递增并保留 `versions/<slug>/vN.md` 快照。
+- 生命周期：active / superseded / expired / pending-conflict / rejected / deleted；冲突新事实默认不进入检索，必须由用户“采用新/保留旧/合并”。
 - 事实类型：`action-item/decision/commitment/project-fact/preference/risk/open-question`。
+- 召回：中文 bigram + BM25，返回 score/why；业务同义词、类型/状态/来源过滤。
+- 写入入口：会后事实审批、聊天“记住…”审批卡、会后快速候选；模型仍不能自由写。
 
 ### 4. Trace（`agent/trace.py`）
 
@@ -52,7 +55,7 @@
 
 ### 6. 项目记忆问答（`agent/recall.py`）
 
-`agent-ask` 先本地检索项目事实（关键词/中文二元组评分），只把命中的事实交给模型；模型回答必须用 `[事实名称]` 引用，未提供的引用会被标记。无事实时不调用模型。
+`agent-ask` 先走统一 `FactStore.search()`（FTS5/BM25 + 同义词/过滤），失败时退回关键词扫描，只把命中的事实交给模型；模型回答必须用 `[事实名称]` 引用，未提供的引用会被标记。无事实时不调用模型。
 
 ### 7. 会前关注清单（`agent/focus.py`）
 

@@ -407,7 +407,7 @@ def cmd_agent_status(folder: Path) -> dict:
     from meetingvar.agent.memory import FactStore
 
     store = FactStore(folder)
-    facts = store.list_facts(limit=500)
+    facts = store.list_facts(limit=1000, status="all", include_inactive=True)
     focus_path = folder / "meetingvar" / "agent_memory" / "focus.json"
     focus = []
     focus_sources = []
@@ -421,10 +421,17 @@ def cmd_agent_status(folder: Path) -> dict:
         except (OSError, ValueError):
             focus = []
     counts = {}
+    active = []
     for fact in facts:
+        if fact.get("status", "active") != "active":
+            continue
         kind = fact.get("metadata", {}).get("type", "unknown")
         counts[kind] = counts.get(kind, 0) + 1
-    return {"ok": True, "folder": str(folder), "facts": len(facts), "by_type": counts,
+        active.append(fact)
+    stats = store.stats()
+    return {"ok": True, "folder": str(folder), "facts": len(active), "by_type": counts,
+            "by_status": stats.get("by_status", {}),
+            "pending_conflicts": len(store.pending_conflicts()),
             "focus": focus, "focus_sources": focus_sources, "focus_updated": focus_updated,
             "memory_index": str(store.index_path)}
 
@@ -550,6 +557,22 @@ def cmd_agent_chat_send(folder: Path, conversation_id: str, message: str) -> dic
         return {"ok": False, "error_code": exc.code, "error": exc.message}
 
 
+def cmd_agent_chat_postmeeting_offer(folder: Path, conversation_id: str = "") -> dict:
+    from meetingvar.agent.chat import ChatAgent, ChatError
+
+    try:
+        if conversation_id:
+            agent = ChatAgent(folder, conversation_id=conversation_id)
+        else:
+            agent = ChatAgent(folder)
+        return agent.postmeeting_offer()
+    except ChatError:
+        try:
+            return ChatAgent(folder).postmeeting_offer()
+        except ChatError as exc:
+            return {"ok": False, "error_code": exc.code, "error": exc.message}
+
+
 def cmd_agent_chat_action(folder: Path, conversation_id: str, action_id: str) -> dict:
     from meetingvar.agent.chat import ChatAgent, ChatError
 
@@ -558,18 +581,98 @@ def cmd_agent_chat_action(folder: Path, conversation_id: str, action_id: str) ->
     except ChatError as exc:
         return {"ok": False, "error_code": exc.code, "error": exc.message}
 
-def cmd_agent_memory(folder: Path, query: str = "") -> dict:
+def _memory_fact(fact: dict) -> dict:
+    meta = fact.get("metadata", {}) if isinstance(fact.get("metadata"), dict) else {}
+    return {
+        "name": fact.get("name", ""), "description": fact.get("description", ""),
+        "type": meta.get("type", fact.get("type", "")),
+        "status": meta.get("status", fact.get("status", "active")),
+        "version": meta.get("version", fact.get("version", 1)),
+        "pinned": bool(meta.get("pinned", fact.get("pinned", False))),
+        "origin_meeting": meta.get("origin_meeting", fact.get("origin_meeting", "")),
+        "updated_at": meta.get("updated_at", fact.get("updated_at", "")),
+        "valid_to": meta.get("valid_to", ""),
+        "conflict_with": meta.get("conflict_with", []) or [],
+        "score": fact.get("_score", 0), "why": fact.get("_why", []),
+        "body": str(fact.get("body", ""))[:2000],
+    }
+
+
+def cmd_agent_memory(folder: Path, query: str = "", status: str = "active") -> dict:
     from meetingvar.agent.memory import FactStore
 
     store = FactStore(folder)
-    facts = store.search(query, limit=50) if query.strip() else store.list_facts(limit=50)
-    return {"ok": True, "facts": [{
-        "name": fact.get("name", ""), "description": fact.get("description", ""),
-        "type": fact.get("metadata", {}).get("type", ""),
-        "origin_meeting": fact.get("metadata", {}).get("origin_meeting", ""),
-        "updated_at": fact.get("metadata", {}).get("updated_at", ""),
-        "body": str(fact.get("body", ""))[:1200],
-    } for fact in facts]}
+    status = status or "active"
+    if query.strip():
+        facts = store.search(query, limit=50, status=status,
+                             include_expired=(status == "all"))
+    else:
+        facts = store.list_facts(limit=50, status=status,
+                                 include_inactive=(status in {"all", "pending-conflict"}))
+    return {"ok": True, "facts": [_memory_fact(fact) for fact in facts],
+            "stats": store.stats(), "pending_conflicts": len(store.pending_conflicts())}
+
+
+def cmd_agent_memory_update(folder: Path, name: str, payload_file: Path) -> dict:
+    import json as _json
+
+    from meetingvar.agent.memory import FactStore
+
+    try:
+        payload = _json.loads(Path(payload_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "记忆编辑 JSON 读取失败"}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "记忆编辑格式无效"}
+    store = FactStore(folder)
+    try:
+        path = store.update_fields(
+            name,
+            description=payload.get("description"),
+            body=payload.get("body"),
+            fact_type=payload.get("type"),
+            status=payload.get("status"),
+            valid_to=payload.get("valid_to"),
+            pinned=payload.get("pinned"),
+            tags=payload.get("tags"),
+        )
+        return {"ok": True, "fact": _memory_fact(store.read_path(path)),
+                "stats": store.stats()}
+    except (OSError, ValueError, TypeError) as exc:
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def cmd_agent_memory_delete(folder: Path, name: str, hard: bool = False) -> dict:
+    from meetingvar.agent.memory import FactStore
+
+    store = FactStore(folder)
+    try:
+        ok = store.delete(name, hard=hard)
+        return {"ok": ok, "deleted": ok, "hard": bool(hard), "stats": store.stats()}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def cmd_agent_memory_pin(folder: Path, name: str, pinned: bool) -> dict:
+    from meetingvar.agent.memory import FactStore
+
+    store = FactStore(folder)
+    try:
+        path = store.pin(name, pinned=bool(pinned))
+        return {"ok": True, "fact": _memory_fact(store.read_path(path))}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def cmd_agent_memory_resolve(folder: Path, name: str, resolution: str) -> dict:
+    from meetingvar.agent.memory import FactStore
+
+    store = FactStore(folder)
+    try:
+        fact = store.resolve_conflict(name, resolution)
+        return {"ok": True, "fact": _memory_fact(fact), "stats": store.stats()}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)[:200]}
 
 
 def main() -> None:
@@ -630,8 +733,23 @@ def main() -> None:
             payload = cmd_agent_chat_send(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         elif cmd == "agent_chat_action":
             payload = cmd_agent_chat_action(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+        elif cmd == "agent_chat_postmeeting_offer":
+            payload = cmd_agent_chat_postmeeting_offer(
+                Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
         elif cmd == "agent_memory":
-            payload = cmd_agent_memory(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
+            payload = cmd_agent_memory(Path(sys.argv[2]),
+                                       sys.argv[3] if len(sys.argv) > 3 else "",
+                                       sys.argv[4] if len(sys.argv) > 4 else "active")
+        elif cmd == "agent_memory_update":
+            payload = cmd_agent_memory_update(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]))
+        elif cmd == "agent_memory_delete":
+            payload = cmd_agent_memory_delete(Path(sys.argv[2]), sys.argv[3],
+                                              sys.argv[4].lower() == "true" if len(sys.argv) > 4 else False)
+        elif cmd == "agent_memory_pin":
+            payload = cmd_agent_memory_pin(Path(sys.argv[2]), sys.argv[3],
+                                           sys.argv[4].lower() == "true" if len(sys.argv) > 4 else True)
+        elif cmd == "agent_memory_resolve":
+            payload = cmd_agent_memory_resolve(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         else:
             payload = {"ok": False, "error": f"unknown command: {cmd}"}
     except Exception as exc:  # noqa: BLE001
