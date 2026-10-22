@@ -33,7 +33,7 @@ CRED_FILE = Path(os.environ.get("XFYUN_LFASR_CRED_FILE",
     r"D:\项目\联想未来办公AI创新挑战\讯飞\录音文件转写（标准版）\Websocket认证信息.env"))
 BASE = "https://raasr.xfyun.cn/v2/api"
 POLL_INTERVAL_S = 15
-POLL_BUDGET_S = 600  # 官方 SLA：60min 内音频 ≤20min 出结果；90s 音频给 10min 预算
+POLL_BUDGET_S = 1800  # 长音频（2.5h）实测需要 >10min；官方 SLA 60min 内音频 ≤20min
 
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 绕开系统代理直连
 

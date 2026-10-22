@@ -189,10 +189,12 @@ def find_focus(turns: list[LectureTurn], question: str, *,
                   "evidence_ids": row["turn_ids"][:1]}
         if chat_fn is not None:
             judged = _judge(chat_fn, question, row, timeout=timeout)
-        # A window with two or more explicit focus terms is evidence-bearing
-        # even when a small local judge refuses it; one term alone still needs
-        # the semantic judge.
-        hit = bool(judged.get("hit")) or len(hits) >= 2
+        # Trust an explicit judge refusal: two broad terms ("多元函数" +
+        # "极限") can co-occur in a window that does not answer the question.
+        # Keyword evidence is only a fallback when the judge failed to run.
+        hit = bool(judged.get("hit"))
+        if not hit and judged.get("error") and len(hits) >= 2:
+            hit = True
         if hit:
             reasons = [x for x in (judged.get("reason", ""), "关键词:" + "+".join(hits) if hits else "") if x]
             evidence = [str(x) for x in (judged.get("evidence_ids") or [])]

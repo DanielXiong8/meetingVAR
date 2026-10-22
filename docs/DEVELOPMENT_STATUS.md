@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.10.6` tag。 |
+| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.10.7` tag。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.6。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.7。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.6；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.7；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x~0.10.6发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.6` | 0.10.6 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
-| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.6 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
+| 0.2.x~0.10.7发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.7` | 0.10.7 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
+| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.7 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -71,8 +71,8 @@
 - 会议证据基准 v1（2026-10-21）：新增事件级 `evidence_benchmark`（labels/predictions schema、recall、clip precision、每小时误保存分钟、关注点覆盖、引用支持率、20场/40事件/80%召回/≤10分钟误保存发布门禁）；test2 真实会议首次基线（机器预标注，未核验）= 4/6 事件召回 66.7%、漏 evt_005 KG定位大讨论与 evt_006 agent-KG负责人、误保存 3.05 分钟/小时、保存 6.48 分钟/小时。工具 `scripts/meeting_benchmark.py`，方法见 `docs/MEETING_EVIDENCE_BENCHMARK.md`。
 - Test5 12 条考试关注问题 L1/L2/L3 对比（2026-10-21）：同一批 12 个 10 分钟课堂片段、同一份本地转写；L1 热词命中 8/12（66.7%）、L2 关注文档 9/12（75.0%）、L3 本地 4B 裁判 4/12（33.3%）。L1/L2 易把“提到相关词”当命中；L3 受 ASR 数学术语错误影响偏保守。**修正：新增 `meetingvar.lecture.find_focus`，把 10 分钟转写切成 90–120 秒窗口，关键词召回 + 小窗 LLM 裁判，返回带时间戳/证据 turn 的片段；同一批 12 个转写命中 9/12（75%），F1/F5 抽样段本身无该内容、F10 无对应 ODE 课次。** 另修复 8GB GPU 自动选 CUDA 后模型加载/推理 OOM：auto 要求总显存≥10GB，推理 OOM 也回退 CPU。
 - Test5 考试题驱动关注问题 pilot（2026-10-21）：从 2021–2025 期末卷提炼 12 条关注问题（`benchmarks/meeting_evidence/test5_focus_questions.json`）；首轮 4 个 case（F2 链式法则/F4 极值/F6 第一型曲面积分/F9 级数）各抽 600 秒、用关注文档跑 `replay`：**4/4 命中主题**，11 个片段中 9 个关键词相关（81.8%），保存 2,355 秒≈58.9 分钟/小时；F6 的 2 个低分片段经人工查看仍在讲参数化，说明关键词 precision 是下限。结论：能命中主题，但 300 秒回溯窗不精确、样本非盲测。见 `docs/TEST5_EXAM_FOCUS_PILOT.md`。
-- 0.10.6 ASR 对比与语义定位（2026-10-22）：同一堂 52.6 分钟课堂（3155 秒）整段对比 SeACo 与讯飞 LFASR。SeACo 1149 句/14,087 字/RTF 0.149/术语 85 次 11 种/4 秒窗重复率 7.0%；LFASR 无热词 865 句/14,140 字/RTF 0.061/术语 70 次 5 种/重复率 0%；LFASR 加术语热词 866 句/14,148 字/RTF 0.057/术语 75 次 5 种。热词分隔符修正为竖线 `|`（空格会触发讯飞 100016）。跨引擎字符 CER 0.135（只是分歧率，不是人工 CER）。逐段核对发现 SeACo 把“一元函数”听成“隐函数”，因此术语次数不能单独当准确率。语义定位修复四个真问题：裁判 prompt 现在给每行 `[turn_id]`（此前 4B 编造 turn_1，全部被校验丢弃）、候选按术语出现次数加权、合并重叠窗口按 turn_id 去重、片段起点对齐裁判证据。LFASR 整堂转写 + 本地 Qwen3-4B 裁判：F1 方向导数/梯度命中 05:01 定义、10:00、20:11；F2 链式法则命中 34:57、39:14、42:58；F3 隐函数定理负对照 0 命中。音频前端 `--denoise`（高通+afftdn+响度）实测 3 分钟术语命中 12→11，故保持可选、不作默认；`highpass+loudnorm` 为 12，与原始持平。**没有人工逐字稿，仍未报 CER/WER**。完整 510 项测试通过（64.45 秒）。详见 `docs/ASR_AND_FOCUS_0.10.6.md`。
-- 0.10.6安装包：`meetingVAR-setup-0.10.6.exe` SHA256 `f6467964b9d887a35859b7082e044ea82a7964669a2b46b049c7dfe1b9a47141`；内置 `meetingVAR.exe` SHA256 `c89ea8aa4fa703443d2d6f514d50c4504f207cab1ef932d728dda90f904b5f00`；静默安装与 `--selftest` 通过（注册表版本 0.10.6）。
+- 0.10.7 ASR 对比与语义定位（2026-10-22）：同一堂 52.6 分钟课堂（3155 秒）整段对比 SeACo 与讯飞 LFASR。SeACo 1149 句/14,087 字/RTF 0.149/术语 85 次 11 种/4 秒窗重复率 7.0%；LFASR 无热词 865 句/14,140 字/RTF 0.061/术语 70 次 5 种/重复率 0%；LFASR 加术语热词 866 句/14,148 字/RTF 0.057/术语 75 次 5 种。热词分隔符修正为竖线 `|`（空格会触发讯飞 100016）。跨引擎字符 CER 0.135（只是分歧率，不是人工 CER）。逐段核对发现 SeACo 把“一元函数”听成“隐函数”，因此术语次数不能单独当准确率。语义定位修复四个真问题：裁判 prompt 现在给每行 `[turn_id]`（此前 4B 编造 turn_1，全部被校验丢弃）、候选按术语出现次数加权、合并重叠窗口按 turn_id 去重、片段起点对齐裁判证据。LFASR 整堂转写 + 本地 Qwen3-4B 裁判：F1 方向导数/梯度命中 05:01 定义、10:00、20:11；F2 链式法则命中 34:57、39:14、42:58；F3 隐函数定理负对照 0 命中。Whisper large-v3 CPU 3 分钟：无 VAD 325.5 秒/118 段/首段“组合”幻觉；VAD+关上文条件+数学 prompt 后 181.9 秒/95 段/14 次术语/无幻觉，未接产品。音频前端 `--denoise`（高通+afftdn+响度）实测 3 分钟术语命中 12→11，故保持可选、不作默认；`highpass+loudnorm` 为 12，与原始持平。并加测 2026-02-27 的 2h34（9271 秒）整堂：SeACo 3079 句/38,663 字/RTF 0.171/重复 9.3%/术语 318 次 28 种；LFASR+热词 2907 句/38,876 字/RTF 0.082/重复 0.3%/术语 265 次 15 种；跨引擎 CER 0.126。2h 转写定位“R^n 拓扑与开集闭集”命中 04:32/08:10/22:03/138:02 四段，“多元极限 ε-δ”命中 56:00/124:55 两段；同时修正“两宽词共现即覆盖裁判 false”的误报规则，67:53 只提方法未讲定义的窗口不再强行保留。**没有人工逐字稿，仍未报 CER/WER**。完整 511 项测试通过。详见 `docs/ASR_AND_FOCUS_0.10.7.md`。
+- 0.10.7安装包：`meetingVAR-setup-0.10.7.exe` SHA256 `2123331a125dc349e796c1fa08fdece57a3c982ce280c4cdb91e6b915190af0d`；内置 `meetingVAR.exe` SHA256 `ace9a933494553e94687381c5c0b85ac68b42ffa6e5a2b7717d4452374789a52`；静默安装与 `--selftest` 通过（注册表版本 0.10.7）。
 - 0.10.5 离线整段转写：`transcribe --lecture/--offline` 走完整音频一次解码（SeACo + 术语 hotwords），不再 8 秒切块。3 分钟课堂实测：chunked 122 句/10 次“方向导数”/明显重复碎片 → offline 74 句/9 次、句子完整（“线性代数告诉我们说……形成一个 RN 的基底”），无自动片段。术语表+hotword+重复字修复保留。完整 507 项测试通过（67.81 秒）；0.10.5 `--selftest` 通过。
 - 0.10.5安装包：`meetingVAR-setup-0.10.5.exe` SHA256 `94504425aad7632e4a6d8317420bc61ff888041013c91d52f98eee95edb27a0f`；内置 `meetingVAR.exe` SHA256 `ce8bf8a1c80b6e282a267782de2e2004207fe6d7ec6f1b705a8be107aaf126af`。
 - 0.10.4 ASR 专业术语：新增 `configs/lecture_math_terms.txt`（100 个高微术语）；ASR 支持 hotword（SeACo Paraformer 生效，SenseVoice 自动回退）；`transcribe/replay --lecture` 预设 SeACo + 术语表；纠错新增 `zh_dup_char`（方向导导数→方向导数）。3 分钟课堂实测：`方向导数` 从 7 次提升到 10 次，`方向倒数` 从 2 次降到 0；方向导数+偏导数总命中 15→20。完整 507 项测试通过（62.46 秒）；0.10.4 `--selftest` 通过。

@@ -63,14 +63,25 @@ class LectureFocusTests(unittest.TestCase):
         self.assertLessEqual(segment["start"], 90)
         self.assertTrue(segment["evidence_ids"])
         self.assertIn("拉格朗日", segment["text"])
+        self.assertEqual(segment["text"].count("拉格朗日乘子法"), 1)
 
-    def test_two_keyword_window_is_kept_even_if_judge_says_no(self):
+    def test_valid_judge_refusal_is_respected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "lecture.txt"
             path.write_text("\n".join(self.rows), encoding="utf-8")
             turns = parse_transcript(path)
         result = find_focus(turns, "极值", keywords=["极值", "拉格朗日"],
-                            chat_fn=lambda *a, **k: '{"hit":false,"reason":"","evidence_ids":[]}',
+                            chat_fn=lambda *a, **k: '{"hit":false,"reason":"只提词未解释","evidence_ids":[]}',
+                            window=120, stride=60, max_candidates=2)
+        self.assertEqual(result["hits"], 0)
+
+    def test_two_keyword_window_falls_back_only_when_judge_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lecture.txt"
+            path.write_text("\n".join(self.rows), encoding="utf-8")
+            turns = parse_transcript(path)
+        result = find_focus(turns, "极值", keywords=["极值", "拉格朗日"],
+                            chat_fn=lambda *a, **k: None,
                             window=120, stride=60, max_candidates=2)
         self.assertGreaterEqual(result["hits"], 1)
 
