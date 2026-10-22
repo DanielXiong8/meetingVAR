@@ -97,6 +97,14 @@ class CorrectGuardTests(unittest.TestCase):
         self.assertEqual(out, "不同区域的结果", "灰区改写不得改动文本")
         self.assertEqual(recs[0]["status"], "review_required")
 
+    def test_duplicate_character_term_is_folded(self) -> None:
+        """ASR 重复一个汉字（方向导导数）应折叠为术语，而不是只进待审。"""
+        out, recs = self.correct("这个方向导导数很重要", ["方向导数"])
+        self.assertIn("方向导数", out)
+        self.assertNotIn("方向导导数", out)
+        self.assertEqual(recs[0]["rule_id"], "zh_dup_char")
+        self.assertEqual(recs[0]["status"], "accepted")
+
     def test_latin_high_ratio_accepted(self) -> None:
         out, recs = self.correct("we need the framnework ready", ["framework"])
         self.assertIn("framework", out)

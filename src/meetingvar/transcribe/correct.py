@@ -134,7 +134,17 @@ def correct(text: str, terms: list[str]) -> tuple[str, list[dict]]:
                     out = out[:pos] + term + out[pos + L:]  # 等长：不移动后续偏移
                     _rec(seg, term, "accepted", "中文等长近音（锚定+重合）", "zh_same_len")
                 else:
-                    _rec(seg, term, "review_required", "中文近音但长度差 ±1，宁漏勿误", "zh_len_diff")
+                    # ASR sometimes duplicates one character ("方向导导数" /
+                    # "方方向导数").  Deduplicating adjacent repeats is safe and
+                    # recovers a known glossary term exactly.
+                    dedup = re.sub(r"(.)+", r"", seg)
+                    dedup = "".join(ch for j, ch in enumerate(seg) if j == 0 or ch != seg[j - 1])
+                    if dedup == term:
+                        pos = m.start() + i
+                        out = out[:pos] + term + out[pos + L:]
+                        _rec(seg, term, "accepted", "ASR 重复字折叠后与术语完全一致", "zh_dup_char")
+                    else:
+                        _rec(seg, term, "review_required", "中文近音但长度差 ±1，宁漏勿误", "zh_len_diff")
 
     # b) 拉丁术语：去数字 difflib + 尾随汉字数字转阿拉伯
     for term in terms:

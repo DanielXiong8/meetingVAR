@@ -63,7 +63,21 @@ def resolve_terms(args) -> list[str]:
     return []
 
 
+def _apply_lecture_preset(args) -> None:
+    """Use the hotword-capable Paraformer and math glossary for lectures."""
+    if not getattr(args, "lecture", False):
+        return
+    from . import config as _config
+
+    _config.ASR_MODEL_KEYWORD = "seaco_paraformer"
+    if not getattr(args, "terms", None):
+        glossary = Path(__file__).resolve().parents[2] / "configs" / "lecture_math_terms.txt"
+        if glossary.is_file():
+            args.terms = str(glossary)
+
+
 def cmd_replay(args) -> None:
+    _apply_lecture_preset(args)
     from .replay import replay
     from .memory.calibration import load_threshold
 
@@ -85,6 +99,7 @@ def _correction_terms_arg(args) -> list[str] | None:
 
 def cmd_transcribe(args) -> None:
     """转写模式：全场转写显式保存为 txt（用户点名要的落盘；开会模式零落盘默认不变）。"""
+    _apply_lecture_preset(args)
     from .replay import replay
 
     terms = resolve_terms(args)
@@ -578,6 +593,7 @@ def main() -> None:
     rp.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     rp.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     rp.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    rp.add_argument("--lecture", action="store_true", help="课堂模式：SeACo Paraformer + 数学术语表 hotwords")
 
     tr = sub.add_parser("transcribe", help="转写模式：跑全管线并把全场转写显式存为 txt（--out 必填）")
     tr.add_argument("--wav", required=True)
@@ -586,6 +602,7 @@ def main() -> None:
     tr.add_argument("--correction-terms", default=None, help="严进纠错词表（治理后子集）；缺省回落监听表")
     tr.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     tr.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    tr.add_argument("--lecture", action="store_true", help="课堂模式：SeACo Paraformer + 数学术语表 hotwords")
 
     rc = sub.add_parser("record", help="实时采集（系统声音）")
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")

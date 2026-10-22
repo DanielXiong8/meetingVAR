@@ -57,7 +57,8 @@ def replay(
     base_ts = time.time() - duration  # 让"命中回溯"语义成立
     session = Session(session_id, terms=terms, focus_docs=focus_docs, device=device, echo=True,
                       correction_terms=correction_terms, l2_threshold=l2_threshold,
-                      auto_triggers=auto_triggers)
+                      auto_triggers=auto_triggers,
+                      hotwords=list(terms or [])[:80] or None)
 
     step = 5.0  # 5 秒一喂，喂完立即尝试增量转写
     offset = 0.0

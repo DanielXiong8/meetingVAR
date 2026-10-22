@@ -99,6 +99,7 @@ class Session:
         asr_engine: str = "local",
         xfyun_cred: str | None = None,
         auto_triggers: bool = True,
+        hotwords: list[str] | None = None,
     ):
         self.session_id = session_id
         self.terms = terms  # 监听词表（宽进：漏斗全量治理后的 watch 集）
@@ -120,7 +121,12 @@ class Session:
                 raise ValueError("asr_engine=xfyun 需要提供 --xfyun-cred 凭证文件")
             self.asr = XfyunASR(xfyun_cred)
         else:
-            self.asr = ASR(device)
+            try:
+                self.asr = ASR(device, hotwords=hotwords)
+            except TypeError:
+                # Test doubles / older ASR implementations may not accept the
+                # optional hotword argument.
+                self.asr = ASR(device)
         self.monitor = HotwordMonitor(terms)
         self.scorer = InterestScorer(focus_docs, threshold=l2_threshold) if focus_docs and auto_triggers else None
         self.manual = ManualVAR()

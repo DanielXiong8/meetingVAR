@@ -23,8 +23,11 @@ def clean(text: str) -> str:
 class ASR:
     """懒加载的 FunASR 管线（asr+vad+spk+punc）+ 独立声纹模型（句级 embedding）。"""
 
-    def __init__(self, device: str = "auto", with_embeddings: bool = True):
+    def __init__(self, device: str = "auto", with_embeddings: bool = True,
+                 hotwords: list[str] | None = None):
         self._device = self._resolve_device(device)
+        self._hotwords = " ".join(str(x).strip() for x in (hotwords or []) if str(x).strip())[:4000]
+        self._hotword_warned = False
         self.with_embeddings = with_embeddings  # 公开：pipeline 据此决定 emb 缺失时的降级策略
         self._model = None
         self._sv = None
@@ -136,6 +139,17 @@ class ASR:
                 print(f"[asr] 声纹提取失败，降级为块内编号（仅提示一次）: {type(exc).__name__}: {exc}")
             return None
 
+    def _generate(self, waveform):
+        kwargs = {"input": waveform, "fs": config.ASR_RATE, "batch_size_s": 60}
+        if self._hotwords:
+            try:
+                return self._model.generate(hotword=self._hotwords, **kwargs)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                if not self._hotword_warned:
+                    print("[asr] 当前模型不支持 hotword，已退回普通解码", flush=True)
+                    self._hotword_warned = True
+        return self._model.generate(**kwargs)
+
     def transcribe_pcm16k(self, pcm: bytes) -> list[dict]:
         """输入 16kHz 单声道 16bit PCM，返回说话人标注句段（含句级声纹向量）。"""
         if not pcm:
@@ -149,14 +163,14 @@ class ASR:
         # a temporary WAV is still persistence of unpromoted meeting audio.
         waveform = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
         try:
-            res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
+            res = self._generate(waveform)
         except Exception as exc:  # noqa: BLE001
             if not self._fallback_cpu(exc):
                 raise
             self._model = None
             self._sv = None
             self._ensure_loaded()
-            res = self._model.generate(input=waveform, fs=config.ASR_RATE, batch_size_s=60)
+            res = self._generate(waveform)
         out: list[dict] = []
         first = res[0] if res else {}
         if "sentence_info" in first:  # 说话人级
