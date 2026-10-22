@@ -108,12 +108,21 @@ def cmd_transcribe(args) -> None:
     out = Path(args.out) if args.out else None
     if out is None:
         raise SystemExit("[transcribe] 必须给 --out <转写txt路径>（这是转写模式与 replay 的唯一区别）")
-    summary = replay(
-        Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
-        correction_terms=_correction_terms_arg(args), auto_triggers=False,
-    )
+    if args.offline or args.lecture:
+        from .replay import transcribe_full
+
+        summary = transcribe_full(
+            Path(args.wav), out, terms=terms,
+            correction_terms=_correction_terms_arg(args) or terms,
+            device=args.device,
+        )
+    else:
+        summary = replay(
+            Path(args.wav), session_id, terms=terms, focus_docs=focus, device=args.device, transcript_out=out,
+            correction_terms=_correction_terms_arg(args), auto_triggers=False,
+        )
     print(f"[done] 转写 {summary['lines']} 句 / 纠错 {len(summary['corrections'])} 处 -> {out}")
-    if summary["clips"]:
+    if summary.get("clips"):
         print(f"[next] meetingvar digest --session {session_id}  （命中片段纪要）")
 
 
@@ -603,6 +612,7 @@ def main() -> None:
     tr.add_argument("--memory", default=None, help="项目记忆文件夹（L2 兴趣文档）")
     tr.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     tr.add_argument("--lecture", action="store_true", help="课堂模式：SeACo Paraformer + 数学术语表 hotwords")
+    tr.add_argument("--offline", action="store_true", help="离线整段转写（不按 8 秒切块；课堂模式自动启用）")
 
     rc = sub.add_parser("record", help="实时采集（系统声音）")
     rc.add_argument("--terms", default=None, help="词表文件；缺省时从 --memory 自动抽取")

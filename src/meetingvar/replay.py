@@ -33,6 +33,34 @@ def _fmt_hms(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def transcribe_full(wav_path: Path, out_path: Path, terms: list[str] | None = None,
+                    correction_terms: list[str] | None = None, device: str = "auto") -> dict:
+    """Offline full-audio transcription (no 8-second chunk boundary)."""
+    from .transcribe.asr import ASR
+    from .transcribe.correct import correct
+
+    pcm = wav_to_pcm16k(wav_path)
+    asr = ASR(device, hotwords=list(terms or [])[:80] or None)
+    segs = asr.transcribe_pcm16k(pcm)
+    fixed_terms = correction_terms if correction_terms is not None else list(terms or [])
+    rows = []
+    corrections = []
+    for seg in segs:
+        text = seg["text"]
+        fixed, fixes = correct(text, fixed_terms)
+        for record in fixes:
+            record["ts"] = seg["start"]
+        corrections.extend(fixes)
+        rows.append({"ts": seg["start"], "end_ts": seg["end"],
+                     "speaker": seg.get("speaker", "spk?"), "text": fixed})
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write("# meetingVAR full-audio transcript\n")
+        for line in rows:
+            stream.write(f"[{_fmt_hms(line['ts'])}] {line['speaker']}: {line['text']}\n")
+    return {"lines": len(rows), "clips": 0, "corrections": corrections, "out": str(out_path)}
+
+
 def replay(
     wav_path: Path,
     session_id: str,

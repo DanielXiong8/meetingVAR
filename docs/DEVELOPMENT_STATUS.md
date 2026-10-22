@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.4。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.10.5。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.4；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.10.5；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x~0.10.4发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.4` | 0.10.4 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
-| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.4 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
+| 0.2.x~0.10.5发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.10.5` | 0.10.5 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
+| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.10.5 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -60,7 +60,7 @@
 
 ## 5. 验证快照（2026-10-21 晚，0.10.3）
 
-- 完整Python3.10依赖环境：507项测试、**0跳过、507通过**（62.46秒），`compileall`通过，完整CLI仿真通过。
+- 完整Python3.10依赖环境：507项测试、**0跳过、507通过**（67.81秒），`compileall`通过，完整CLI仿真通过。
 - 最小依赖CI模拟：507项发现，507项通过，编译通过（当前引擎环境已含 pymupdf/pypdf/imageio-ffmpeg）。
 - 提交包内音频专项：24项通过，含90分钟虚拟双源到RTASR发送链路。
 - Agent Runtime v2：模型原生 function calling、有界 ReAct/Plan-Execute（最多 8 步）、Principal/项目作用域、审批 token、步数/工具/token/时间预算、引用校验、LLM 级 Trace、断点续跑、黄金问题集评测。CLI `agent-run`/`agent-eval`，桌面 Agent 页新增“Agent 深度检索”。
@@ -71,6 +71,8 @@
 - 会议证据基准 v1（2026-10-21）：新增事件级 `evidence_benchmark`（labels/predictions schema、recall、clip precision、每小时误保存分钟、关注点覆盖、引用支持率、20场/40事件/80%召回/≤10分钟误保存发布门禁）；test2 真实会议首次基线（机器预标注，未核验）= 4/6 事件召回 66.7%、漏 evt_005 KG定位大讨论与 evt_006 agent-KG负责人、误保存 3.05 分钟/小时、保存 6.48 分钟/小时。工具 `scripts/meeting_benchmark.py`，方法见 `docs/MEETING_EVIDENCE_BENCHMARK.md`。
 - Test5 12 条考试关注问题 L1/L2/L3 对比（2026-10-21）：同一批 12 个 10 分钟课堂片段、同一份本地转写；L1 热词命中 8/12（66.7%）、L2 关注文档 9/12（75.0%）、L3 本地 4B 裁判 4/12（33.3%）。L1/L2 易把“提到相关词”当命中；L3 受 ASR 数学术语错误影响偏保守。**修正：新增 `meetingvar.lecture.find_focus`，把 10 分钟转写切成 90–120 秒窗口，关键词召回 + 小窗 LLM 裁判，返回带时间戳/证据 turn 的片段；同一批 12 个转写命中 9/12（75%），F1/F5 抽样段本身无该内容、F10 无对应 ODE 课次。** 另修复 8GB GPU 自动选 CUDA 后模型加载/推理 OOM：auto 要求总显存≥10GB，推理 OOM 也回退 CPU。
 - Test5 考试题驱动关注问题 pilot（2026-10-21）：从 2021–2025 期末卷提炼 12 条关注问题（`benchmarks/meeting_evidence/test5_focus_questions.json`）；首轮 4 个 case（F2 链式法则/F4 极值/F6 第一型曲面积分/F9 级数）各抽 600 秒、用关注文档跑 `replay`：**4/4 命中主题**，11 个片段中 9 个关键词相关（81.8%），保存 2,355 秒≈58.9 分钟/小时；F6 的 2 个低分片段经人工查看仍在讲参数化，说明关键词 precision 是下限。结论：能命中主题，但 300 秒回溯窗不精确、样本非盲测。见 `docs/TEST5_EXAM_FOCUS_PILOT.md`。
+- 0.10.5 离线整段转写：`transcribe --lecture/--offline` 走完整音频一次解码（SeACo + 术语 hotwords），不再 8 秒切块。3 分钟课堂实测：chunked 122 句/10 次“方向导数”/明显重复碎片 → offline 74 句/9 次、句子完整（“线性代数告诉我们说……形成一个 RN 的基底”），无自动片段。术语表+hotword+重复字修复保留。完整 507 项测试通过（67.81 秒）；0.10.5 `--selftest` 通过。
+- 0.10.5安装包：`meetingVAR-setup-0.10.5.exe` SHA256 `94504425aad7632e4a6d8317420bc61ff888041013c91d52f98eee95edb27a0f`；内置 `meetingVAR.exe` SHA256 `ce8bf8a1c80b6e282a267782de2e2004207fe6d7ec6f1b705a8be107aaf126af`。
 - 0.10.4 ASR 专业术语：新增 `configs/lecture_math_terms.txt`（100 个高微术语）；ASR 支持 hotword（SeACo Paraformer 生效，SenseVoice 自动回退）；`transcribe/replay --lecture` 预设 SeACo + 术语表；纠错新增 `zh_dup_char`（方向导导数→方向导数）。3 分钟课堂实测：`方向导数` 从 7 次提升到 10 次，`方向倒数` 从 2 次降到 0；方向导数+偏导数总命中 15→20。完整 507 项测试通过（62.46 秒）；0.10.4 `--selftest` 通过。
 - 0.10.4安装包：`meetingVAR-setup-0.10.4.exe` SHA256 `e89184ee7a4ed2d0ad338dc0b182766f6af45a7f2335f58c01645d37ad0d60bd`；内置 `meetingVAR.exe` SHA256 `1dabd6a6651a04a24e867ab911d64ebfcd5a464eba4af680f8c1996c1e27cab8`。
 - 0.10.3 课堂回放 T5：34 个 MP4/68.66 小时全部可解码且有音频；3 段 3 分钟 ASR 抽样全部完成，CPU RTF 0.176–0.186，转写时间戳单调，高相似重复率 0–1.6%，`transcribe` 片段数 0。修复：8GB GPU 自动设备 OOM（free<6.5GB 走 CPU，显式 cuda OOM 也回退）；`transcribe` 默认关闭热词/兴趣触发，只写全文；`go/record` 增加按层 60 秒片段冷却；重叠 ASR 窗口增加模糊去重（4 秒窗、长句相似度/包含/bigram），10 分钟样本 442→372 行。数学术语命中仍低（2/0/0），见 `docs/TEST5_LECTURE_REPLAY.md`。
