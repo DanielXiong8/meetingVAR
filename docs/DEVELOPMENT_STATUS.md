@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.10.3` tag。 |
+| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.10.4` tag。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
