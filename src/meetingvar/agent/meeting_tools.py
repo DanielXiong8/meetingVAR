@@ -149,6 +149,29 @@ def _read_conversation(args: dict, context: ToolContext) -> dict:
     return {"conversation": data, "trust": "local-conversation"}
 
 
+def _rag(context: ToolContext):
+    from ..rag import RagIndex
+
+    catalog = (context.extra or {}).get("catalog")
+    data_dir = catalog.pool.parent if isinstance(catalog, SessionCatalog) else None
+    return RagIndex(context.project_root, data_dir)
+
+
+def _read_search_knowledge(args: dict, context: ToolContext) -> dict:
+    index = _rag(context)
+    chunks = index.search(
+        args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
+        source_type=args.get("source_type") or None, rerank=True)
+    return {"query": args["query"], "chunks": chunks, "trust": "project-rag"}
+
+
+def _read_project_chunk(args: dict, context: ToolContext) -> dict:
+    chunk = _rag(context).read_chunk(args["chunk_id"])
+    if not chunk:
+        raise ToolError("chunk_not_found", "no such RAG chunk")
+    return {"chunk": chunk, "trust": "project-rag"}
+
+
 def _read_compare(args: dict, context: ToolContext) -> dict:
     catalog = _catalog(context)
     result = catalog.compare(args["session_a"], args["session_b"], args["query"],
@@ -417,6 +440,30 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": ["conversation_id"],
         },
     ), _read_conversation)
+
+    registry.register(ToolSpec(
+        name="search_project_knowledge",
+        description="检索项目文档和已保存会议转写的 RAG 知识库，返回带来源/时间戳的片段",
+        read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=12000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500},
+                           "source_type": {"type": "string"},
+                           "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+    ), _read_search_knowledge)
+
+    registry.register(ToolSpec(
+        name="read_project_chunk",
+        description="按 chunk_id 读取 RAG 片段原文与来源",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=8000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"chunk_id": {"type": "string", "minLength": 1, "maxLength": 200}},
+            "required": ["chunk_id"],
+        },
+    ), _read_project_chunk)
 
     registry.register(ToolSpec(
         name="compare_sessions",

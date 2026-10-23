@@ -279,6 +279,45 @@ def cmd_agent_focus(args) -> None:
         raise SystemExit(1)
 
 
+def cmd_rag_index(args) -> None:
+    """Build/refresh the project RAG index (documents + saved meetings)."""
+    import json as _json
+    from . import config
+    from .rag import RagIndex
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[rag] 项目文件夹无效: {project}")
+    report = RagIndex(project, config.DATA_DIR).index_project(
+        include_meetings=not args.no_meetings, force=args.force)
+    print(_json.dumps(report, ensure_ascii=False) if args.json else
+          f"[rag] documents={report['documents']} chunks={report['chunks']} "
+          f"skipped={report['skipped']} embedding={report['embedding']}", flush=True)
+    if not report.get("ok"):
+        raise SystemExit(1)
+
+
+def cmd_rag_ask(args) -> None:
+    """Answer a question from project documents + saved meetings with citations."""
+    import json as _json
+    from . import config
+    from .rag import RagIndex
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[rag] 项目文件夹无效: {project}")
+    report = RagIndex(project, config.DATA_DIR).answer(args.question, limit=args.limit)
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True)
+        return
+    print(report.get("answer", ""))
+    if report.get("citations"):
+        print("\n依据：")
+        for source in report["citations"]:
+            print(f"- {source.get('source_type')} / {source.get('title')} / "
+                  f"{source.get('source_id')} {source.get('start_ts') or ''}")
+
+
 def cmd_agent_memory(args) -> None:
     """查看/检索项目 Agent 事实记忆。"""
     import json as _json
@@ -700,6 +739,17 @@ def main() -> None:
     aeval.add_argument("--max-steps", type=int, default=8)
     aeval.add_argument("--json", action="store_true")
 
+    ri = sub.add_parser("rag-index", help="建立/增量刷新项目文档+会议转写 RAG 索引")
+    ri.add_argument("--project", required=True)
+    ri.add_argument("--no-meetings", action="store_true", help="只索引项目文档")
+    ri.add_argument("--force", action="store_true")
+    ri.add_argument("--json", action="store_true")
+    rq = sub.add_parser("rag-ask", help="基于项目文档+会议转写 RAG 回答并给引用")
+    rq.add_argument("--project", required=True)
+    rq.add_argument("--question", required=True)
+    rq.add_argument("--limit", type=int, default=8)
+    rq.add_argument("--json", action="store_true")
+
     dg = sub.add_parser("digest", help="会后生成薄/厚纪要")
     dg.add_argument("--session", required=True)
     dg.add_argument("--llm", action="store_true", help="调用 LLM 生成叙述版（需环境变量）")
@@ -761,6 +811,7 @@ def main() -> None:
      "go": cmd_go, "rescan": cmd_rescan, "understand": cmd_understand, "bench": cmd_bench,
      "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
      "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
+     "rag-index": cmd_rag_index, "rag-ask": cmd_rag_ask,
      "agent-run": cmd_agent_run, "agent-eval": cmd_agent_eval}[args.cmd](args)
 
 

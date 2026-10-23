@@ -1,0 +1,179 @@
+{
+  "version": "memory_longitudinal_30d_v1",
+  "days": 30,
+  "description": "30-day synthetic timeline: updates, conflict rescue, expiry, resolution.",
+  "events": [
+    {
+      "day": 1,
+      "op": "write",
+      "name": "交付计划",
+      "description": "项目交付时间定在11月15日",
+      "body": "项目定在11月15日上线，负责人张三。",
+      "type": "decision",
+      "owner": "张三",
+      "due": "11月15日"
+    },
+    {
+      "day": 2,
+      "op": "write",
+      "name": "外部接口风险",
+      "description": "外部接口延期风险",
+      "body": "外部接口依赖可能导致延期。",
+      "type": "risk"
+    },
+    {
+      "day": 3,
+      "op": "write",
+      "name": "测试安排",
+      "description": "测试负责人和截止时间",
+      "body": "李四负责测试，截止11月10日。",
+      "type": "action-item",
+      "owner": "李四",
+      "due": "11月10日"
+    },
+    {
+      "day": 4,
+      "op": "write",
+      "name": "第二方案决定",
+      "description": "会议决定采用第二方案",
+      "body": "决定采用第二方案，不再考虑第一方案。",
+      "type": "decision"
+    },
+    {
+      "day": 5,
+      "op": "write",
+      "name": "客户需求",
+      "description": "客户要求增加数据导出",
+      "body": "客户要求增加数据导出功能。",
+      "type": "project-fact"
+    },
+    {
+      "day": 6,
+      "op": "write",
+      "name": "服务器预算",
+      "description": "服务器预算八万",
+      "body": "服务器预算8万元。",
+      "type": "decision"
+    },
+    {
+      "day": 7,
+      "op": "write",
+      "name": "交付计划",
+      "description": "项目交付时间定在11月20日",
+      "body": "交付改到11月20日，负责人张三。",
+      "type": "decision",
+      "owner": "张三",
+      "due": "11月20日"
+    },
+    {
+      "day": 8,
+      "op": "write",
+      "name": "需求整理",
+      "description": "赵六负责整理需求",
+      "body": "赵六负责整理需求，周五前提交。",
+      "type": "action-item",
+      "owner": "赵六",
+      "due": "周五"
+    },
+    {
+      "day": 10,
+      "op": "write",
+      "name": "交付计划变更",
+      "description": "项目交付时间改到12月",
+      "body": "交付负责人李四，改到12月。",
+      "type": "decision",
+      "owner": "李四",
+      "due": "12月"
+    },
+    {
+      "day": 12,
+      "op": "resolve",
+      "name": "交付计划变更",
+      "resolution": "keep_new"
+    },
+    {
+      "day": 15,
+      "op": "expire",
+      "name": "外部接口风险"
+    },
+    {
+      "day": 20,
+      "op": "write",
+      "name": "旧版本风险",
+      "description": "旧版本兼容风险",
+      "body": "旧版本兼容风险已解决。",
+      "type": "risk",
+      "status": "expired",
+      "valid_to": "2026-01-01T00:00:00+0800"
+    }
+  ],
+  "queries": [
+    {
+      "id": "d01",
+      "query": "现在交付时间是什么",
+      "expected": [
+        "交付计划变更"
+      ]
+    },
+    {
+      "id": "d02",
+      "query": "谁负责测试",
+      "expected": [
+        "测试安排"
+      ]
+    },
+    {
+      "id": "d03",
+      "query": "外部接口风险",
+      "expected": []
+    },
+    {
+      "id": "d04",
+      "query": "采用了哪个方案",
+      "expected": [
+        "第二方案决定"
+      ]
+    },
+    {
+      "id": "d05",
+      "query": "谁整理需求",
+      "expected": [
+        "需求整理"
+      ]
+    },
+    {
+      "id": "d06",
+      "query": "服务器预算",
+      "expected": [
+        "服务器预算"
+      ]
+    },
+    {
+      "id": "d07",
+      "query": "客户要求",
+      "expected": [
+        "客户需求"
+      ]
+    },
+    {
+      "id": "d08",
+      "query": "交付负责人",
+      "expected": [
+        "交付计划变更"
+      ]
+    },
+    {
+      "id": "d09",
+      "query": "测试截止时间",
+      "expected": [
+        "测试安排"
+      ]
+    },
+    {
+      "id": "d10",
+      "query": "旧版本风险",
+      "expected": []
+    }
+  ],
+  "note": "Simulation, not real-user 30-day data."
+}

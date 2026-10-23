@@ -581,6 +581,28 @@ def cmd_agent_chat_action(folder: Path, conversation_id: str, action_id: str) ->
     except ChatError as exc:
         return {"ok": False, "error_code": exc.code, "error": exc.message}
 
+def cmd_rag_index(folder: Path, include_meetings: bool = True, force: bool = False) -> dict:
+    from meetingvar import config
+    from meetingvar.rag import RagIndex
+
+    return RagIndex(folder, config.DATA_DIR).index_project(
+        include_meetings=include_meetings, force=force)
+
+
+def cmd_rag_status(folder: Path) -> dict:
+    from meetingvar import config
+    from meetingvar.rag import RagIndex
+
+    return {"ok": True, "status": RagIndex(folder, config.DATA_DIR).stats()}
+
+
+def cmd_rag_ask(folder: Path, question: str, limit: int = 8) -> dict:
+    from meetingvar import config
+    from meetingvar.rag import RagIndex
+
+    return RagIndex(folder, config.DATA_DIR).answer(question, limit=limit)
+
+
 def _memory_fact(fact: dict) -> dict:
     meta = fact.get("metadata", {}) if isinstance(fact.get("metadata"), dict) else {}
     return {
@@ -736,6 +758,15 @@ def main() -> None:
         elif cmd == "agent_chat_postmeeting_offer":
             payload = cmd_agent_chat_postmeeting_offer(
                 Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
+        elif cmd == "rag_index":
+            payload = cmd_rag_index(Path(sys.argv[2]),
+                                    sys.argv[3].lower() != "false" if len(sys.argv) > 3 else True,
+                                    sys.argv[4].lower() == "true" if len(sys.argv) > 4 else False)
+        elif cmd == "rag_status":
+            payload = cmd_rag_status(Path(sys.argv[2]))
+        elif cmd == "rag_ask":
+            payload = cmd_rag_ask(Path(sys.argv[2]), sys.argv[3],
+                                  int(sys.argv[4]) if len(sys.argv) > 4 else 8)
         elif cmd == "agent_memory":
             payload = cmd_agent_memory(Path(sys.argv[2]),
                                        sys.argv[3] if len(sys.argv) > 3 else "",

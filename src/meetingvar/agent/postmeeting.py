@@ -261,6 +261,8 @@ class PostMeetingAgent:
                     "evidence_turn_ids": {"type": "array", "minItems": 1, "maxItems": 10,
                                           "items": {"type": "string"}},
                     "evidence_text": {"type": "string", "maxLength": 6000},
+                    "conflict_with": {"type": "array", "maxItems": 8,
+                                      "items": {"type": "string"}},
                 },
                 "required": ["fact_type", "title", "owner", "due", "rationale", "severity",
                              "confidence", "evidence_turn_ids", "evidence_text"],
@@ -281,6 +283,7 @@ class PostMeetingAgent:
             "owner": args["owner"], "due": args["due"],
             "severity": args["severity"], "confidence": args["confidence"],
             "evidence_turn_ids": args["evidence_turn_ids"],
+            "conflict_with": args.get("conflict_with") or [],
         }
         if context.dry_run:
             return {"dry_run": True, **preview}
@@ -301,6 +304,7 @@ class PostMeetingAgent:
             confidence=args["confidence"], origin_meeting=self.session_id,
             metadata={"owner": args["owner"], "due": args["due"],
                       "rationale": args["rationale"], "severity": args["severity"]},
+            conflict_with=args.get("conflict_with") or None,
         )
         return {"dry_run": False, "path": str(path), **preview}
 
@@ -426,6 +430,17 @@ class PostMeetingAgent:
         self.runtime.complete(task, {"candidates": report["candidates"], "verified": report["verified"]})
         return report
 
+    def _semantic_conflicts(self, item: dict) -> list[str]:
+        from .memory_judge import llm_conflicts
+
+        related = self.fact_store.related_candidates(
+            item["fact_type"], item["title"],
+            " ".join(str(item.get(key, "")) for key in
+                     ("owner", "due", "rationale", "severity")))
+        if not related:
+            return []
+        return llm_conflicts(item, related, self._llm or None)
+
     def save_items(self, items: list[dict]) -> dict:
         """Write selected, already-previewed items; each citation is re-verified."""
         task = self.runtime.create("postmeeting_save", {"session_id": self.session_id})
@@ -461,7 +476,8 @@ class PostMeetingAgent:
                  "rationale": item["rationale"], "severity": item["severity"],
                  "confidence": item["confidence"],
                  "evidence_turn_ids": item["evidence_turn_ids"],
-                 "evidence_text": evidence_text},
+                 "evidence_text": evidence_text,
+                 "conflict_with": self._semantic_conflicts(item)},
                 context=context, approval=lambda request: True,
                 idempotency_key=f"{self.session_id}:{item['fact_type']}:{item['title'].casefold()}",
                 fail_fast=False)
@@ -552,7 +568,8 @@ class PostMeetingAgent:
                      "rationale": item["rationale"], "severity": item["severity"],
                      "confidence": item["confidence"],
                      "evidence_turn_ids": item["evidence_turn_ids"],
-                     "evidence_text": evidence_text},
+                     "evidence_text": evidence_text,
+                     "conflict_with": self._semantic_conflicts(item)},
                     context=context,
                     approval=lambda request, approved=approved: approved is True,
                     idempotency_key=f"{self.session_id}:{item['fact_type']}:{item['title'].casefold()}",

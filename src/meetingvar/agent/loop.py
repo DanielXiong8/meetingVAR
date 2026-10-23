@@ -76,9 +76,10 @@ _SYSTEM = """你是 meetingVAR 的企业会议证据 Agent。你只能依据工�
 6. 规则/编码/定义/“分别是什么”类问题，必须找到含“记作/看成/对应/等于”的原文并读取该 turn；不能只引用主题相关的片段。
 7. 用户问“会议/课堂里说过什么、某词被记作什么、谁说过什么”时，必须使用 search_sessions 或系统预检索给出的候选 turn，再用 get_transcript_window 核对；项目记忆为空不代表会议里没有，不能只查 search_memory 就拒答。
 8. 用户问“之前聊过什么、上次对话、我们讨论到哪”时，使用 search_conversations 检索，再用 read_conversation 读取；不要凭空回忆。
-9. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
-{"answer":"回答（≤500字）","citations":[{"kind":"turn","session_id":"...","turn_ids":["turn_1"],"quote":"原文短引"} 或 {"kind":"fact","name":"事实名"} 或 {"kind":"conversation","conversation_id":"..."}],"unsupported":[],"confidence":0.0}
-citations 只能引用工具实际返回过的 turn、事实或对话；没有引用就填 []。confidence 是 0 到 1 的数字。
+9. 用户问项目文件、规范、文档、长会议记录里的内容时，使用 search_project_knowledge 做 RAG 检索，再用 read_project_chunk 核对原文；不要只凭记忆回答。
+10. 最终只输出一个 JSON，不要输出原始思维链、代码围栏或额外文字：
+{"answer":"回答（≤500字）","citations":[{"kind":"turn","session_id":"...","turn_ids":["turn_1"],"quote":"原文短引"} 或 {"kind":"fact","name":"事实名"} 或 {"kind":"conversation","conversation_id":"..."} 或 {"kind":"document","chunk_id":"..."}],"unsupported":[],"confidence":0.0}
+citations 只能引用工具实际返回过的 turn、事实、对话或 RAG 片段；没有引用就填 []。confidence 是 0 到 1 的数字。
 """
 
 _JSON_ACTION = """当前服务不支持原生工具调用，改用 JSON 动作协议。每轮只输出一个 JSON：
@@ -501,8 +502,8 @@ class AgentLoop:
         return False
 
     # ---------- citation verification ----------
-    def _allowed_citations(self) -> tuple[set[tuple[str, str]], set[str], set[str]]:
-        turns, facts, conversations = set(), set(), set()
+    def _allowed_citations(self) -> tuple[set[tuple[str, str]], set[str], set[str], set[str]]:
+        turns, facts, conversations, documents = set(), set(), set(), set()
         for obs in self.observations:
             value = obs.get("value")
             tool = obs.get("tool")
@@ -544,7 +545,15 @@ class AgentLoop:
                 row = value.get("conversation") or {}
                 if row.get("conversation_id"):
                     conversations.add(str(row["conversation_id"]))
-        return turns, facts, conversations
+            elif tool == "search_project_knowledge" and isinstance(value, dict):
+                for chunk in value.get("chunks", []):
+                    if chunk.get("chunk_id"):
+                        documents.add(str(chunk["chunk_id"]))
+            elif tool == "read_project_chunk" and isinstance(value, dict):
+                chunk = value.get("chunk") or {}
+                if chunk.get("chunk_id"):
+                    documents.add(str(chunk["chunk_id"]))
+        return turns, facts, conversations, documents
 
     @staticmethod
     def _turn_text(session_id: str, turn_id: str, observations: list[dict]) -> str:
@@ -564,8 +573,23 @@ class AgentLoop:
                                 return str(match.get("text", ""))
         return ""
 
+    def _document_source(self, chunk_id: str) -> dict:
+        for obs in self.observations:
+            value = obs.get("value")
+            if not isinstance(value, dict):
+                continue
+            chunks = value.get("chunks") if obs.get("tool") == "search_project_knowledge" else None
+            if chunks is None and obs.get("tool") == "read_project_chunk":
+                chunk = value.get("chunk")
+                chunks = [chunk] if isinstance(chunk, dict) else []
+            for chunk in chunks or []:
+                if chunk.get("chunk_id") == chunk_id:
+                    return {key: chunk.get(key, "") for key in
+                            ("source_type", "source_id", "title", "path", "start_ts", "end_ts")}
+        return {}
+
     def _verify_citations(self, citations: list) -> tuple[list[dict], list[dict]]:
-        allowed_turns, allowed_facts, allowed_conversations = self._allowed_citations()
+        allowed_turns, allowed_facts, allowed_conversations, allowed_documents = self._allowed_citations()
         valid, invalid = [], []
         for item in citations[:12] if isinstance(citations, list) else []:
             if isinstance(item, str):
@@ -584,6 +608,14 @@ class AgentLoop:
                     valid.append({"kind": "fact", "name": name})
                 else:
                     invalid.append({"kind": "fact", "name": name})
+            elif kind == "document" or item.get("chunk_id"):
+                chunk_id = item.get("chunk_id")
+                if isinstance(chunk_id, str) and chunk_id in allowed_documents:
+                    source = self._document_source(chunk_id)
+                    valid.append({"kind": "document", "chunk_id": chunk_id,
+                                  **source})
+                else:
+                    invalid.append({"kind": "document", "chunk_id": chunk_id})
             elif kind == "conversation" or item.get("conversation_id"):
                 conversation_id = item.get("conversation_id")
                 if isinstance(conversation_id, str) and conversation_id in allowed_conversations:

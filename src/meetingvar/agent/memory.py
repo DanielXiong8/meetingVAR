@@ -17,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 
+from .embeddings import get_embedding_provider
 from .memory_index import MemoryIndex, document_tokens
 
 FACT_TYPES = {"action-item", "decision", "commitment", "project-fact",
@@ -80,8 +81,46 @@ class FactStore:
         self.versions_dir = self.root / "versions"
         self.index_path = self.root / "MEMORY.md"
         self.fts = MemoryIndex(self.root)
+        self._embedder: EmbeddingProvider | None = None
+        self._vectors_ready = False
         self._lock = threading.RLock()
         self._index_ready = False
+
+    @property
+    def embedder(self) -> EmbeddingProvider:
+        if self._embedder is None:
+            self._embedder = get_embedding_provider()
+        return self._embedder
+
+    def _embedding_text(self, name: str, description: str, body: str) -> str:
+        return f"{name}\n{description}\n{body}"
+
+    def _ensure_vectors(self) -> None:
+        if self._vectors_ready:
+            return
+        self._vectors_ready = True
+        if not self.embedder.available:
+            return
+        facts = self._all_fact_dicts()
+        if not facts:
+            return
+        existing = set(self.fts.vectors(self.embedder.name).keys())
+        missing = [fact for fact in facts if fact.get("name") not in existing]
+        if not missing:
+            return
+        texts = [self._embedding_text(str(f.get("name", "")),
+                                     str(f.get("description", "")),
+                                     str(f.get("body", ""))) for f in missing]
+        vectors = self.embedder.encode(texts)
+        if not vectors:
+            return
+        for fact, vector in zip(missing, vectors):
+            self.fts.upsert_vector(str(fact["name"]), vector, self.embedder.name)
+
+    def embedding_status(self) -> dict:
+        return {"available": bool(self.embedder.available),
+                "model": self.embedder.name or (self.embedder.path.name if self.embedder.path else ""),
+                "vectors": len(self.fts.vectors())}
 
     def _ensure(self) -> None:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
@@ -161,6 +200,23 @@ class FactStore:
             return True
         return False
 
+    def related_candidates(self, fact_type: str, description: str, body: str,
+                           limit: int = 8, exclude: str = "") -> list[dict]:
+        """Related facts for an optional semantic contradiction review."""
+        new_tokens = _feature_tokens(f"{description} {body}")
+        if len(new_tokens) < 2:
+            return []
+        scored = []
+        for fact in self.list_facts(limit=500, status="active"):
+            if fact.get("name") == exclude or fact.get("type") != fact_type:
+                continue
+            overlap = _overlap(new_tokens, _feature_tokens(
+                f"{fact.get('description', '')} {fact.get('body', '')}"))
+            if overlap >= 0.30:
+                scored.append((overlap, fact))
+        scored.sort(key=lambda pair: -pair[0])
+        return [fact for _, fact in scored[:max(1, min(12, int(limit)))]]
+
     def _related_conflicts(self, fact_type: str, description: str, body: str,
                            exclude: str = "", metadata: dict | None = None) -> list[str]:
         new_text = f"{description} {body}"
@@ -185,7 +241,8 @@ class FactStore:
               origin_meeting: str = "", metadata: dict | None = None,
               status: str = "active", valid_from: str = "", valid_to: str = "",
               supersedes: str = "", pinned: bool = False, tags: list | None = None,
-              canonical_key: str = "", conflict_policy: str = "auto") -> Path:
+              canonical_key: str = "", conflict_policy: str = "auto",
+              conflict_with: list | None = None) -> Path:
         if fact_type not in FACT_TYPES:
             raise ValueError(f"unsupported fact type: {fact_type}")
         if status not in STATUSES:
@@ -238,8 +295,10 @@ class FactStore:
                     if not self._conflict_signal(candidate, existing):
                         supersedes = str(existing.get("name", ""))
                     break
-            conflicts: list[str] = []
-            if status == "active" and conflict_policy == "auto" and not supersedes:
+            conflicts: list[str] = [str(x) for x in (conflict_with or []) if str(x).strip()]
+            if conflicts and status == "active":
+                status = "pending-conflict"
+            elif status == "active" and conflict_policy == "auto" and not supersedes:
                 conflicts = self._related_conflicts(fact_type, description, body, exclude=name,
                                                     metadata=metadata)
                 if conflicts:
@@ -275,7 +334,14 @@ class FactStore:
             if supersedes and supersedes != name:
                 self._mark_status(supersedes, "superseded", valid_to=now,
                                   superseded_by=name)
-            self.fts.upsert(self.read_path(target))
+            stored = self.read_path(target)
+            self.fts.upsert(stored)
+            if self.embedder.available:
+                vector = self.embedder.encode_one(self._embedding_text(
+                    str(stored.get("name", "")), str(stored.get("description", "")),
+                    str(stored.get("body", ""))))
+                if vector:
+                    self.fts.upsert_vector(str(stored["name"]), vector, self.embedder.name)
             self.rebuild_index()
             return target
 
@@ -389,10 +455,13 @@ class FactStore:
         if not needle:
             return self.list_facts(limit=limit, status=status, types=types)
         expanded = _expand_query(needle)
+        self._ensure_vectors()
+        query_vector = self.embedder.encode_one(needle) if self.embedder.available else None
         try:
             rows = self.fts.search(expanded, limit=limit, types=types, status=status,
                                      origin_meeting=origin_meeting, pinned=pinned,
-                                     include_expired=include_expired)
+                                     include_expired=include_expired,
+                                     query_embedding=query_vector)
         except Exception:
             rows = []
         if rows:

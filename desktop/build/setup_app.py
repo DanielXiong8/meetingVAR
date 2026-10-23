@@ -18,7 +18,7 @@ import winreg
 from pathlib import Path
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Programs" / APP_NAME
 REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\meetingVAR"
 LOG_FILE = Path(tempfile.gettempdir()) / "meetingvar_setup.log"

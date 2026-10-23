@@ -10,6 +10,8 @@ does not segment CJK), which makes "交付时间" match a fact containing "交�
 """
 from __future__ import annotations
 
+import array
+import math
 import re
 import sqlite3
 import time
@@ -102,7 +104,46 @@ class MemoryIndex:
                 name UNINDEXED, tokens, tokenize='unicode61'
             )
         """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS fact_vectors (
+                name TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                vector BLOB NOT NULL
+            )
+        """)
         return connection
+
+    def upsert_vector(self, name: str, vector: list[float], model: str) -> None:
+        values = array.array("f", [float(x) for x in vector])
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO fact_vectors(name,model,dim,vector) VALUES (?,?,?,?)",
+                (name, model, len(values), values.tobytes()))
+
+    def remove_vector(self, name: str) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM fact_vectors WHERE name = ?", (name,))
+
+    def vectors(self, model: str | None = None) -> dict[str, list[float]]:
+        try:
+            with self._connect() as connection:
+                if model:
+                    rows = connection.execute(
+                        "SELECT name,vector FROM fact_vectors WHERE model = ?", (model,)).fetchall()
+                else:
+                    rows = connection.execute("SELECT name,vector FROM fact_vectors").fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+        result = {}
+        for row in rows:
+            values = array.array("f")
+            try:
+                values.frombytes(row["vector"])
+            except (ValueError, TypeError):
+                continue
+            result[str(row["name"])] = list(values)
+        return result
 
     @staticmethod
     def _fact_row(fact: dict) -> tuple:
@@ -147,11 +188,13 @@ class MemoryIndex:
         with self._connect() as connection:
             connection.execute("DELETE FROM facts WHERE name = ?", (name,))
             connection.execute("DELETE FROM facts_fts WHERE name = ?", (name,))
+            connection.execute("DELETE FROM fact_vectors WHERE name = ?", (name,))
 
     def rebuild(self, facts: Iterable[dict]) -> int:
         with self._connect() as connection:
             connection.execute("DELETE FROM facts")
             connection.execute("DELETE FROM facts_fts")
+            connection.execute("DELETE FROM fact_vectors")
             count = 0
             for fact in facts:
                 row = self._fact_row(fact)
@@ -181,9 +224,11 @@ class MemoryIndex:
         return max(0.0, 1.0 - age_days / 365.0) * 0.35
 
     @staticmethod
-    def _score(row: sqlite3.Row, rank: float, matched: list[str]) -> float:
+    def _score(row: sqlite3.Row, rank: float, matched: list[str], cosine: float = 0.0) -> float:
         base = -float(rank)
-        if base <= 0:
+        if rank == 0:
+            base = 0.0
+        elif base <= 0:
             base = 1.0 / (1.0 + max(0.0, float(rank)))
         meta_type = str(row["type"] or "")
         confidence = float(row["confidence"] or 0.0)
@@ -194,48 +239,75 @@ class MemoryIndex:
                  + confidence * 0.12
                  + sources * 0.04
                  + (0.45 if int(row["pinned"] or 0) else 0.0)
-                 + len(matched) * 0.02)
+                 + len(matched) * 0.02
+                 + max(0.0, float(cosine)) * 2.4)
         return round(score, 6)
 
     def search(self, query: str, limit: int = 10, *, types: list[str] | None = None,
                status: str = "active", origin_meeting: str | None = None,
-               pinned: bool | None = None, include_expired: bool = False) -> list[dict]:
+               pinned: bool | None = None, include_expired: bool = False,
+               query_embedding: list[float] | None = None) -> list[dict]:
         tokens = query_tokens(query)
         if not tokens:
             return []
         match = " OR ".join(_quote(token) for token in tokens[:32])
         clauses = ["f.status != 'deleted'"]
-        params: list = [match]
+        filter_params: list = []
         if status and status != "all":
             clauses.append("f.status = ?")
-            params.append(status)
-        elif status == "all":
-            pass
+            filter_params.append(status)
         if types:
             clauses.append("f.type IN (" + ",".join("?" for _ in types) + ")")
-            params.extend(types)
+            filter_params.extend(types)
         if origin_meeting:
             clauses.append("f.origin_meeting = ?")
-            params.append(origin_meeting)
+            filter_params.append(origin_meeting)
         if pinned is not None:
             clauses.append("f.pinned = ?")
-            params.append(1 if pinned else 0)
+            filter_params.append(1 if pinned else 0)
         if not include_expired:
             now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
             clauses.append("(f.valid_to = '' OR f.valid_to IS NULL OR f.valid_to >= ?)")
-            params.append(now)
-        sql = ("SELECT f.*, bm25(facts_fts) AS rank FROM facts_fts "
-               "JOIN facts f ON f.name = facts_fts.name "
-               "WHERE facts_fts MATCH ? AND " + " AND ".join(clauses) +
-               " ORDER BY rank LIMIT ?")
-        params.append(max(1, min(100, int(limit))) * 4)
+            filter_params.append(now)
+        where = " AND ".join(clauses)
+        fts_sql = ("SELECT f.*, bm25(facts_fts) AS rank FROM facts_fts "
+                   "JOIN facts f ON f.name = facts_fts.name "
+                   "WHERE facts_fts MATCH ? AND " + where +
+                   " ORDER BY rank LIMIT ?")
+        fts_params = [match] + list(filter_params) + [max(1, min(100, int(limit))) * 4]
         try:
             with self._connect() as connection:
-                rows = connection.execute(sql, params).fetchall()
+                fts_rows = connection.execute(fts_sql, fts_params).fetchall()
+                all_rows = connection.execute(
+                    "SELECT f.* FROM facts f WHERE " + where + " LIMIT 500",
+                    filter_params).fetchall() if query_embedding else []
         except sqlite3.DatabaseError:
             return []
+        rank_map = {str(row["name"]): float(row["rank"]) for row in fts_rows}
+        vector_map = self.vectors() if query_embedding else {}
+        query_dates = re.findall(r"\d{1,2}月|\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
+                                 r"\d{1,2}月\d{1,2}日", query)
+        rows = all_rows if query_embedding is not None else fts_rows
         output = []
         for row in rows:
+            haystack = " ".join([str(row["name"] or ""), str(row["description"] or ""),
+                                 str(row["body"] or "")]).casefold()
+            matched = [token for token in tokens if token in haystack][:6]
+            if matched and all(token in _GENERIC for token in matched):
+                continue
+            if query_dates and not all(date in haystack for date in query_dates):
+                continue
+            cosine = 0.0
+            if query_embedding is not None:
+                vector = vector_map.get(str(row["name"]))
+                if vector and len(vector) == len(query_embedding):
+                    denom = math.sqrt(sum(x * x for x in vector)) * math.sqrt(
+                        sum(x * x for x in query_embedding))
+                    if denom:
+                        cosine = sum(a * b for a, b in zip(vector, query_embedding)) / denom
+                if str(row["name"]) not in rank_map and cosine < 0.48:
+                    continue
+            rank = rank_map.get(str(row["name"]), 0.0)
             fact = {
                 "name": row["name"], "description": row["description"],
                 "body": row["body"], "path": row["path"],
@@ -245,20 +317,14 @@ class MemoryIndex:
                     "source_count": row["source_count"], "pinned": bool(row["pinned"]),
                     "status": row["status"], "canonical_key": row["canonical_key"],
                     "updated_at": row["updated_at"], "valid_from": row["valid_from"],
-                    "valid_to": row["valid_to"],
+                    "valid_to": row["valid_to"], "cosine": round(cosine, 4),
                 },
             }
-            haystack = " ".join([str(row["name"] or ""), str(row["description"] or ""),
-                                 str(row["body"] or "")]).casefold()
-            matched = [token for token in tokens if token in haystack][:6]
-            if matched and all(token in _GENERIC for token in matched):
-                continue
-            query_dates = re.findall(r"\d{1,2}月|\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
-                                     r"\d{1,2}月\d{1,2}日", query)
-            if query_dates and not all(date in haystack for date in query_dates):
-                continue
-            fact["_score"] = self._score(row, row["rank"], matched)
-            fact["_why"] = matched
+            why = list(matched)
+            if cosine >= 0.45 and "语义" not in why:
+                why.append("语义")
+            fact["_score"] = self._score(row, rank, matched, cosine)
+            fact["_why"] = why
             output.append(fact)
         output.sort(key=lambda item: (-item["_score"], item["name"]))
         return output[:max(1, min(100, int(limit)))]

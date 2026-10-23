@@ -67,6 +67,8 @@ Question
 | `read_fact` | 读完整事实（含状态、版本、来源） |
 | `search_conversations` | 跨对话检索标题、滚动摘要与消息片段 |
 | `read_conversation` | 读取某个历史对话的摘要与最近消息 |
+| `search_project_knowledge` | 项目文档 + 会议转写的 RAG 混合检索（FTS5 + BGE） |
+| `read_project_chunk` | 读取 RAG 片段原文与来源 |
 | `compare_sessions` | 同一查询下对比两个会议 |
 | `get_session_overview` | 会话概览、说话人、开头几轮 |
 

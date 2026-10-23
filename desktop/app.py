@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1676,6 +1676,25 @@ class Backend:
             return {"ok": False, "error": "请输入消息"}
         return self._agent_bridge(["agent_chat_send", folder, conversation_id,
                                    message.strip()[:2000]], use_llm=True, timeout=300)
+
+    def rag_index(self, folder: str, include_meetings: bool = True) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["rag_index", folder,
+                                   "true" if include_meetings else "false"], timeout=600)
+
+    def rag_status(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["rag_status", folder], timeout=60)
+
+    def rag_ask(self, folder: str, question: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(question, str) or not question.strip():
+            return {"ok": False, "error": "请输入问题"}
+        return self._agent_bridge(["rag_ask", folder, question.strip()[:1000]],
+                                  use_llm=True, timeout=300)
 
     def agent_memory(self, folder: str, query: str = "", status: str = "active") -> dict:
         if not folder or not Path(folder).is_dir():

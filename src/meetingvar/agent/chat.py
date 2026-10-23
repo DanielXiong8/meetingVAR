@@ -24,6 +24,7 @@ from .memory_intent import is_memory_request, propose_memory
 _SAFE_ID = re.compile(r"[0-9a-f]{32}")
 _GREETING = re.compile(r"^(你好|您好|hi|hello|在吗|早上好|下午好|晚上好|谢谢|好的|ok)[!！。.\s]*$", re.I)
 _SUMMARY = re.compile(r"总结|纪要|复盘|主要决定|行动项|未决问题|决议", re.I)
+_KNOWLEDGE = re.compile(r"文件|文档|资料|规范|知识库|说明书|手册|需求|RAG", re.I)
 _MEETING = re.compile(
     r"会议|项目|纪要|交付|决定|承诺|风险|进度|任务|上次|哪次|谁|什么时候|讨论|记录|"
     r"证据|转写|关注|事实|记忆|检索|总结|复盘|安排|负责|截止|方案|评审|结论|行动项|"
@@ -256,13 +257,7 @@ class ChatAgent:
                     if m.get("role") in {"user", "assistant"} and m.get("content"))
         return rows
 
-    def _roll_summary(self) -> None:
-        """Extractive rolling summary; cheap enough to run every 12 messages."""
-        messages = self.conversation.get("messages", [])
-        until = int(self.conversation.get("summary_until", 0) or 0)
-        if len(messages) - until < 12:
-            return
-        batch = messages[until:]
+    def _extractive_summary(self, previous: str, batch: list[dict]) -> str:
         lines = []
         for message in batch:
             text = str(message.get("content", "")).replace("\n", " ").strip()
@@ -270,10 +265,50 @@ class ChatAgent:
                 continue
             prefix = "用户" if message.get("role") == "user" else "助手"
             lines.append(f"{prefix}：{text[:140]}")
-        previous = str(self.conversation.get("summary", "") or "").strip()
         summary = "\n".join(x for x in [previous] + lines if x)
-        if len(summary) > 1800:
-            summary = summary[-1800:]
+        return summary[-1800:]
+
+    def _llm_summary(self, previous: str, batch: list[dict]) -> str | None:
+        lines = []
+        for message in batch:
+            text = str(message.get("content", "")).replace("\n", " ").strip()
+            if text:
+                prefix = "用户" if message.get("role") == "user" else "助手"
+                lines.append(f"{prefix}：{text[:500]}")
+        prompt = f"""把下面的项目对话压缩成一段可长期复用的记忆摘要。
+保留：已确认的决定、承诺、负责人、截止时间、风险、未决问题、用户偏好；删除寒暄和重复。
+不要编造；不确定的写“未确认”。不超过 500 字，只输出摘要正文。
+
+已有摘要：
+{previous or '（无）'}
+
+新增对话：
+{chr(10).join(lines)}
+"""
+        try:
+            if self.llm is not None:
+                reply = self.llm(prompt)
+                if isinstance(reply, str):
+                    return reply.strip()[:1800] or None
+                if isinstance(reply, dict) and reply.get("ok"):
+                    return str(reply.get("content", "")).strip()[:1800] or None
+                return None
+            reply = chat_result(prompt, temperature=0.2, timeout=30, max_tokens=600)
+            if reply.get("ok"):
+                return str(reply.get("content", "")).strip()[:1800] or None
+        except Exception:
+            return None
+        return None
+
+    def _roll_summary(self) -> None:
+        """LLM semantic summary with a deterministic tail-preserving fallback."""
+        messages = self.conversation.get("messages", [])
+        until = int(self.conversation.get("summary_until", 0) or 0)
+        if len(messages) - until < 12:
+            return
+        batch = messages[until:]
+        previous = str(self.conversation.get("summary", "") or "").strip()
+        summary = self._llm_summary(previous, batch) or self._extractive_summary(previous, batch)
         self.conversation = self.store.update_summary(
             self.conversation_id, summary, len(messages))
 
@@ -397,6 +432,10 @@ class ChatAgent:
                     if fact_type not in FACT_TYPES:
                         fact_type = "project-fact"
                     try:
+                        from .memory_judge import llm_conflicts
+                        related = store.related_candidates(
+                            fact_type, str(item.get("description") or title), body)
+                        conflicts = llm_conflicts(item, related, self.llm or None)
                         path = store.write(
                             name=title, description=str(item.get("description") or title),
                             body=body, fact_type=fact_type,
@@ -405,7 +444,8 @@ class ChatAgent:
                             origin_meeting=str(item.get("origin_meeting") or
                                                 f"chat:{self.conversation_id}"),
                             metadata={"channel": "chat"},
-                            conflict_policy="auto")
+                            conflict_policy="auto",
+                            conflict_with=conflicts or None)
                         written += 1
                         if store.read_path(path).get("status") == "pending-conflict":
                             pending += 1
@@ -523,7 +563,7 @@ class ChatAgent:
                     "usage": digest.get("usage", {}), "plan": digest.get("plan", []),
                     "grounded": digest.get("grounded"), "answered": digest.get("answered"),
                     "stop_reason": digest.get("stop_reason", "")}
-        elif _MEETING.search(text):
+        elif _MEETING.search(text) or _KNOWLEDGE.search(text):
             loop = AgentLoop(project_root=self.project_root, question=text,
                              data_dir=self.data_dir, llm=self.llm, mode="auto",
                              max_steps=self.max_steps,

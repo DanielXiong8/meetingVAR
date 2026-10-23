@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from meetingvar.agent.chat import ChatStore
+from meetingvar.rag import RagIndex
 from meetingvar.agent.loop import AgentLoop
 from meetingvar.agent.policy import ApprovalBroker, Principal
 from meetingvar.agent.meeting_tools import build_meeting_registry
@@ -138,6 +139,31 @@ class AgentLoopTests(unittest.TestCase):
         self.assertTrue(report["grounded"], report)
         self.assertEqual(report["citations"][0]["kind"], "conversation")
         self.assertEqual(report["citations"][0]["conversation_id"], conversation["id"])
+
+    def test_rag_tool_and_document_citation(self):
+        (self.root / "需求.md").write_text(
+            "客户要求增加数据导出功能，负责人张三。", encoding="utf-8")
+        index = RagIndex(self.root, self.data)
+        index.index_project(include_meetings=False)
+        chunk_id = index.search("客户要求", rerank=False)[0]["chunk_id"]
+        script = [
+            _content(json.dumps({"steps": [
+                {"goal": "检索项目资料", "tool": "search_project_knowledge", "why": "查需求"},
+            ]}, ensure_ascii=False)),
+            _tool_call("search_project_knowledge", {"query": "客户要求"}),
+            _content(json.dumps({
+                "answer": "客户要求增加数据导出。",
+                "citations": [{"kind": "document", "chunk_id": chunk_id}],
+                "unsupported": [], "confidence": 0.8,
+            }, ensure_ascii=False)),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=4,
+                             question="客户要求什么？")
+        report = loop.run()
+        self.assertTrue(report["ok"], report)
+        self.assertTrue(report["grounded"], report)
+        self.assertEqual(report["citations"][0]["kind"], "document")
+        self.assertEqual(report["citations"][0]["chunk_id"], chunk_id)
 
     def test_json_action_fallback_is_a_real_react_loop(self):
         script = [

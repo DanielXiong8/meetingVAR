@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from meetingvar.agent.chat import ChatAgent, ChatStore  # noqa: E402
 from meetingvar.agent.memory import FactStore  # noqa: E402
 from meetingvar.agent.memory_intent import is_memory_request, propose_memory  # noqa: E402
+from meetingvar.agent.memory_judge import llm_conflicts  # noqa: E402
 from meetingvar.agent.postmeeting import quick_candidates  # noqa: E402
 
 
@@ -97,6 +98,23 @@ class MemoryV2Tests(unittest.TestCase):
         store.update_summary(conversation["id"], "项目采用第二方案，周五交付", 20)
         hits = store.search_conversations("第二方案")
         self.assertEqual(hits[0]["conversation_id"], conversation["id"])
+
+    def test_llm_semantic_summary_and_conflict_judge(self):
+        agent = ChatAgent(self.project, llm=lambda prompt: "LLM 摘要：交付改到周五。")
+        agent.conversation["messages"] = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"消息 {i}"}
+            for i in range(12)
+        ]
+        agent._roll_summary()
+        self.assertEqual(agent.conversation["summary"], "LLM 摘要：交付改到周五。")
+
+        candidates = [{"name": "旧决定", "type": "decision",
+                       "description": "交付定在周五", "body": "负责人张三"}]
+        got = llm_conflicts(
+            {"fact_type": "decision", "description": "交付改到周一", "body": "负责人李四"},
+            candidates,
+            llm=lambda prompt: '{"conflicts":["旧决定"],"reason":"负责人和日期都变了"}')
+        self.assertEqual(got, ["旧决定"])
 
     def test_memory_intent_pronoun_uses_context(self):
         history = [{"role": "user", "content": "项目周五交付第一版"},

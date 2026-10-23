@@ -310,6 +310,23 @@
             </div>
           </div>
         </div>
+
+        <div class="card agent-search-card">
+          <div class="agent-search-head">
+            <div><b>项目知识库 RAG</b><div class="muted">项目文档 + 已保存会议转写 · FTS5 + BGE 向量 · 重排 · 来源引用</div></div>
+            <span id="ragStatus" class="mode-pill">未建立索引</span>
+          </div>
+          <div class="row">
+            <button id="btnRagIndex" class="btn btn-primary">建立/刷新索引</button>
+            <button id="btnRagForce" class="btn">强制重建</button>
+            <span id="ragHint" class="muted">索引只写本机项目目录</span>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <input id="ragQuestion" class="input" placeholder="问项目资料或会议记录：客户要求了什么？谁负责交付？">
+            <button id="btnRagAsk" class="btn">提问</button>
+          </div>
+          <div id="ragAnswer" class="agent-answer" hidden></div>
+        </div>
       </section>
 
       <!-- 设置 -->
