@@ -279,6 +279,100 @@ def cmd_agent_focus(args) -> None:
         raise SystemExit(1)
 
 
+def _kg_store(args):
+    from .kg.store import GraphStore
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[kg] 项目文件夹无效: {project}")
+    return GraphStore(project)
+
+
+def cmd_kg_build(args) -> None:
+    import json as _json
+    from . import config
+    from .kg.build import GraphBuilder
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[kg] 项目文件夹无效: {project}")
+    report = GraphBuilder(project, config.DATA_DIR).build(
+        include_meetings=not args.no_meetings)
+    print(_json.dumps(report, ensure_ascii=False) if args.json else
+          f"[kg] nodes={report['nodes']} edges={report['edges']} "
+          f"facts={report['facts']} meetings={report['meetings']}", flush=True)
+
+
+def cmd_kg_find(args) -> None:
+    import json as _json
+    store = _kg_store(args)
+    nodes = store.find_nodes(args.query, kind=args.kind or None, limit=args.limit)
+    exact = store.resolve(args.query, kind=args.kind or None)
+    if exact and exact["id"] not in {n["id"] for n in nodes}:
+        nodes.insert(0, exact)
+    if args.json:
+        print(_json.dumps(nodes, ensure_ascii=False), flush=True); return
+    for node in nodes:
+        print(f"- {node['id']}  [{node['kind']}] {node['name']}  {node['description'][:100]}")
+
+
+def _resolve_or_exit(store, value: str) -> dict:
+    node = store.get_node(value) or store.resolve(value)
+    if not node:
+        raise SystemExit(f"[kg] 找不到实体: {value}")
+    return node
+
+
+def cmd_kg_neighbors(args) -> None:
+    import json as _json
+    store = _kg_store(args)
+    node = _resolve_or_exit(store, args.node or args.query)
+    result = store.neighbors(node["id"], depth=args.depth, direction=args.direction,
+                             relation=args.relation or None)
+    if args.json:
+        print(_json.dumps(result, ensure_ascii=False), flush=True); return
+    print(f"{node['kind']} / {node['name']}")
+    names = {n["id"]: n for n in result["nodes"]}
+    for edge in result["edges"]:
+        src, dst = names.get(edge["src_id"], {}), names.get(edge["dst_id"], {})
+        print(f"- {src.get('name','?')} --{edge['relation']}--> {dst.get('name','?')} "
+              f"[{edge['status']} {edge['valid_from'][:10]}]")
+
+
+def cmd_kg_timeline(args) -> None:
+    import json as _json
+    store = _kg_store(args)
+    node = _resolve_or_exit(store, args.node or args.query)
+    result = store.timeline(node["id"], limit=args.limit)
+    if args.json:
+        print(_json.dumps(result, ensure_ascii=False), flush=True); return
+    print(f"{node['kind']} / {node['name']}")
+    names = {n["id"]: n for n in result["nodes"]} if "nodes" in result else {}
+    for edge in result["edges"]:
+        print(f"- {edge['valid_from'][:10]} {edge['relation']} "
+              f"{edge['src_id']} -> {edge['dst_id']} [{edge['status']}]")
+
+
+def cmd_kg_path(args) -> None:
+    import json as _json
+    store = _kg_store(args)
+    src = _resolve_or_exit(store, args.src)
+    dst = _resolve_or_exit(store, args.dst)
+    result = store.path(src["id"], dst["id"], max_depth=args.max_depth,
+                        relation=args.relation or None)
+    if args.json:
+        print(_json.dumps(result, ensure_ascii=False), flush=True); return
+    if not result.get("found"):
+        print("[kg] 没有找到路径"); return
+    print(" -> ".join(f"{n['kind']}:{n['name']}" for n in result["nodes"]))
+    for edge in result["edges"]:
+        print(f"  {edge['relation']} [{edge['valid_from'][:10]}..{edge['valid_to'][:10] or 'now'}]")
+
+
+def cmd_kg_stats(args) -> None:
+    import json as _json
+    print(_json.dumps(_kg_store(args).stats(), ensure_ascii=False), flush=True)
+
+
 def cmd_rag_index(args) -> None:
     """Build/refresh the project RAG index (documents + saved meetings)."""
     import json as _json
@@ -739,6 +833,40 @@ def main() -> None:
     aeval.add_argument("--max-steps", type=int, default=8)
     aeval.add_argument("--json", action="store_true")
 
+    kb = sub.add_parser("kg-build", help="从现有事实+会议规则构建项目知识图谱")
+    kb.add_argument("--project", required=True)
+    kb.add_argument("--no-meetings", action="store_true")
+    kb.add_argument("--json", action="store_true")
+    kf = sub.add_parser("kg-find", help="在知识图谱中查找实体")
+    kf.add_argument("--project", required=True)
+    kf.add_argument("--query", required=True)
+    kf.add_argument("--kind", default="")
+    kf.add_argument("--limit", type=int, default=10)
+    kf.add_argument("--json", action="store_true")
+    kn = sub.add_parser("kg-neighbors", help="查看实体邻居")
+    kn.add_argument("--project", required=True)
+    kn.add_argument("--node", default="")
+    kn.add_argument("--query", default="")
+    kn.add_argument("--depth", type=int, default=1)
+    kn.add_argument("--direction", default="both", choices=["both", "out", "in"])
+    kn.add_argument("--relation", default="")
+    kn.add_argument("--json", action="store_true")
+    kt = sub.add_parser("kg-timeline", help="查看实体关系时间线")
+    kt.add_argument("--project", required=True)
+    kt.add_argument("--node", default="")
+    kt.add_argument("--query", default="")
+    kt.add_argument("--limit", type=int, default=100)
+    kt.add_argument("--json", action="store_true")
+    kp = sub.add_parser("kg-path", help="查看两个实体之间的最短路径")
+    kp.add_argument("--project", required=True)
+    kp.add_argument("--src", required=True)
+    kp.add_argument("--dst", required=True)
+    kp.add_argument("--max-depth", type=int, default=3)
+    kp.add_argument("--relation", default="")
+    kp.add_argument("--json", action="store_true")
+    ks = sub.add_parser("kg-stats", help="知识图谱统计")
+    ks.add_argument("--project", required=True)
+
     ri = sub.add_parser("rag-index", help="建立/增量刷新项目文档+会议转写 RAG 索引")
     ri.add_argument("--project", required=True)
     ri.add_argument("--no-meetings", action="store_true", help="只索引项目文档")
@@ -812,6 +940,9 @@ def main() -> None:
      "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
      "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
      "rag-index": cmd_rag_index, "rag-ask": cmd_rag_ask,
+     "kg-build": cmd_kg_build, "kg-find": cmd_kg_find,
+     "kg-neighbors": cmd_kg_neighbors, "kg-timeline": cmd_kg_timeline,
+     "kg-path": cmd_kg_path, "kg-stats": cmd_kg_stats,
      "agent-run": cmd_agent_run, "agent-eval": cmd_agent_eval}[args.cmd](args)
 
 

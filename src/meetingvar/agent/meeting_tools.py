@@ -172,6 +172,72 @@ def _read_project_chunk(args: dict, context: ToolContext) -> dict:
     return {"chunk": chunk, "trust": "project-rag"}
 
 
+def _kg(context: ToolContext):
+    from ..kg.store import GraphStore
+
+    return GraphStore(context.project_root)
+
+
+def _kg_node(store, args: dict, key: str = "node_id"):
+    value = str(args.get(key) or "").strip()
+    if value:
+        node = store.get_node(value)
+        if node:
+            return node
+    query = str(args.get("query") or value).strip()
+    return store.resolve(query) if query else None
+
+
+def _read_kg_find(args: dict, context: ToolContext) -> dict:
+    store = _kg(context)
+    if store.stats()["nodes"] == 0:
+        return {"ok": False, "error": "graph_empty", "nodes": [],
+                "hint": "先运行 meetingvar kg-build --project <项目>"}
+    kind = args.get("kind") or None
+    query = args["query"]
+    nodes = store.find_nodes(query, kind=kind,
+                             limit=max(1, min(30, int(args.get("limit", 10)))))
+    exact = store.resolve(query, kind=kind)
+    if exact and exact["id"] not in {node["id"] for node in nodes}:
+        nodes.insert(0, exact)
+    return {"ok": True, "query": query, "nodes": nodes, "trust": "project-kg"}
+
+
+def _read_kg_neighbors(args: dict, context: ToolContext) -> dict:
+    store = _kg(context)
+    node = _kg_node(store, args)
+    if not node:
+        raise ToolError("node_not_found", "no matching graph node")
+    result = store.neighbors(node["id"], depth=args.get("depth", 1),
+                             direction=args.get("direction", "both"),
+                             relation=args.get("relation") or None)
+    return {**result, "trust": "project-kg"}
+
+
+def _read_kg_timeline(args: dict, context: ToolContext) -> dict:
+    store = _kg(context)
+    node = _kg_node(store, args)
+    if not node:
+        raise ToolError("node_not_found", "no matching graph node")
+    return {**store.timeline(node["id"]), "trust": "project-kg"}
+
+
+def _read_kg_path(args: dict, context: ToolContext) -> dict:
+    store = _kg(context)
+    src = _kg_node(store, args, "src_id")
+    dst = _kg_node(store, args, "dst_id")
+    if not src or not dst:
+        raise ToolError("node_not_found", "source or destination node is missing")
+    result = store.path(src["id"], dst["id"],
+                        max_depth=args.get("max_depth", 3),
+                        relation=args.get("relation") or None)
+    return {**result, "src": src, "dst": dst, "trust": "project-kg"}
+
+
+def _read_kg_stats(args: dict, context: ToolContext) -> dict:
+    return {**_kg(context).stats(), "trust": "project-kg"}
+
+
 def _read_compare(args: dict, context: ToolContext) -> dict:
     catalog = _catalog(context)
     result = catalog.compare(args["session_a"], args["session_b"], args["query"],
@@ -464,6 +530,68 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": ["chunk_id"],
         },
     ), _read_project_chunk)
+
+    registry.register(ToolSpec(
+        name="kg_find_entities",
+        description="在项目知识图谱中查找人物/项目/决定/任务/风险等实体",
+        read_only=True, side_effect_scope="none", timeout_s=15, max_output_chars=8000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 300},
+                           "kind": {"type": "string"},
+                           "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+    ), _read_kg_find)
+
+    registry.register(ToolSpec(
+        name="kg_neighbors",
+        description="查看知识图谱中某实体的邻居（支持关系/方向/深度）",
+        read_only=True, side_effect_scope="none", timeout_s=15, max_output_chars=12000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"node_id": {"type": "string"},
+                           "query": {"type": "string"},
+                           "depth": {"type": "integer"},
+                           "direction": {"type": "string"},
+                           "relation": {"type": "string"}},
+            "required": [],
+        },
+    ), _read_kg_neighbors)
+
+    registry.register(ToolSpec(
+        name="kg_timeline",
+        description="查看某实体的时间线（关系、有效期、证据）",
+        read_only=True, side_effect_scope="none", timeout_s=15, max_output_chars=10000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"node_id": {"type": "string"},
+                           "query": {"type": "string"}},
+            "required": [],
+        },
+    ), _read_kg_timeline)
+
+    registry.register(ToolSpec(
+        name="kg_path",
+        description="查找两个实体之间的最短关系路径",
+        read_only=True, side_effect_scope="none", timeout_s=20, max_output_chars=10000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"src_id": {"type": "string"}, "dst_id": {"type": "string"},
+                           "query": {"type": "string"},
+                           "max_depth": {"type": "integer"},
+                           "relation": {"type": "string"}},
+            "required": [],
+        },
+    ), _read_kg_path)
+
+    registry.register(ToolSpec(
+        name="kg_stats",
+        description="项目知识图谱规模与类型统计",
+        read_only=True, side_effect_scope="none", timeout_s=10, max_output_chars=3000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {}},
+    ), _read_kg_stats)
 
     registry.register(ToolSpec(
         name="compare_sessions",
