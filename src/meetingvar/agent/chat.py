@@ -337,6 +337,15 @@ class ChatAgent:
                             str(result.get("error") or "模型调用失败"))
         return str(result.get("content", "")).strip()
 
+    def _refresh_kg_rules(self) -> None:
+        try:
+            from ..kg.build import GraphBuilder
+
+            GraphBuilder(self.project_root, self.data_dir).build(
+                include_meetings=True, reset=False)
+        except Exception:
+            return
+
     def _quick_memory_action(self) -> dict | None:
         """Find the latest saved meeting and offer model-free fact candidates."""
         try:
@@ -481,6 +490,8 @@ class ChatAgent:
                         if result.get("ok") else "会议事实写入失败。")
                 if result.get("pending_conflicts"):
                     text += f" 其中 {result['pending_conflicts']} 条待确认冲突。"
+                if result.get("ok"):
+                    self._refresh_kg_rules()
             elif kind == "save_terms":
                 from ..memory.probe import write_terms
                 terms = [str(t).strip() for t in (payload.get("terms") or []) if str(t).strip()]

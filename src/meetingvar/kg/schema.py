@@ -21,6 +21,44 @@ RELATIONS = {
     "caused_by", "resolves", "related_to",
 }
 
+RELATION_ALLOWED = {
+    "assigned_to": ({"Action", "Commitment"}, {"Person"}),
+    "owned_by": ({"Decision", "Action", "Project", "Artifact"}, {"Person", "Team"}),
+    "member_of": ({"Person"}, {"Team"}),
+    "participates_in": ({"Person"}, {"Meeting"}),
+    "speaks_in": ({"Person"}, {"Meeting"}),
+    "about": ({"Meeting", "Document", "Decision", "Action", "Risk", "Requirement"},
+              {"Project", "Topic"}),
+    "decided_in": ({"Decision"}, {"Meeting"}),
+    "derived_from": ({"Decision", "Action", "Commitment", "Risk", "OpenQuestion"},
+                     {"Meeting", "Document"}),
+    "supersedes": ({"Decision", "Action", "Commitment"},
+                   {"Decision", "Action", "Commitment"}),
+    "contradicts": (None, None),
+    "depends_on": ({"Action", "Artifact"}, {"Action", "Artifact"}),
+    "blocks": ({"Risk"}, {"Action", "Project", "Risk"}),
+    "mitigates": ({"Action", "Decision"}, {"Risk"}),
+    "due_on": ({"Action", "Commitment"}, {"Date"}),
+    "part_of": ({"Decision", "Action", "Commitment", "Risk", "OpenQuestion",
+                 "Meeting", "Artifact", "Requirement"}, {"Project"}),
+    "references": ({"Meeting", "Document", "Decision"}, {"Document", "Meeting"}),
+    "caused_by": ({"Risk", "OpenQuestion"}, {"Decision", "Meeting", "Action"}),
+    "resolves": ({"Action", "Decision"}, {"Risk", "OpenQuestion"}),
+    "related_to": (None, None),
+}
+
+
+def relation_allowed(head_kind: str, relation: str, tail_kind: str) -> bool:
+    allowed = RELATION_ALLOWED.get(relation)
+    if not allowed:
+        return False
+    heads, tails = allowed
+    if heads is not None and head_kind not in heads:
+        return False
+    if tails is not None and tail_kind not in tails:
+        return False
+    return True
+
 _SAFE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff]+")
 
 
@@ -93,6 +131,18 @@ CREATE INDEX IF NOT EXISTS idx_edges_src ON kg_edges(src_id, relation, status);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON kg_edges(dst_id, relation, status);
 CREATE INDEX IF NOT EXISTS idx_edges_valid ON kg_edges(valid_from, valid_to);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON kg_nodes(kind, status);
+CREATE TABLE IF NOT EXISTS kg_node_vectors (
+    node_id TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kg_edge_vectors (
+    edge_id TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS kg_nodes_fts USING fts5(
     node_id UNINDEXED, tokens, name, description, tokenize='unicode61'
 );

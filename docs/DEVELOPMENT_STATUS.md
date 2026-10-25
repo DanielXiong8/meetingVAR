@@ -10,7 +10,7 @@
 |---|---|---|
 | `main` | `91aa4dc` | 已合并 PR #34（`feat/desktop-ui`），是当前主线基线。 |
 | `feat/local-model-audio-fix` | `f822206` | 0.1.3本地GPU/API诊断＋双源音频时间轴＋外部API截断修复；待评审合入。 |
-| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.13.0` tag。 |
+| `feat/agent-runtime` | `c4528d9` | Agent 闭环 + 0.4 深色工作区 + 0.5 对话式 Agent + 0.7 摘要/审批 + 0.8 多模态文件/查看器 + 0.8.1 项目树优先 + 0.8.2 内容优先类型识别 + 0.9.0 干净 Windows 运行时；已打 `v0.2.1`~`v0.14.0` tag。 |
 | `integration/28-reconciliation` | `af92813` | 含队友PR #32/#33；相对main有19个main独有提交、2个该分支独有提交，已分叉，合入前需先合并/变基最新main。 |
 | `feat/desktop-ui` | `a9abea5` | 已由PR #34合入main，可保留作历史或清理。 |
 | `feat/term-curator` | `1e778c7` | 已并入integration，旧分支。 |
@@ -27,9 +27,9 @@
 
 | 资源 | 位置 | 当前状态 |
 |---|---|---|
-| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.13.0。 |
+| 工作仓库 | `C:\Users\Lenovo\projects\meetingVAR` | 分支 `feat/agent-runtime`，版本0.14.0。 |
 | 引擎环境 | `D:\miniconda3\envs\meetingvar` | Python 3.10，editable安装指向工作仓库；修改引擎代码后下次启动生效。约6.8GB。 |
-| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.13.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
+| 桌面安装 | `C:\Users\Lenovo\AppData\Local\Programs\meetingVAR` | 已安装0.14.0；注册表版本、快捷方式与 `--selftest` 已核验。 |
 | 配置与日志 | `C:\Users\Lenovo\AppData\Roaming\meetingVAR` | `ui_config.json`、UI/模型日志及旧配置备份；含本机路径，不入库。 |
 | 本地模型根目录 | `D:\env\models\models` | 约11.8GB，含Qwen3-4B GGUF、Qwen3-4B AWQ/FP8、SenseVoice、Paraformer、CAM++等。 |
 | 原生推理后端 | `D:\env\llama.cpp\b11669-vulkan-x64` | 官方Vulkan版llama-server，支持本机RTX 5060；不随源码或UI安装包分发。 |
@@ -39,8 +39,8 @@
 | 资源 | 位置 | 说明 |
 |---|---|---|
 | 0.1.1/0.1.2/0.1.3发布目录 | `C:\Users\Lenovo\.zcode\workspace\default\meetingvar_release_0.1.*` | 历史版，各约65MB。 |
-| 0.2.x~0.13.0发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.13.0` | 0.13.0 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
-| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.13.0 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
+| 0.2.x~0.14.0发布目录 | `meetingvar_release_0.2.*` ~ `meetingvar_release_0.14.0` | 0.14.0 为当前版，含干净 Windows 文件解析、多模态查看器、项目树、对话式 UI、摘要技能与可审批动作；旧版保留。 |
+| 仓库构建产物 | `meetingVAR/dist`、`dist_installer`、`build` | 0.14.0 的 EXE 与安装包在 `dist`/`dist_installer`；旧目录内仍有早期产物，使用前看时间与 SHA256。 |
 | 黑客松提交材料 | `C:\Users\Lenovo\OneDrive\Desktop\EE黑客松_20261018` | 含源码包、README、自查声明、课堂案例核验、历史备份。 |
 | 最新提交ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_音频修复版.zip` | 已含音频时间轴修复；ZIP校验通过。 |
 | 旧最终版ZIP | `...\校园学习生活_meetingVAR_提交包_20261018_最终版.zip` | 修复前版本，保留对照，不应作为最新提交。 |
@@ -71,10 +71,12 @@
 - 会议证据基准 v1（2026-10-21）：新增事件级 `evidence_benchmark`（labels/predictions schema、recall、clip precision、每小时误保存分钟、关注点覆盖、引用支持率、20场/40事件/80%召回/≤10分钟误保存发布门禁）；test2 真实会议首次基线（机器预标注，未核验）= 4/6 事件召回 66.7%、漏 evt_005 KG定位大讨论与 evt_006 agent-KG负责人、误保存 3.05 分钟/小时、保存 6.48 分钟/小时。工具 `scripts/meeting_benchmark.py`，方法见 `docs/MEETING_EVIDENCE_BENCHMARK.md`。
 - Test5 12 条考试关注问题 L1/L2/L3 对比（2026-10-21）：同一批 12 个 10 分钟课堂片段、同一份本地转写；L1 热词命中 8/12（66.7%）、L2 关注文档 9/12（75.0%）、L3 本地 4B 裁判 4/12（33.3%）。L1/L2 易把“提到相关词”当命中；L3 受 ASR 数学术语错误影响偏保守。**修正：新增 `meetingvar.lecture.find_focus`，把 10 分钟转写切成 90–120 秒窗口，关键词召回 + 小窗 LLM 裁判，返回带时间戳/证据 turn 的片段；同一批 12 个转写命中 9/12（75%），F1/F5 抽样段本身无该内容、F10 无对应 ODE 课次。** 另修复 8GB GPU 自动选 CUDA 后模型加载/推理 OOM：auto 要求总显存≥10GB，推理 OOM 也回退 CPU。
 - Test5 考试题驱动关注问题 pilot（2026-10-21）：从 2021–2025 期末卷提炼 12 条关注问题（`benchmarks/meeting_evidence/test5_focus_questions.json`）；首轮 4 个 case（F2 链式法则/F4 极值/F6 第一型曲面积分/F9 级数）各抽 600 秒、用关注文档跑 `replay`：**4/4 命中主题**，11 个片段中 9 个关键词相关（81.8%），保存 2,355 秒≈58.9 分钟/小时；F6 的 2 个低分片段经人工查看仍在讲参数化，说明关键词 precision 是下限。结论：能命中主题，但 300 秒回溯窗不精确、样本非盲测。见 `docs/TEST5_EXAM_FOCUS_PILOT.md`。
+- 0.14.0 知识图谱 Phase 1（2026-10-25）：新增 `kg/extract.py`（严格 JSON 实体/关系抽取、evidence turn 校验、surface 必须在原句出现、`RELATION_ALLOWED` domain/range 双层校验）、`kg/link.py`（精确/别名 → BGE 余弦 → 可选 LLM 灰区 → provisional 新节点）、`kg/ingest.py`（会议 turn 分块、episode hash 幂等、关系/实体增量入图、合成“本次会议/本项目”端点）。CLI `kg-ingest --session/--all/--force`；会后会议事实保存后 best-effort 重建规则图，LLM 深度抽取显式运行。本地 Qwen3-4B 实测：加 `/no_think` 后 2 句话约 5–7 秒，4–5 实体/1 条有效关系；4B 关系抽取质量有限，生产建议更强模型。完整 533 项测试通过（74.15 秒）。详见 `docs/KNOWLEDGE_GRAPH_PHASE1.md`。
 - 0.13.0 知识图谱 Phase 0（2026-10-25）：新增 `src/meetingvar/kg/`：SQLite 属性图（`kg_nodes/kg_edges/kg_episodes/kg_aliases/kg_nodes_fts`，双时间 `valid_from/valid_to`、`observed_at`、证据 `turn_ids/quote`）；`GraphBuilder` 不调 LLM，仅用现有 FactStore + 会议/说话人规则构图（Project/Meeting/Person/Decision/Action/Commitment/Risk/OpenQuestion/Topic；part_of/derived_from/decided_in/assigned_to/owned_by/due_on/speaks_in）。GraphStore 提供 `find_nodes`/`resolve`/`neighbors`/`timeline`/`path`/`stats`；CLI `kg-build/kg-find/kg-neighbors/kg-timeline/kg-path/kg-stats`；Agent 只读工具 `kg_find_entities/kg_neighbors/kg_timeline/kg_path/kg_stats`。测试项目实测 8 节点/13 边，路径/时间线/过期边过滤/重建幂等通过。完整 530 项测试通过（79.84 秒）。详见 `docs/KNOWLEDGE_GRAPH_PHASE0.md`；后续 Phase1=LLM实体关系抽取+实体链接。
 - 0.12.0 向量记忆与项目 RAG（2026-10-23）：新增本地 `BAAI/bge-small-zh-v1.5`（CPU、512维、模型缺失自动降级）；FactStore 改为 FTS5/BM25 + BGE 余弦混合检索，语义-only 命中有 0.48 门槛；40题基准 recall@5 1.000、top1/citation precision@1 0.852、负对照 1.000、过期默认视图 1.000。新增 `agent/rerank.py`（LLM listwise 重排，失败退回 BGE 余弦）；项目 RAG `rag.py` 索引项目文档+已保存会议转写（约850字分块、增量 hash、FTS5+向量、chunk 时间戳/turn_ids），Agent 工具 `search_project_knowledge`/`read_project_chunk` 和 document 引用校验；CLI `rag-index`/`rag-ask`；Agent 页新增“项目知识库 RAG”卡（建立/强制重建/状态/提问/引用）。对话摘要改为优先 LLM 语义摘要（失败退回抽取式）；新增 LLM 冲突裁判 `memory_judge.py` 接入聊天/会后写入。记忆 UI 增加“彻底删除”（文件+版本快照）。30天纵向模拟：recall@5 1.000、冲突识别 True、过期默认视图干净、重载持久化 True；真人30天评测提供 `scripts/memory_human_eval.py` 标注/计分工具（尚未伪造真人结果）。完整 525 项测试通过（67.20 秒）。详见 `docs/RAG_AND_EMBEDDING_0.12.0.md`、`docs/MEMORY_HUMAN_EVAL.md`。
 - 0.11.0 商业级项目记忆（2026-10-22）：Markdown 事实源 + SQLite FTS5 可重建索引；中文 bigram/BM25 排序，返回 score/why；业务同义词与日期约束；统一主聊天 `search_memory` 与 `MemoryQAAgent` 召回。写入侧新增聊天“记住…”审批卡、会后无模型快速事实候选（停止会议自动弹出）、同名版本快照/同 canonical 合并；治理侧新增 active/superseded/expired/pending-conflict/rejected/deleted 生命周期、`valid_from/valid_to`、置顶、软删除、编辑、冲突三选一、`MEMORY.md` 冲突区。对话记忆新增 12 条消息滚动摘要与 `search_conversations`/`read_conversation` 工具，引用校验支持 `kind=conversation`。Agent 页记忆卡支持状态筛选、编辑、置顶/取消、删除、冲突处理。40 题合成基准：recall@5 **1.000**、top1/citation precision@1 **0.852**、负对照 **1.000**、过期默认视图干净 **1.000**、冲突识别/不进入默认检索/旧事实仍生效均 True、命中原因覆盖 0.825。完整 519 项测试通过（68.32 秒）。详见 `docs/MEMORY_V2_0.11.0.md`。
 - 0.10.7 ASR 对比与语义定位（2026-10-22）：同一堂 52.6 分钟课堂（3155 秒）整段对比 SeACo 与讯飞 LFASR。SeACo 1149 句/14,087 字/RTF 0.149/术语 85 次 11 种/4 秒窗重复率 7.0%；LFASR 无热词 865 句/14,140 字/RTF 0.061/术语 70 次 5 种/重复率 0%；LFASR 加术语热词 866 句/14,148 字/RTF 0.057/术语 75 次 5 种。热词分隔符修正为竖线 `|`（空格会触发讯飞 100016）。跨引擎字符 CER 0.135（只是分歧率，不是人工 CER）。逐段核对发现 SeACo 把“一元函数”听成“隐函数”，因此术语次数不能单独当准确率。语义定位修复四个真问题：裁判 prompt 现在给每行 `[turn_id]`（此前 4B 编造 turn_1，全部被校验丢弃）、候选按术语出现次数加权、合并重叠窗口按 turn_id 去重、片段起点对齐裁判证据。LFASR 整堂转写 + 本地 Qwen3-4B 裁判：F1 方向导数/梯度命中 05:01 定义、10:00、20:11；F2 链式法则命中 34:57、39:14、42:58；F3 隐函数定理负对照 0 命中。Whisper large-v3 CPU 3 分钟：无 VAD 325.5 秒/118 段/首段“组合”幻觉；VAD+关上文条件+数学 prompt 后 181.9 秒/95 段/14 次术语/无幻觉，未接产品。音频前端 `--denoise`（高通+afftdn+响度）实测 3 分钟术语命中 12→11，故保持可选、不作默认；`highpass+loudnorm` 为 12，与原始持平。并加测 2026-02-27 的 2h34（9271 秒）整堂：SeACo 3079 句/38,663 字/RTF 0.171/重复 9.3%/术语 318 次 28 种；LFASR+热词 2907 句/38,876 字/RTF 0.082/重复 0.3%/术语 265 次 15 种；跨引擎 CER 0.126。2h 转写定位“R^n 拓扑与开集闭集”命中 04:32/08:10/22:03/138:02 四段，“多元极限 ε-δ”命中 56:00/124:55 两段；同时修正“两宽词共现即覆盖裁判 false”的误报规则，67:53 只提方法未讲定义的窗口不再强行保留。**没有人工逐字稿，仍未报 CER/WER**。完整 511 项测试通过。详见 `docs/ASR_AND_FOCUS_0.10.7.md`。
+- 0.14.0安装包：`meetingVAR-setup-0.14.0.exe` SHA256 `7000d13c9f36fed01ef2fd67fd5c643785185d08f5cff2af7a9ccdd795df83a8`；内置 `meetingVAR.exe` SHA256 `8272dfe08f4f0e2fb4b027d1b7d0fce466295579fb215e2d315e6572c8a55bb3`；静默安装与 `--selftest` 通过（注册表版本 0.14.0）。
 - 0.13.0安装包：`meetingVAR-setup-0.13.0.exe` SHA256 `14ae9877adaaca1af591c52086da6220bb77719d3ee32a71a20d2e65b19f01fe`；内置 `meetingVAR.exe` SHA256 `d36c9e785fa23fde75587263554e893ac09e5832dbda2e68cd83bbe6c43ba7d8`；静默安装与 `--selftest` 通过（注册表版本 0.13.0）。
 - 0.12.0安装包：`meetingVAR-setup-0.12.0.exe` SHA256 `4271909747ce26280151c72b10ee3e1c7bc18031c0ef27e70d25db2a08902d7f`；内置 `meetingVAR.exe` SHA256 `46dab08ee8e205f9bdbb8355d45c004aa16bd1ce1e8a1243551bd6269dc590bd`；静默安装与 `--selftest` 通过（注册表版本 0.12.0）。
 - 0.11.0安装包：`meetingVAR-setup-0.11.0.exe` SHA256 `048e03ba99d6966fa5b56ed4754c390355e6f3c51d065951abd5406de792ebef`；内置 `meetingVAR.exe` SHA256 `868cfc5c5a5302428a06d3f84da88dccb96a63459567c90f97ab365e919f9d5e`；静默安装与 `--selftest` 通过（注册表版本 0.11.0）。

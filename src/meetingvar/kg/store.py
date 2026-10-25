@@ -160,6 +160,23 @@ class GraphStore:
                 rows = connection.execute(sql2, params + [like, like, max(1, limit)]).fetchall()
         return [self._node(row) for row in rows]
 
+    def nodes(self, *, kind: str | None = None, status: str = "active",
+              limit: int = 1000) -> list[dict]:
+        clauses = []
+        params: list = []
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if status and status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM kg_nodes" + where + " ORDER BY updated_at DESC LIMIT ?",
+                params + [max(1, min(5000, int(limit)))]).fetchall()
+        return [self._node(row) for row in rows]
+
     def resolve(self, query: str, *, kind: str | None = None) -> dict | None:
         normalized = norm_name(query)
         with self._connect() as connection:
@@ -313,6 +330,59 @@ class GraphStore:
                 seen.add(other)
                 queue.append((other, node_path + [other], edge_path + [edge]))
         return {"ok": True, "found": False, "nodes": [], "edges": []}
+
+    def upsert_node_vector(self, node_id: str, vector: list[float], model: str) -> None:
+        import array
+
+        values = array.array("f", [float(x) for x in vector])
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO kg_node_vectors(node_id,model,dim,vector) "
+                "VALUES (?,?,?,?)", (node_id, model, len(values), values.tobytes()))
+
+    def node_vectors(self, model: str | None = None) -> dict[str, list[float]]:
+        import array
+
+        try:
+            with self._connect() as connection:
+                if model:
+                    rows = connection.execute(
+                        "SELECT node_id,vector FROM kg_node_vectors WHERE model = ?",
+                        (model,)).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT node_id,vector FROM kg_node_vectors").fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+        result = {}
+        for row in rows:
+            values = array.array("f")
+            try:
+                values.frombytes(row["vector"])
+            except (ValueError, TypeError):
+                continue
+            result[str(row["node_id"])] = list(values)
+        return result
+
+    def episode_hash(self, episode_id: str) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT content_hash FROM kg_episodes WHERE id = ?", (episode_id,)).fetchone()
+        return str(row["content_hash"]) if row else ""
+
+    def upsert_episode(self, *, episode_id: str, source_type: str, source_id: str,
+                       session_id: str, occurred_at: str, content_hash: str,
+                       text: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO kg_episodes(id,source_type,source_id,session_id,occurred_at,"
+                "content_hash,text) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET source_type=excluded.source_type, "
+                "source_id=excluded.source_id, session_id=excluded.session_id, "
+                "occurred_at=excluded.occurred_at, content_hash=excluded.content_hash, "
+                "text=excluded.text",
+                (episode_id, source_type, source_id, session_id, occurred_at,
+                 content_hash, text))
 
     def stats(self) -> dict:
         with self._connect() as connection:

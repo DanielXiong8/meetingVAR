@@ -302,6 +302,30 @@ def cmd_kg_build(args) -> None:
           f"facts={report['facts']} meetings={report['meetings']}", flush=True)
 
 
+def cmd_kg_ingest(args) -> None:
+    import json as _json
+    from . import config
+    from .kg.ingest import GraphIngestor
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[kg] 项目文件夹无效: {project}")
+    ingestor = GraphIngestor(project, config.DATA_DIR)
+    if args.all:
+        report = ingestor.ingest_all(limit=args.limit, force=args.force)
+    else:
+        if not args.session:
+            raise SystemExit("[kg] 需要 --session 或 --all")
+        report = ingestor.ingest_session(args.session, force=args.force)
+    print(_json.dumps(report, ensure_ascii=False) if args.json else
+          f"[kg] entities={report.get('entities', 0)} "
+          f"relations={report.get('relations', 0)} "
+          f"skipped={report.get('skipped', 0)} errors={len(report.get('errors', []))}",
+          flush=True)
+    if not report.get("ok"):
+        raise SystemExit(1)
+
+
 def cmd_kg_find(args) -> None:
     import json as _json
     store = _kg_store(args)
@@ -837,6 +861,13 @@ def main() -> None:
     kb.add_argument("--project", required=True)
     kb.add_argument("--no-meetings", action="store_true")
     kb.add_argument("--json", action="store_true")
+    ki = sub.add_parser("kg-ingest", help="LLM 从会议转写抽取实体/关系并增量入图")
+    ki.add_argument("--project", required=True)
+    ki.add_argument("--session", default="")
+    ki.add_argument("--all", action="store_true")
+    ki.add_argument("--limit", type=int, default=20)
+    ki.add_argument("--force", action="store_true")
+    ki.add_argument("--json", action="store_true")
     kf = sub.add_parser("kg-find", help="在知识图谱中查找实体")
     kf.add_argument("--project", required=True)
     kf.add_argument("--query", required=True)
@@ -940,7 +971,7 @@ def main() -> None:
      "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
      "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
      "rag-index": cmd_rag_index, "rag-ask": cmd_rag_ask,
-     "kg-build": cmd_kg_build, "kg-find": cmd_kg_find,
+     "kg-build": cmd_kg_build, "kg-ingest": cmd_kg_ingest, "kg-find": cmd_kg_find,
      "kg-neighbors": cmd_kg_neighbors, "kg-timeline": cmd_kg_timeline,
      "kg-path": cmd_kg_path, "kg-stats": cmd_kg_stats,
      "agent-run": cmd_agent_run, "agent-eval": cmd_agent_eval}[args.cmd](args)
