@@ -411,7 +411,14 @@
                   <label class="field"><span>Base URL（OpenAI 兼容，通常以 /v1 结尾）</span><input id="cfgBaseUrl" class="input" placeholder="https://api.deepseek.com/v1"></label>
                   <label class="field"><span>模型名</span><input id="cfgModel" class="input" placeholder="deepseek-chat"></label>
                   <label class="field"><span>API Key（只存本机配置目录）</span><input id="cfgApiKey" class="input" type="password" placeholder="sk-…"></label>
-                  <div class="row"><button id="btnTestLlm" class="btn">测试生成（少量API用量）</button><span id="llmTestResult" class="muted"></span></div>
+                  <label class="field"><span>推理强度</span><select id="cfgReasoning" class="input">
+                    <option value="">默认</option>
+                    <option value="none">关闭（Agnes 推荐，最快）</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select></label>
+                  <div class="row"><button id="btnAgnesPreset" class="btn">Agnes 3.0 Flash 预设</button><button id="btnAgnes25Preset" class="btn">Agnes 2.5 Flash（快速）</button><button id="btnSaveLlm" class="btn btn-primary">保存模型设置</button><button id="btnTestLlm" class="btn">测试生成（少量API用量）</button><span id="llmTestResult" class="muted"></span></div>
                 </div>
                 <div class="muted">专业词表只用于保守纠错；自动保存只由API事件判断或手动VAR触发。</div>
               </div>

@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.14.0"
+APP_VERSION = "0.15.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -81,6 +81,7 @@ CONFIG_DEFAULTS = {
     "llm_reading_max_tokens": 8192,
     "llm_api_context_tokens": 32768,
     "llm_thinking": "",
+    "llm_reasoning_effort": "",
     "use_llm": False,        # 旧版配置兼容，实时兴趣由 interest_mode 控制
     "interest_mode": "api",
     "interest_focus": "",
@@ -380,7 +381,8 @@ class Backend:
         return {"MEETINGVAR_LLM_BASE_URL": base, "MEETINGVAR_LLM_API_KEY": key,
                 "MEETINGVAR_LLM_MODEL": model, "MEETINGVAR_LLM_MAX_TOKENS": str(output),
                 "MEETINGVAR_LLM_CONTEXT_TOKENS": str(context), "MEETINGVAR_LLM_CHUNK_CHARS": "6000",
-                "MEETINGVAR_LLM_THINKING": (self._cfg.get("llm_thinking") or "") if provider == "custom" else ""}
+                "MEETINGVAR_LLM_THINKING": (self._cfg.get("llm_thinking") or "") if provider == "custom" else "",
+                "MEETINGVAR_LLM_REASONING_EFFORT": (self._cfg.get("llm_reasoning_effort") or "") if provider == "custom" else ""}
 
     @staticmethod
     def _llm_fingerprint(env: dict) -> str:

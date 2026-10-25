@@ -86,6 +86,7 @@ LLM_MAX_TOKENS = os.environ.get("MEETINGVAR_LLM_MAX_TOKENS", "4096")
 LLM_CONTEXT_TOKENS = os.environ.get("MEETINGVAR_LLM_CONTEXT_TOKENS", "16384")
 # Provider-specific extension: leave empty for generic/local compatible servers.
 LLM_THINKING = os.environ.get("MEETINGVAR_LLM_THINKING", "").strip().lower()
+LLM_REASONING_EFFORT = os.environ.get("MEETINGVAR_LLM_REASONING_EFFORT", "").strip().lower()
 
 
 def find_model_dir(keyword: str) -> str:

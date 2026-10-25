@@ -160,7 +160,7 @@ def extract_chunk(chunk: dict, llm: Callable | None = None,
     if llm is None:
         from ..llm import chat_result
 
-        result = chat_result(prompt, temperature=0.1, timeout=timeout, max_tokens=1800)
+        result = chat_result(prompt, temperature=0.1, timeout=timeout, max_tokens=4096)
         if not result.get("ok"):
             raise RuntimeError(str(result.get("error_code") or "llm_failed"))
         raw = str(result.get("content", ""))

@@ -219,6 +219,9 @@ def _request_once(prompt: str, *, temperature: float, timeout: int,
             "temperature": temperature, "max_tokens": max_tokens}
     if thinking:
         body["thinking"] = {"type": thinking}
+    effort = str(getattr(config, "LLM_REASONING_EFFORT", "") or "").strip().lower()
+    if effort in {"none", "low", "medium", "high"}:
+        body["reasoning_effort"] = effort
     try:
         req = urllib.request.Request(
             profile["endpoint"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),
@@ -311,7 +314,7 @@ def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
                                profile=profile, max_tokens=effective_max,
                                thinking=effective_thinking)
     reasoning = (result.get("usage") or {}).get("completion_tokens_details", {}).get("reasoning_tokens", 0)
-    if result.get("error_code") != "truncated" or effective_thinking == "disabled" or not isinstance(reasoning, int) or reasoning <= 0:
+    if result.get("error_code") != "truncated" or not isinstance(reasoning, int) or reasoning <= 0:
         return result
     retry_max = min(max(effective_max, 8192), context // 2)
     retry_budget = TokenBudget(context, retry_max)
@@ -389,6 +392,9 @@ def chat_messages(messages: list[dict], *, tools: list[dict] | None = None,
         body["tool_choice"] = tool_choice
     if effective_thinking:
         body["thinking"] = {"type": effective_thinking}
+    effort = str(getattr(config, "LLM_REASONING_EFFORT", "") or "").strip().lower()
+    if effort in {"none", "low", "medium", "high"}:
+        body["reasoning_effort"] = effort
     try:
         req = urllib.request.Request(
             profile["endpoint"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),

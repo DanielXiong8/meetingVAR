@@ -1403,6 +1403,7 @@ async function loadConfig() {
   $("cfgBaseUrl").value = cfg.llm_base_url || "";
   $("cfgModel").value = cfg.llm_model || "";
   $("cfgApiKey").value = cfg.llm_api_key || "";
+  $("cfgReasoning").value = cfg.llm_reasoning_effort || "";
   applyProviderUi(cfg.llm_provider || "local");
   if (cfg.last_project) {
     state.project = cfg.last_project;
@@ -1424,6 +1425,7 @@ $("btnSaveCfg").onclick = async () => {
     llm_base_url: $("cfgBaseUrl").value.trim(),
     llm_model: $("cfgModel").value.trim(),
     llm_api_key: $("cfgApiKey").value.trim(),
+    llm_reasoning_effort: $("cfgReasoning").value,
   });
   state.cfg = await pywebview.api.get_config();
   refreshLlm();
@@ -1467,6 +1469,36 @@ $("btnXfyunCheck").onclick = async () => {
 };
 
 /* ---------- 模型厂商（本地 / 自定义 API） ---------- */
+$("btnSaveLlm").onclick = async () => {
+  await pywebview.api.set_config({
+    llm_provider: $("cfgProvider").value,
+    llm_base_url: $("cfgBaseUrl").value.trim(),
+    llm_model: $("cfgModel").value.trim(),
+    llm_api_key: $("cfgApiKey").value.trim(),
+    llm_reasoning_effort: $("cfgReasoning").value,
+  });
+  state.cfg = await pywebview.api.get_config();
+  refreshLlm();
+  toast("模型设置已保存");
+};
+$("btnAgnes25Preset").onclick = async () => {
+  applyProviderUi("custom");
+  await pywebview.api.set_config({ llm_provider: "custom" });
+  $("cfgBaseUrl").value = "https://apihub.agnes-ai.com/v1";
+  $("cfgModel").value = "agnes-2.5-flash";
+  $("cfgReasoning").value = "none";
+  $("cfgApiKey").focus();
+  toast("已填 Agnes 2.5 Flash（知识图谱抽取更快）；请粘贴 API Key 后保存", 9000);
+};
+$("btnAgnesPreset").onclick = async () => {
+  applyProviderUi("custom");
+  await pywebview.api.set_config({ llm_provider: "custom" });
+  $("cfgBaseUrl").value = "https://apihub.agnes-ai.com/v1";
+  $("cfgModel").value = "agnes-3.0-flash";
+  $("cfgReasoning").value = "none";
+  $("cfgApiKey").focus();
+  toast("已填 Agnes 3.0 Flash 地址与模型；请粘贴 API Key 后保存", 9000);
+};
 $("cfgProvider").onchange = async () => {
   applyProviderUi($("cfgProvider").value);
   await pywebview.api.set_config({ llm_provider: $("cfgProvider").value });
