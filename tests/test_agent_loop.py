@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from meetingvar.agent.chat import ChatStore
 from meetingvar.rag import RagIndex
+from meetingvar.kg.build import GraphBuilder
+from meetingvar.kg.store import GraphStore
 from meetingvar.agent.loop import AgentLoop
 from meetingvar.agent.policy import ApprovalBroker, Principal
 from meetingvar.agent.meeting_tools import build_meeting_registry
@@ -164,6 +166,36 @@ class AgentLoopTests(unittest.TestCase):
         self.assertTrue(report["grounded"], report)
         self.assertEqual(report["citations"][0]["kind"], "document")
         self.assertEqual(report["citations"][0]["chunk_id"], chunk_id)
+
+    def test_graph_search_tool_and_edge_citation(self):
+        from meetingvar.agent.memory import FactStore
+
+        FactStore(self.root).write(
+            name="action: 周五交付第一版", description="周五交付第一版",
+            body="负责人小林，周五交付第一版。", fact_type="action-item",
+            origin_meeting="s1", metadata={"owner": "小林", "due": "周五"})
+        GraphBuilder(self.root, self.data).build()
+        graph = GraphStore(self.root)
+        action = graph.resolve("周五交付第一版")
+        edge = next(item for item in graph.neighbors(action["id"], depth=1)["edges"]
+                    if item["relation"] == "assigned_to")
+        script = [
+            _content(json.dumps({"steps": [
+                {"goal": "图检索", "tool": "search_graph", "why": "关系+原文"},
+            ]}, ensure_ascii=False)),
+            _tool_call("search_graph", {"query": "谁负责周五交付"}),
+            _content(json.dumps({
+                "answer": "小林负责周五交付第一版。",
+                "citations": [{"kind": "edge", "edge_id": edge["id"]}],
+                "unsupported": [], "confidence": 0.9,
+            }, ensure_ascii=False)),
+        ]
+        loop, _ = self._loop(script, mode="native", max_steps=4,
+                             question="谁负责周五交付第一版？")
+        report = loop.run()
+        self.assertTrue(report["ok"], report)
+        self.assertTrue(report["grounded"], report)
+        self.assertEqual(report["citations"][0]["kind"], "edge")
 
     def test_json_action_fallback_is_a_real_react_loop(self):
         script = [

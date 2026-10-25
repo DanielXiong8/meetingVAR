@@ -15,6 +15,7 @@ from ..agent.memory_index import document_tokens, query_tokens
 from .schema import NODE_KINDS, RELATIONS, SCHEMA_SQL, edge_id, node_id, norm_name
 
 _EDGE_STATUSES = {"asserted", "superseded", "retracted", "pending"}
+_SINGLETON_RELATIONS = {"assigned_to", "owned_by", "due_on", "decided_in", "member_of"}
 
 
 def _now() -> str:
@@ -213,6 +214,15 @@ class GraphStore:
             if old:
                 old_turns = json.loads(old["turn_ids_json"] or "[]")
                 turns = list(dict.fromkeys(old_turns + turns))
+            if status == "asserted" and relation in _SINGLETON_RELATIONS:
+                # A person/due/meeting relationship is single-valued at a
+                # point in time; a later assertion invalidates the previous one
+                # while keeping it in the timeline for historical queries.
+                connection.execute(
+                    "UPDATE kg_edges SET valid_to=? "
+                    "WHERE src_id=? AND relation=? AND id != ? AND status='asserted' "
+                    "AND (valid_to = '' OR valid_to > ?)",
+                    (valid_from, src_id, relation, identifier, valid_from))
             connection.execute("""
                 INSERT INTO kg_edges(id,src_id,dst_id,relation,label,status,valid_from,valid_to,
                                      observed_at,confidence,source_type,source_id,session_id,
@@ -340,6 +350,49 @@ class GraphStore:
                 "INSERT OR REPLACE INTO kg_node_vectors(node_id,model,dim,vector) "
                 "VALUES (?,?,?,?)", (node_id, model, len(values), values.tobytes()))
 
+    def ensure_node_vectors(self, embedder) -> None:
+        if not getattr(embedder, "available", False):
+            return
+        model = getattr(embedder, "name", "")
+        existing = self.node_vectors(model)
+        missing = [node for node in self.nodes(limit=5000)
+                   if node["id"] not in existing]
+        if not missing:
+            return
+        texts = [" ".join([node.get("name", "")] + list(node.get("aliases") or [])
+                          + [str(node.get("description", ""))[:300]])
+                 for node in missing]
+        vectors = embedder.encode(texts)
+        if not vectors:
+            return
+        for node, vector in zip(missing, vectors):
+            self.upsert_node_vector(node["id"], vector, model)
+
+    def semantic_nodes(self, query: str, *, limit: int = 5) -> list[dict]:
+        from ..agent.embeddings import get_embedding_provider
+
+        embedder = get_embedding_provider()
+        if not embedder.available:
+            return []
+        self.ensure_node_vectors(embedder)
+        query_vector = embedder.encode_one(query)
+        if not query_vector:
+            return []
+        vectors = self.node_vectors(embedder.name)
+        scored = []
+        for node in self.nodes(limit=5000):
+            vector = vectors.get(node["id"])
+            if not vector or len(vector) != len(query_vector):
+                continue
+            denom = (sum(x * x for x in vector) ** 0.5) *                     (sum(x * x for x in query_vector) ** 0.5)
+            cosine = sum(a * b for a, b in zip(vector, query_vector)) / denom if denom else 0.0
+            if cosine >= 0.35:
+                row = dict(node)
+                row["_semantic"] = round(cosine, 4)
+                scored.append((cosine, row))
+        scored.sort(key=lambda pair: -pair[0])
+        return [row for _, row in scored[:max(1, min(20, int(limit)))]]
+
     def node_vectors(self, model: str | None = None) -> dict[str, list[float]]:
         import array
 
@@ -384,6 +437,51 @@ class GraphStore:
                 (episode_id, source_type, source_id, session_id, occurred_at,
                  content_hash, text))
 
+    def merge_nodes(self, source_id: str, target_id: str) -> dict:
+        if source_id == target_id:
+            raise ValueError("cannot merge a node into itself")
+        source, target = self.get_node(source_id), self.get_node(target_id)
+        if not source or not target:
+            raise ValueError("merge endpoints must exist")
+        aliases = list(dict.fromkeys(list(target.get("aliases") or [])
+                                     + list(source.get("aliases") or [])
+                                     + [source.get("name", "")]))
+        now = _now()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE kg_edges SET src_id = ? WHERE src_id = ?", (target_id, source_id))
+            connection.execute(
+                "UPDATE kg_edges SET dst_id = ? WHERE dst_id = ?", (target_id, source_id))
+            connection.execute(
+                "UPDATE kg_nodes SET status='merged', updated_at=?, "
+                "metadata_json=? WHERE id=?",
+                (now, json.dumps({"merged_into": target_id}, ensure_ascii=False), source_id))
+            connection.execute(
+                "UPDATE kg_nodes SET aliases_json=?, updated_at=? WHERE id=?",
+                (json.dumps(aliases, ensure_ascii=False), now, target_id))
+            connection.execute("DELETE FROM kg_nodes_fts WHERE node_id = ?", (source_id,))
+            connection.execute(
+                "INSERT OR REPLACE INTO kg_aliases(alias,node_id,source,confidence) VALUES (?,?,?,?)",
+                (norm_name(source.get("name", "")), target_id, "merge", 1.0))
+            row = connection.execute("SELECT * FROM kg_nodes WHERE id = ?",
+                                     (target_id,)).fetchone()
+        return self._node(row)
+
+    def review_edge(self, edge_id: str, status: str) -> dict:
+        if status not in _EDGE_STATUSES:
+            raise ValueError("invalid edge status")
+        now = _now()
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM kg_edges WHERE id = ?", (edge_id,)).fetchone()
+            if not row:
+                raise ValueError("edge not found")
+            connection.execute(
+                "UPDATE kg_edges SET status=?, valid_to=?, observed_at=? WHERE id=?",
+                (status, now if status in {"retracted", "superseded"} else row["valid_to"],
+                 now, edge_id))
+            row = connection.execute("SELECT * FROM kg_edges WHERE id = ?", (edge_id,)).fetchone()
+        return self._edge(row)
+
     def stats(self) -> dict:
         with self._connect() as connection:
             nodes = {row["kind"]: row["n"] for row in connection.execute(
@@ -396,6 +494,63 @@ class GraphStore:
             total_edges = connection.execute("SELECT COUNT(*) FROM kg_edges").fetchone()[0]
         return {"nodes": int(total_nodes), "edges": int(total_edges),
                 "by_kind": nodes, "by_relation": edges, "edge_status": statuses}
+
+    def _bulk_edge_row(self, edge: dict, now: str) -> tuple:
+        src, dst = edge.get("src_id"), edge.get("dst_id")
+        relation = str(edge.get("relation", "related_to"))
+        valid_from = str(edge.get("valid_from", now))
+        return (str(edge.get("id") or edge_id(src, relation, dst, valid_from)),
+                src, dst, relation, str(edge.get("label", "")),
+                str(edge.get("status", "asserted")), valid_from,
+                str(edge.get("valid_to", "")), str(edge.get("observed_at", now)),
+                float(edge.get("confidence", 0.8)),
+                str(edge.get("source_type", "scale")),
+                str(edge.get("source_id", "scale")),
+                str(edge.get("session_id", "")), str(edge.get("chunk_id", "")),
+                json.dumps(edge.get("turn_ids") or [], ensure_ascii=False),
+                str(edge.get("quote", "")), str(edge.get("extractor", "scale")),
+                str(edge.get("supersedes", "")),
+                json.dumps(edge.get("metadata") or {}, ensure_ascii=False))
+
+    def bulk_add_edges(self, edges, batch: int = 5000) -> int:
+        now = _now()
+        count = 0
+        with self._connect() as connection:
+            chunk = []
+            for edge in edges:
+                chunk.append(self._bulk_edge_row(edge, now))
+                if len(chunk) >= max(1, batch):
+                    connection.executemany(
+                        "INSERT OR REPLACE INTO kg_edges VALUES "
+                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", chunk)
+                    count += len(chunk)
+                    chunk = []
+            if chunk:
+                connection.executemany(
+                    "INSERT OR REPLACE INTO kg_edges VALUES "
+                    "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", chunk)
+                count += len(chunk)
+        return count
+
+    def bulk_seed(self, nodes: list[dict], edges) -> dict:
+        """Benchmark/bootstrap helper: one transaction, no per-edge validation."""
+        now = _now()
+        node_rows = []
+        for node in nodes:
+            kind = str(node.get("kind", "Topic"))
+            name = str(node.get("name", ""))
+            identifier = str(node.get("id") or node_id(kind, name))
+            aliases = list(node.get("aliases") or [])
+            node_rows.append((identifier, kind, name, norm_name(name),
+                              json.dumps(aliases, ensure_ascii=False),
+                              str(node.get("description", "")),
+                              str(node.get("status", "active")),
+                              float(node.get("confidence", 0.8)), now, now,
+                              json.dumps(node.get("metadata") or {}, ensure_ascii=False)))
+        with self._connect() as connection:
+            connection.executemany(
+                "INSERT OR REPLACE INTO kg_nodes VALUES (?,?,?,?,?,?,?,?,?,?,?)", node_rows)
+        return {"nodes": len(node_rows), "edges": self.bulk_add_edges(edges)}
 
     def node_count(self) -> int:
         return self.stats()["nodes"]

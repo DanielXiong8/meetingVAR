@@ -498,3 +498,27 @@ body.panel-open .panel-scrim { display: block; }
 .memory-status.pending-conflict { color: #ffd18a; border-color: rgba(255,180,60,.45); }
 .memory-status.expired, .memory-status.superseded, .memory-status.rejected, .memory-status.deleted { color: #8b93a3; text-decoration: line-through; }
 .memory-pin { margin-left: 6px; font-size: 10px; color: #9fd6ff; }
+
+/* knowledge graph */
+.kg-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.kg-toolbar .input { min-width: 220px; }
+.kg-toolbar .kg-small { min-width: 82px; max-width: 82px; }
+.kg-toolbar .kg-date { min-width: 140px; max-width: 150px; }
+.kg-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; height: calc(100vh - 220px); min-height: 460px; }
+.kg-canvas { min-height: 420px; border: 1px solid rgba(255,255,255,.10); border-radius: 12px; background: radial-gradient(circle at 40% 30%, rgba(55,90,130,.18), rgba(12,14,20,.75)); overflow: hidden; }
+.kg-side { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.kg-inspector, .kg-timeline { border: 1px solid rgba(255,255,255,.09); border-radius: 10px; padding: 10px; background: rgba(255,255,255,.025); font-size: 12px; line-height: 1.6; }
+.kg-inspector .kg-title, .kg-timeline .kg-title { color: #eaeef6; font-weight: 600; margin-bottom: 4px; }
+.kg-edge-row { border-top: 1px solid rgba(255,255,255,.07); padding: 7px 0; }
+.kg-edge-row .meta { color: #9aa3b2; font-size: 11px; }
+.kg-edge-row .evidence { color: #c8cfdb; font-size: 11px; margin-top: 3px; white-space: pre-wrap; }
+.kg-edge-row .row { margin-top: 5px; gap: 5px; }
+.kg-status-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 10px; border: 1px solid rgba(255,255,255,.12); color: #9aa3b2; }
+.kg-status-badge.asserted { color: #9fe0a8; border-color: rgba(90,210,120,.35); }
+.kg-status-badge.pending { color: #ffd18a; border-color: rgba(255,180,60,.45); }
+.kg-status-badge.superseded, .kg-status-badge.retracted { color: #8b93a3; text-decoration: line-through; }
+@media (max-width: 900px) {
+  .kg-layout { grid-template-columns: 1fr; height: auto; }
+  .kg-canvas { height: 460px; }
+  .kg-side { max-height: 360px; }
+}

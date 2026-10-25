@@ -603,6 +603,97 @@ def cmd_rag_ask(folder: Path, question: str, limit: int = 8) -> dict:
     return RagIndex(folder, config.DATA_DIR).answer(question, limit=limit)
 
 
+def cmd_kg_status(folder: Path) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    return {"ok": True, **store.stats(), "path": str(store.db_path)}
+
+
+def cmd_kg_build(folder: Path, reset: bool = False) -> dict:
+    from meetingvar import config
+    from meetingvar.kg.build import GraphBuilder
+
+    return GraphBuilder(folder, config.DATA_DIR).build(
+        include_meetings=True, reset=reset)
+
+
+def cmd_kg_ingest(folder: Path, session_id: str = "", all_sessions: bool = False,
+                  force: bool = False, limit: int = 20) -> dict:
+    from meetingvar import config
+    from meetingvar.kg.ingest import GraphIngestor
+
+    ingestor = GraphIngestor(folder, config.DATA_DIR)
+    if all_sessions:
+        return ingestor.ingest_all(limit=limit, force=force)
+    if not session_id:
+        return {"ok": False, "error": "session_required"}
+    return ingestor.ingest_session(session_id, force=force)
+
+
+def cmd_kg_neighbors(folder: Path, query: str, depth: int = 1, as_of: str = "") -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    node = store.get_node(query) or store.resolve(query)
+    if not node:
+        return {"ok": False, "error": "node_not_found"}
+    return {**store.neighbors(node["id"], depth=depth, as_of=as_of), "trust": "project-kg"}
+
+
+def cmd_kg_timeline(folder: Path, query: str) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    node = store.get_node(query) or store.resolve(query)
+    if not node:
+        return {"ok": False, "error": "node_not_found"}
+    return {**store.timeline(node["id"]), "trust": "project-kg"}
+
+
+def cmd_kg_path(folder: Path, src: str, dst: str, max_depth: int = 3) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    a, b = store.get_node(src) or store.resolve(src), store.get_node(dst) or store.resolve(dst)
+    if not a or not b:
+        return {"ok": False, "error": "node_not_found"}
+    return {**store.path(a["id"], b["id"], max_depth=max_depth), "trust": "project-kg"}
+
+
+def cmd_kg_merge(folder: Path, source: str, target: str) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    a, b = store.get_node(source) or store.resolve(source), store.get_node(target) or store.resolve(target)
+    if not a or not b:
+        return {"ok": False, "error": "node_not_found"}
+    return {"ok": True, "node": store.merge_nodes(a["id"], b["id"])}
+
+
+def cmd_kg_review_edge(folder: Path, edge_id: str, status: str) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    try:
+        return {"ok": True, "edge": GraphStore(folder).review_edge(edge_id, status)}
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def cmd_kg_ask(folder: Path, question: str, limit: int = 8, hops: int = 2) -> dict:
+    from meetingvar import config
+    from meetingvar.kg.graphrag import GraphRAG
+
+    return GraphRAG(folder, config.DATA_DIR).answer(question, limit=limit, hops=hops)
+
+
+def cmd_kg_search(folder: Path, query: str, limit: int = 8, hops: int = 2) -> dict:
+    from meetingvar import config
+    from meetingvar.kg.graphrag import GraphRAG
+
+    return GraphRAG(folder, config.DATA_DIR).search(query, limit=limit, hops=hops)
+
+
 def _memory_fact(fact: dict) -> dict:
     meta = fact.get("metadata", {}) if isinstance(fact.get("metadata"), dict) else {}
     return {
@@ -758,6 +849,38 @@ def main() -> None:
         elif cmd == "agent_chat_postmeeting_offer":
             payload = cmd_agent_chat_postmeeting_offer(
                 Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
+        elif cmd == "kg_status":
+            payload = cmd_kg_status(Path(sys.argv[2]))
+        elif cmd == "kg_build":
+            payload = cmd_kg_build(Path(sys.argv[2]),
+                                   sys.argv[3].lower() == "true" if len(sys.argv) > 3 else False)
+        elif cmd == "kg_ingest":
+            payload = cmd_kg_ingest(Path(sys.argv[2]),
+                                    sys.argv[3] if len(sys.argv) > 3 else "",
+                                    sys.argv[4].lower() == "true" if len(sys.argv) > 4 else False,
+                                    sys.argv[5].lower() == "true" if len(sys.argv) > 5 else False,
+                                    int(sys.argv[6]) if len(sys.argv) > 6 else 20)
+        elif cmd == "kg_neighbors":
+            payload = cmd_kg_neighbors(Path(sys.argv[2]), sys.argv[3],
+                                       int(sys.argv[4]) if len(sys.argv) > 4 else 1,
+                                       sys.argv[5] if len(sys.argv) > 5 else "")
+        elif cmd == "kg_timeline":
+            payload = cmd_kg_timeline(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "kg_path":
+            payload = cmd_kg_path(Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+                                  int(sys.argv[5]) if len(sys.argv) > 5 else 3)
+        elif cmd == "kg_merge":
+            payload = cmd_kg_merge(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+        elif cmd == "kg_review_edge":
+            payload = cmd_kg_review_edge(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+        elif cmd == "kg_ask":
+            payload = cmd_kg_ask(Path(sys.argv[2]), sys.argv[3],
+                                 int(sys.argv[4]) if len(sys.argv) > 4 else 8,
+                                 int(sys.argv[5]) if len(sys.argv) > 5 else 2)
+        elif cmd == "kg_search":
+            payload = cmd_kg_search(Path(sys.argv[2]), sys.argv[3],
+                                    int(sys.argv[4]) if len(sys.argv) > 4 else 8,
+                                    int(sys.argv[5]) if len(sys.argv) > 5 else 2)
         elif cmd == "rag_index":
             payload = cmd_rag_index(Path(sys.argv[2]),
                                     sys.argv[3].lower() != "false" if len(sys.argv) > 3 else True,

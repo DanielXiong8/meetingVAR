@@ -10,6 +10,7 @@ const state = {
   agentFocus: [], agentFocusSources: [], agentFacts: [], agentMemoryFacts: [], agentBusy: false,
   pageHistory: ["home"], pageIndex: 0, usage: null, usageRange: 7, libraryGroups: [], consolePinned: false,
   chatId: "", chatMessages: [], chatBusy: false,
+  kgCy: null, kgSelected: [], kgElements: [],
 };
 
 /* 全局错误可见化 + 导航事件委托（避免某个旧处理器异常后整页失效） */
@@ -52,7 +53,7 @@ function toast(msg, ms = 5000) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
-const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", settings: "设置" };
+const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", kg: "知识图谱", settings: "设置" };
 function switchPage(name, push = true) {
   const target = document.getElementById("page-" + name);
   if (!target) return;
@@ -80,6 +81,7 @@ function switchPage(name, push = true) {
   }
   if (name === "library") refreshLibrary();
   if (name === "agent") loadAgentPage();
+  if (name === "kg") loadKgPage();
   if (name === "settings") loadUsage();
 }
 function pageBack() {
@@ -596,6 +598,8 @@ function chatCitations(msg) {
     if (c.kind === "turn") return `${agentEsc(c.session_id || "")}:${agentEsc((c.turn_ids || []).join(","))}`;
     if (c.kind === "conversation") return `对话:${agentEsc(c.conversation_id || "")}`;
     if (c.kind === "document") return `资料:${agentEsc(c.title || c.source_id || c.chunk_id || "")}`;
+    if (c.kind === "node") return `实体:${agentEsc(c.name || c.node_id || "")}`;
+    if (c.kind === "edge") return `关系:${agentEsc(c.relation || c.edge_id || c.id || "")}`;
     return agentEsc(c.name || "");
   });
   const stateText = msg.mode === "agent"
@@ -982,7 +986,7 @@ function setAgentBusy(busy, text) {
   const page = $("page-agent");
   if (page) page.classList.toggle("agent-busy", busy);
   if (text) $("agentStatusLine").textContent = text;
-  ["btnFocusGen", "btnFocusSave", "btnFactsPreview", "btnFactsSave", "btnAsk", "btnAgentRun", "btnMemory", "btnRagIndex", "btnRagForce", "btnRagAsk"]
+  ["btnFocusGen", "btnFocusSave", "btnFactsPreview", "btnFactsSave", "btnAsk", "btnAgentRun", "btnMemory", "btnRagIndex", "btnRagForce", "btnRagAsk", "btnKgSearch", "btnKgAsk", "btnKgBuild", "btnKgIngest", "btnKgMerge"]
     .forEach((id) => { const el = $(id); if (el) el.disabled = busy || (id.endsWith("Save") && !((id === "btnFocusSave" ? state.agentFocus.length : state.agentFacts.length))); });
 }
 function renderAgentStatus(st) {
@@ -1241,7 +1245,9 @@ function renderAgentRun(r) {
   const citations = (r.citations || []).map((c) =>
     c.kind === "turn" ? `${c.session_id}:${(c.turn_ids || []).join(",")}` :
     (c.kind === "conversation" ? `对话:${c.conversation_id}` :
-     (c.kind === "document" ? `资料:${c.title || c.source_id || c.chunk_id}` : c.name))).join("、");
+     (c.kind === "document" ? `资料:${c.title || c.source_id || c.chunk_id}` :
+      (c.kind === "node" ? `实体:${c.name || c.node_id}` :
+       (c.kind === "edge" ? `关系:${c.relation || c.edge_id || c.id}` : c.name))))).join("、");
   const stateText = !r.answered ? "没有足够依据" :
     r.grounded ? "回答完成（引用已校验）" : "回答完成（引用未通过校验）";
   answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
@@ -1331,6 +1337,244 @@ $("btnRagAsk").onclick = async () => {
 };
 $("ragQuestion").addEventListener("keydown", (event) => {
   if (event.key === "Enter") { event.preventDefault(); $("btnRagAsk").click(); }
+});
+
+/* ---------- 知识图谱 ---------- */
+const KG_COLORS = {
+  Person: "#7fb4ff", Team: "#8fa3c7", Project: "#ffcf70", Meeting: "#a78bfa",
+  Decision: "#61d6a3", Action: "#f6a96b", Commitment: "#e8c86a", Risk: "#ff7b87",
+  OpenQuestion: "#d38cff", Requirement: "#6fd6e8", Topic: "#91a3b8",
+  Document: "#b8c08a", Artifact: "#c7a6ff", Date: "#8fd1a8",
+};
+function kgEsc(value) { return agentEsc(value == null ? "" : String(value)); }
+function kgAsOfValue() {
+  const value = ($("kgAsOf") && $("kgAsOf").value) || "";
+  return value ? `${value}T23:59:59+0800` : "";
+}
+function kgColor(kind) { return KG_COLORS[kind] || "#94a3b8"; }
+function initKgGraph() {
+  if (state.kgCy || !window.cytoscape) return;
+  state.kgCy = cytoscape({
+    container: $("kgCanvas"),
+    elements: [],
+    style: [
+      { selector: "node", style: {
+          "background-color": "data(color)", "label": "data(label)",
+          "font-size": 10, "color": "#dfe6f0", "text-valign": "bottom",
+          "text-margin-y": 5, "width": 24, "height": 24,
+          "border-width": 1, "border-color": "rgba(255,255,255,.25)",
+      }},
+      { selector: "node:selected", style: {
+          "border-width": 3, "border-color": "#ffffff", "width": 30, "height": 30,
+      }},
+      { selector: "edge", style: {
+          "width": 1.5, "line-color": "data(color)", "target-arrow-color": "data(color)",
+          "target-arrow-shape": "triangle", "curve-style": "bezier",
+          "label": "data(label)", "font-size": 9, "color": "#9aa3b2",
+          "text-rotation": "autorotate", "text-background-color": "#11151c",
+          "text-background-opacity": .75, "text-background-padding": 2,
+      }},
+      { selector: "edge[status = 'pending']", style: {
+          "line-style": "dashed", "line-color": "#ffd18a", "target-arrow-color": "#ffd18a",
+      }},
+      { selector: "edge[status = 'superseded'], edge[status = 'retracted']", style: {
+          "line-style": "dotted", "opacity": .55,
+      }},
+    ],
+  });
+  state.kgCy.on("tap", "node", (event) => {
+    const data = event.target.data();
+    state.kgSelected = state.kgSelected.filter((id) => id !== data.id);
+    if (state.kgSelected.length >= 2) state.kgSelected.shift();
+    state.kgSelected.push(data.id);
+    state.kgCy.elements().unselect();
+    state.kgCy.getElementById(data.id).select();
+    kgShowNode(data);
+  });
+  state.kgCy.on("tap", "edge", (event) => kgShowEdge(event.target.data()));
+  state.kgCy.on("tap", (event) => {
+    if (event.target === state.kgCy) {
+      state.kgSelected = [];
+      state.kgCy.elements().unselect();
+    }
+  });
+}
+function kgRender(result) {
+  initKgGraph();
+  if (!state.kgCy) { $("kgInspector").textContent = "Cytoscape 未加载"; return; }
+  const nodes = result && result.nodes ? result.nodes : [];
+  const edges = result && result.edges ? result.edges : [];
+  const elements = [];
+  for (const node of nodes) {
+    elements.push({ data: {
+      id: node.id, label: node.name || node.id, kind: node.kind,
+      color: kgColor(node.kind), status: node.status || "active",
+      description: node.description || "", confidence: node.confidence || 0,
+    }});
+  }
+  for (const edge of edges) {
+    elements.push({ data: {
+      id: edge.id, source: edge.src_id, target: edge.dst_id,
+      label: edge.relation || "", relation: edge.relation || "",
+      status: edge.status || "asserted", color: KG_COLORS.Action,
+      confidence: edge.confidence || 0, valid_from: edge.valid_from || "",
+      valid_to: edge.valid_to || "", session_id: edge.session_id || "",
+      turn_ids: edge.turn_ids || [], quote: edge.quote || "",
+    }});
+  }
+  state.kgCy.elements().remove();
+  state.kgCy.add(elements);
+  state.kgCy.layout({ name: "cose", animate: false, padding: 28, fit: true }).run();
+  $("kgInspector").className = "kg-inspector muted";
+  $("kgInspector").textContent = nodes.length
+    ? `已显示 ${nodes.length} 个实体、${edges.length} 条关系。点击节点/关系查看证据。`
+    : "没有匹配的图节点。先点“规则构图”，或换一个实体名。";
+}
+function kgEdgeRows(edges) {
+  return (edges || []).map((edge) => {
+    const actions = edge.status === "pending"
+      ? `<button class="btn btn-mini" data-kg-edge-action="asserted" data-edge-id="${kgEsc(edge.id)}">确认</button>` +
+        `<button class="btn btn-mini danger" data-kg-edge-action="retracted" data-edge-id="${kgEsc(edge.id)}">驳回</button>`
+      : `<button class="btn btn-mini danger" data-kg-edge-action="retracted" data-edge-id="${kgEsc(edge.id)}">驳回</button>`;
+    return `<div class="kg-edge-row"><div><b>${kgEsc(edge.relation || "")}</b> ` +
+      `<span class="kg-status-badge ${kgEsc(edge.status || "")}">${kgEsc(edge.status || "")}</span></div>` +
+      `<div class="meta">${kgEsc((edge.valid_from || "").slice(0,10))} → ${kgEsc((edge.valid_to || "").slice(0,10) || "now")}` +
+      `${edge.session_id ? " · " + kgEsc(edge.session_id) : ""}</div>` +
+      `${edge.quote ? `<div class="evidence">${kgEsc(edge.quote.slice(0, 500))}</div>` : ""}` +
+      `<div class="row">${actions}</div></div>`;
+  }).join("");
+}
+function kgBindEdgeActions() {
+  document.querySelectorAll("[data-kg-edge-action]").forEach((button) => {
+    button.onclick = async () => {
+      const r = await pywebview.api.kg_review_edge(state.project, button.dataset.edgeId,
+                                                    button.dataset.kgEdgeAction);
+      if (!r || !r.ok) { toast("关系审核失败：" + ((r && r.error) || "未知错误")); return; }
+      toast("关系已更新");
+      if ($("kgQuery").value.trim()) kgSearch();
+    };
+  });
+}
+async function kgShowNode(node) {
+  $("kgInspector").className = "kg-inspector";
+  $("kgInspector").innerHTML = `<div class="kg-title">${kgEsc(node.kind)} · ${kgEsc(node.label || node.id)}</div>` +
+    `<div class="meta">${kgEsc(node.description || "无描述")}</div>` +
+    `<div class="meta">置信度 ${Number(node.confidence || 0).toFixed(2)} · ${kgEsc(node.status || "active")}</div>` +
+    `<div class="kg-timeline" id="kgNodeTimeline">读取时间线…</div>`;
+  try {
+    const r = await pywebview.api.kg_timeline(state.project, node.id);
+    const box = $("kgNodeTimeline");
+    if (!r || !r.ok) { box.textContent = "时间线不可用"; return; }
+    box.innerHTML = `<div class="kg-title">时间线</div>` +
+      (kgEdgeRows(r.edges || []) || '<div class="muted">没有关系</div>');
+    kgBindEdgeActions();
+  } catch (e) { const box = $("kgNodeTimeline"); if (box) box.textContent = "时间线读取失败"; }
+}
+function kgShowEdge(edge) {
+  $("kgInspector").className = "kg-inspector";
+  $("kgInspector").innerHTML = `<div class="kg-title">关系 · ${kgEsc(edge.relation || "")}</div>` +
+    `<div class="meta">${kgEsc(edge.valid_from || "")} → ${kgEsc(edge.valid_to || "now")}</div>` +
+    `<div class="meta">状态 ${kgEsc(edge.status || "")} · 置信度 ${Number(edge.confidence || 0).toFixed(2)}</div>` +
+    (edge.session_id ? `<div class="meta">来源会议 ${kgEsc(edge.session_id)}</div>` : "") +
+    (edge.quote ? `<div class="evidence">${kgEsc(edge.quote.slice(0, 900))}</div>` : "") +
+    `<div class="row">${kgEdgeRows([edge]).replace(/^<div class="kg-edge-row">/, "").replace(/<\/div>$/, "")}</div>`;
+  kgBindEdgeActions();
+}
+async function loadKgStatus() {
+  if (!state.project) { $("kgStatus").textContent = "需要先选择项目"; return; }
+  try {
+    const r = await pywebview.api.kg_status(state.project);
+    if (!r || !r.ok) { $("kgStatus").textContent = "图谱状态不可用"; return; }
+    const types = Object.keys(r.by_kind || {}).map((k) => `${k} ${r.by_kind[k]}`).join(" · ");
+    $("kgStatus").textContent = `${r.nodes || 0} 节点 / ${r.edges || 0} 边${types ? "（" + types + "）" : ""}`;
+  } catch (e) { $("kgStatus").textContent = "图谱状态读取失败"; }
+}
+async function kgSearch() {
+  if (!state.project) { toast("先选择项目"); return; }
+  const query = $("kgQuery").value.trim();
+  if (!query) { toast("请输入实体/关系"); return; }
+  setAgentBusy(true, "查询知识图谱…");
+  try {
+    const r = await pywebview.api.kg_neighbors(state.project, query,
+      Number($("kgDepth").value) || 1, kgAsOfValue());
+    if (!r || !r.ok) { toast("查图失败：" + ((r && r.error) || "没有匹配实体")); return; }
+    kgRender(r);
+    $("kgInspector").textContent = `以「${query}」为种子，显示 ${r.nodes.length} 个实体、${r.edges.length} 条关系。`;
+  } finally { setAgentBusy(false); }
+}
+async function kgAsk() {
+  const q = $("kgQuery").value.trim();
+  if (!state.project || !q) { toast("先选择项目并输入问题/实体"); return; }
+  setAgentBusy(true, "GraphRAG 正在扩展图关系并检索资料…");
+  try {
+    const r = await pywebview.api.kg_ask(state.project, q);
+    const box = $("kgAnswer");
+    box.hidden = false;
+    if (!r || !r.ok) { box.innerHTML = `<div>GraphRAG 失败：${kgEsc((r && r.error) || "未知错误")}</div>`; return; }
+    const cites = (r.citations || []).map((c) =>
+      c.kind === "edge" ? `关系:${c.relation}(${c.src_name || c.src_id}→${c.dst_name || c.dst_id})`
+        : `资料:${c.title || c.source_id || c.chunk_id}`).join("、");
+    box.innerHTML = `<div>${kgEsc(r.answer || "没有回答")}</div>` +
+      `<div class="cites">依据：${kgEsc(cites || "无")}</div>`;
+  } finally { setAgentBusy(false); }
+}
+async function kgBuild() {
+  if (!state.project) { toast("先选择项目"); return; }
+  setAgentBusy(true, "从事实和会议重建规则图…");
+  try {
+    const r = await pywebview.api.kg_build(state.project);
+    if (!r || !r.ok) { toast("构图失败：" + ((r && r.error) || "未知错误")); return; }
+    await loadKgStatus();
+    toast(`规则图已重建：${r.nodes} 节点 / ${r.edges} 边`);
+  } finally { setAgentBusy(false); }
+}
+async function kgIngest() {
+  const session = $("agentSession") ? $("agentSession").value : "";
+  if (!state.project) { toast("先选择项目"); return; }
+  if (!session) { toast("先到 Agent 页选择一个有转写的会话"); return; }
+  setAgentBusy(true, "Agnes 正在抽取实体/关系（可能需要几十秒）…");
+  try {
+    const r = await pywebview.api.kg_ingest(state.project, session, false);
+    if (!r || !r.ok) { toast("LLM 抽取失败：" + ((r && (r.error || r.error_code)) || "未知错误"), 12000); return; }
+    await loadKgStatus();
+    toast(`抽取完成：${r.entities || 0} 个实体 / ${r.relations || 0} 条关系`);
+  } finally { setAgentBusy(false); }
+}
+async function kgMerge() {
+  if (state.kgSelected.length < 2) { toast("先依次点击两个实体（先源、后目标）"); return; }
+  const [source, target] = state.kgSelected;
+  if (!confirm("把第一个实体合并到第二个实体？关系会迁移，源节点标记为 merged。")) return;
+  setAgentBusy(true, "合并实体…");
+  try {
+    const r = await pywebview.api.kg_merge(state.project, source, target);
+    if (!r || !r.ok) { toast("合并失败：" + ((r && r.error) || "未知错误")); return; }
+    state.kgSelected = [];
+    toast("实体已合并");
+    if ($("kgQuery").value.trim()) kgSearch(); else loadKgStatus();
+  } finally { setAgentBusy(false); }
+}
+async function loadKgPage() {
+  $("kgProject").textContent = state.project || "（未选择项目）";
+  initKgGraph();
+  if (!state.project) { $("kgStatus").textContent = "需要先选择项目"; return; }
+  await loadKgStatus();
+  try {
+    const sessions = await pywebview.api.list_sessions();
+    renderSessions(sessions);
+  } catch (e) { /* session picker is optional */ }
+  const name = state.project.split(/[\\/]/).filter(Boolean).pop() || "";
+  if (name && !$("kgQuery").value) {
+    $("kgQuery").value = name;
+    await kgSearch();
+  }
+}
+$("btnKgSearch").onclick = kgSearch;
+$("btnKgAsk").onclick = kgAsk;
+$("btnKgBuild").onclick = kgBuild;
+$("btnKgIngest").onclick = kgIngest;
+$("btnKgMerge").onclick = kgMerge;
+$("kgQuery").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); kgSearch(); }
 });
 
 /* ---------- 设置 + LLM 服务 ---------- */

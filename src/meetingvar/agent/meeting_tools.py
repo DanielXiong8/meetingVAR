@@ -234,6 +234,18 @@ def _read_kg_path(args: dict, context: ToolContext) -> dict:
     return {**result, "src": src, "dst": dst, "trust": "project-kg"}
 
 
+def _read_graph_search(args: dict, context: ToolContext) -> dict:
+    from ..kg.graphrag import GraphRAG
+
+    catalog = (context.extra or {}).get("catalog")
+    data_dir = catalog.pool.parent if isinstance(catalog, SessionCatalog) else None
+    result = GraphRAG(context.project_root, data_dir).search(
+        args["query"], limit=max(1, min(20, int(args.get("limit", 8)))),
+        hops=max(1, min(3, int(args.get("hops", 2)))),
+        as_of=str(args.get("as_of") or ""))
+    return {**result, "trust": "project-kg-rag"}
+
+
 def _read_kg_stats(args: dict, context: ToolContext) -> dict:
     return {**_kg(context).stats(), "trust": "project-kg"}
 
@@ -584,6 +596,20 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": [],
         },
     ), _read_kg_path)
+
+    registry.register(ToolSpec(
+        name="search_graph",
+        description="GraphRAG：实体/关系扩展 + 项目文档/会议片段，返回图关系、证据和 chunk",
+        read_only=True, side_effect_scope="none", timeout_s=45, max_output_chars=16000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500},
+                           "limit": {"type": "integer"},
+                           "hops": {"type": "integer"},
+                           "as_of": {"type": "string"}},
+            "required": ["query"],
+        },
+    ), _read_graph_search)
 
     registry.register(ToolSpec(
         name="kg_stats",

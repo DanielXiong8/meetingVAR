@@ -1,6 +1,7 @@
 """Incremental meeting-to-graph ingestion (Phase 1)."""
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -25,6 +26,13 @@ class GraphIngestor:
         self.llm = llm
         self.catalog = SessionCatalog(self.data_dir)
         self.store = GraphStore(self.project_root)
+        # Agnes free/standard tiers rate-limit burst extraction.  A small
+        # pace plus exponential retry keeps a long meeting from losing most
+        # chunks; injected test LLMs skip the wait.
+        self.interval = 0.0 if llm is not None else max(
+            0.0, float(os.environ.get("MEETINGVAR_KG_LLM_INTERVAL", "2.0")))
+        self.retries = max(0, int(os.environ.get("MEETINGVAR_KG_LLM_RETRIES", "4")))
+        self._last_call = 0.0
 
     def ingest_session(self, session_id: str, *, force: bool = False,
                        max_chars: int = 900) -> dict:
@@ -54,11 +62,24 @@ class GraphIngestor:
             if not force and self.store.episode_hash(episode_id) == chunk["hash"]:
                 report["skipped"] += 1
                 continue
-            try:
-                parsed = extract_chunk(chunk, self.llm)
-            except Exception as exc:
-                report["errors"].append({"stage": "extract", "chunk": index,
-                                         "code": type(exc).__name__})
+            parsed = None
+            for attempt in range(self.retries + 1):
+                wait = self.interval - (time.time() - self._last_call)
+                if wait > 0:
+                    time.sleep(wait)
+                self._last_call = time.time()
+                try:
+                    parsed = extract_chunk(chunk, self.llm)
+                    break
+                except Exception as exc:
+                    code = str(exc) or type(exc).__name__
+                    if code in {"rate_limit", "network"} and attempt < self.retries:
+                        time.sleep(min(60.0, 5.0 * (2 ** attempt)))
+                        continue
+                    report["errors"].append({"stage": "extract", "chunk": index,
+                                             "code": code[:80]})
+                    break
+            if parsed is None:
                 continue
             linked = {}
             for entity in parsed["entities"]:

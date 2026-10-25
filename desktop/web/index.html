@@ -26,6 +26,7 @@
       <button class="side-item" id="btnSkills" aria-label="技能"><span class="side-ico">✦</span><span>技能</span></button>
       <button class="side-item navbtn" data-page="project" aria-label="项目"><span class="side-ico">▦</span><span>项目</span></button>
       <button class="side-item navbtn" data-page="library" aria-label="会议库"><span class="side-ico">▤</span><span>会议库</span></button>
+      <button class="side-item navbtn" data-page="kg" aria-label="知识图谱"><span class="side-ico">◈</span><span>知识图谱</span></button>
     </nav>
 
     <div class="side-section side-projects-section">
@@ -329,6 +330,32 @@
         </div>
       </section>
 
+      <!-- 知识图谱 -->
+      <section id="page-kg" class="page panel">
+        <div class="page-head">
+          <div><h1>知识图谱</h1><p>实体、关系、有效期与原始证据；先规则构图，再按会话做 LLM 抽取。</p></div>
+          <div class="agent-head-status"><span id="kgProject">（未选择项目）</span><span id="kgStatus" class="muted">读取中…</span></div>
+        </div>
+        <div class="kg-toolbar">
+          <input id="kgQuery" class="input" placeholder="实体/关系查询，例如：小林、周五交付、测试风险">
+          <select id="kgDepth" class="input kg-small"><option value="1">1 跳</option><option value="2" selected>2 跳</option><option value="3">3 跳</option></select>
+          <input id="kgAsOf" class="input kg-date" type="date" title="查看某天有效的图（留空=现在）">
+          <button id="btnKgSearch" class="btn btn-primary">查图</button>
+          <button id="btnKgAsk" class="btn">GraphRAG 问答</button>
+          <button id="btnKgBuild" class="btn">规则构图</button>
+          <button id="btnKgIngest" class="btn">LLM 抽取当前会话</button>
+          <button id="btnKgMerge" class="btn">合并选中实体</button>
+        </div>
+        <div class="kg-layout">
+          <div id="kgCanvas" class="kg-canvas"></div>
+          <aside class="kg-side">
+            <div id="kgInspector" class="kg-inspector muted">点击节点或关系查看详情/证据</div>
+            <div id="kgAnswer" class="agent-answer" hidden></div>
+            <div id="kgTimeline" class="kg-timeline muted">时间线</div>
+          </aside>
+        </div>
+      </section>
+
       <!-- 设置 -->
       <section id="page-settings" class="page">
         <div class="settings-shell">
@@ -530,6 +557,7 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
+<script src="vendor/cytoscape.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -88,6 +88,22 @@ class KnowledgeGraphTests(unittest.TestCase):
         self.assertTrue({"kg_find_entities", "kg_neighbors", "kg_timeline",
                          "kg_path", "kg_stats"} <= names)
 
+    def test_merge_and_review_operations(self):
+        a = self.graph.upsert_node(kind="Person", name="林工")
+        b = self.graph.upsert_node(kind="Person", name="小林")
+        action = self.graph.resolve("周五交付第一版")
+        self.graph.upsert_edge(src_id=action["id"], dst_id=a["id"],
+                               relation="assigned_to",
+                               valid_from="2026-03-11T00:00:00+0800",
+                               source_type="test", source_id="merge")
+        merged = self.graph.merge_nodes(a["id"], b["id"])
+        self.assertIn("林工", merged["aliases"])
+        self.assertEqual(self.graph.get_node(a["id"])["status"], "merged")
+        edges = self.graph.timeline(b["id"])["edges"]
+        self.assertTrue(any(edge["relation"] == "assigned_to" for edge in edges))
+        reviewed = self.graph.review_edge(edges[0]["id"], "retracted")
+        self.assertEqual(reviewed["status"], "retracted")
+
     def test_rebuild_is_idempotent(self):
         first = self.report
         second = self.builder.build()

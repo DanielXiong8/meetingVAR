@@ -11,6 +11,18 @@ from .schema import NODE_KINDS, RELATION_ALLOWED, RELATIONS, norm_name, relation
 _JSON = re.compile(r"\{.*\}", re.S)
 
 
+def _infer_kind(relation: str, side: str) -> str:
+    allowed = RELATION_ALLOWED.get(relation)
+    if not allowed:
+        return "Topic"
+    kinds = allowed[0] if side == "head" else allowed[1]
+    return sorted(kinds)[0] if kinds else "Topic"
+
+
+def _resolve_surface(name: str, lookup: dict[str, str]) -> str:
+    return lookup.get(norm_name(name), name)
+
+
 def _iso(ts: float | None = None) -> str:
     import time
 
@@ -92,6 +104,7 @@ def parse_extraction(raw: str, chunk: dict) -> dict:
     allowed = set(by_id)
     entities, relations = [], []
     surface_map: dict[str, str] = {}
+    surface_lookup: dict[str, str] = {}
 
     for item in (data.get("entities") or [])[:25]:
         if not isinstance(item, dict):
@@ -120,6 +133,9 @@ def parse_extraction(raw: str, chunk: dict) -> dict:
                          "evidence_turn_ids": ids, "confidence": score,
                          "evidence_text": evidence[:500]})
         surface_map[surface] = kind
+        surface_lookup[norm_name(surface)] = surface
+        for alias in aliases:
+            surface_lookup.setdefault(norm_name(alias), surface)
 
     for item in (data.get("relations") or [])[:35]:
         if not isinstance(item, dict):
@@ -131,15 +147,28 @@ def parse_extraction(raw: str, chunk: dict) -> dict:
         confidence = item.get("confidence", 0.7)
         if not head or not tail or relation not in RELATIONS:
             continue
-        if head not in surface_map or tail not in surface_map:
-            continue
-        if not relation_allowed(surface_map[head], relation, surface_map[tail]):
-            continue
         if not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids):
             continue
         if any(turn_id not in allowed for turn_id in ids):
             continue
         evidence = " ".join(by_id[turn_id]["text"] for turn_id in ids)
+        head = _resolve_surface(head, surface_lookup)
+        tail = _resolve_surface(tail, surface_lookup)
+        for side, surface in (("head", head), ("tail", tail)):
+            if surface in surface_map:
+                continue
+            if norm_name(surface) not in norm_name(evidence) or not (2 <= len(surface) <= 40):
+                continue
+            inferred_kind = _infer_kind(relation, side)
+            surface_map[surface] = inferred_kind
+            surface_lookup[norm_name(surface)] = surface
+            entities.append({"surface": surface, "kind": inferred_kind, "aliases": [],
+                             "evidence_turn_ids": ids, "confidence": 0.55,
+                             "evidence_text": evidence[:500], "inferred": True})
+        if head not in surface_map or tail not in surface_map:
+            continue
+        if not relation_allowed(surface_map[head], relation, surface_map[tail]):
+            continue
         if norm_name(head) not in norm_name(evidence) or \
                 norm_name(tail) not in norm_name(evidence):
             continue

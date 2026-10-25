@@ -83,6 +83,21 @@ class GraphIngestTests(unittest.TestCase):
         self.assertEqual(second["skipped"], first["chunks"])
         self.assertEqual(second["relations"], 0)
 
+    def test_relation_endpoint_is_inferred_from_domain(self):
+        chunk = {"id": "x", "turns": [{"id": "turn_1", "speaker": "小林",
+                                        "text": "小林负责周五交付第一版。"}],
+                 "text": "[turn_1] 小林: 小林负责周五交付第一版。"}
+        parsed = parse_extraction(json.dumps({
+            "entities": [{"surface": "小林", "kind": "Person",
+                          "evidence_turn_ids": ["turn_1"], "confidence": 0.9}],
+            "relations": [{"head": "周五交付第一版", "relation": "assigned_to",
+                           "tail": "小林", "evidence_turn_ids": ["turn_1"],
+                           "confidence": 0.8}],
+        }), chunk)
+        self.assertEqual(len(parsed["relations"]), 1)
+        inferred = [entity for entity in parsed["entities"] if entity.get("inferred")]
+        self.assertEqual(inferred[0]["kind"], "Action")
+
     def test_invalid_evidence_is_rejected(self):
         chunk = {"id": "x", "turns": [{"id": "turn_1", "speaker": "小林",
                                         "text": "小林采用第二方案。"}],

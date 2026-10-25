@@ -287,6 +287,43 @@ def _kg_store(args):
     return GraphStore(project)
 
 
+def cmd_kg_ask(args) -> None:
+    import json as _json
+    from . import config
+    from .kg.graphrag import GraphRAG
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[kg] 项目文件夹无效: {project}")
+    report = GraphRAG(project, config.DATA_DIR).answer(
+        args.question, limit=args.limit, hops=args.hops, as_of=args.as_of)
+    if args.json:
+        print(_json.dumps(report, ensure_ascii=False), flush=True); return
+    print(report.get("answer", ""))
+    if report.get("citations"):
+        print("\n依据：")
+        for source in report["citations"]:
+            if source.get("kind") == "edge":
+                print(f"- 关系 {source.get('src_name') or source.get('src_id')} "
+                      f"--{source.get('relation')}--> {source.get('dst_name') or source.get('dst_id')} "
+                      f"{source.get('valid_from','')}")
+            elif source.get("kind") == "document":
+                print(f"- 资料 {source.get('title')} / {source.get('source_id')}")
+
+
+def cmd_kg_search(args) -> None:
+    import json as _json
+    from . import config
+    from .kg.graphrag import GraphRAG
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[kg] 项目文件夹无效: {project}")
+    report = GraphRAG(project, config.DATA_DIR).search(
+        args.query, limit=args.limit, hops=args.hops, as_of=args.as_of)
+    print(_json.dumps(report, ensure_ascii=False, indent=2), flush=True)
+
+
 def cmd_kg_build(args) -> None:
     import json as _json
     from . import config
@@ -296,7 +333,7 @@ def cmd_kg_build(args) -> None:
     if not project.is_dir():
         raise SystemExit(f"[kg] 项目文件夹无效: {project}")
     report = GraphBuilder(project, config.DATA_DIR).build(
-        include_meetings=not args.no_meetings)
+        include_meetings=not args.no_meetings, reset=args.reset)
     print(_json.dumps(report, ensure_ascii=False) if args.json else
           f"[kg] nodes={report['nodes']} edges={report['edges']} "
           f"facts={report['facts']} meetings={report['meetings']}", flush=True)
@@ -860,7 +897,21 @@ def main() -> None:
     kb = sub.add_parser("kg-build", help="从现有事实+会议规则构建项目知识图谱")
     kb.add_argument("--project", required=True)
     kb.add_argument("--no-meetings", action="store_true")
+    kb.add_argument("--reset", action="store_true", help="清空图后重建（会删除 LLM 抽取边）")
     kb.add_argument("--json", action="store_true")
+    ka = sub.add_parser("kg-ask", help="GraphRAG 问答：图关系+项目资料+引用")
+    ka.add_argument("--project", required=True)
+    ka.add_argument("--question", required=True)
+    ka.add_argument("--limit", type=int, default=8)
+    ka.add_argument("--hops", type=int, default=2)
+    ka.add_argument("--as-of", default="")
+    ka.add_argument("--json", action="store_true")
+    kgs = sub.add_parser("kg-search", help="GraphRAG 检索（输出图关系/片段 JSON）")
+    kgs.add_argument("--project", required=True)
+    kgs.add_argument("--query", required=True)
+    kgs.add_argument("--limit", type=int, default=8)
+    kgs.add_argument("--hops", type=int, default=2)
+    kgs.add_argument("--as-of", default="")
     ki = sub.add_parser("kg-ingest", help="LLM 从会议转写抽取实体/关系并增量入图")
     ki.add_argument("--project", required=True)
     ki.add_argument("--session", default="")
@@ -971,7 +1022,8 @@ def main() -> None:
      "agent-actions": cmd_agent_actions, "agent-ask": cmd_agent_ask,
      "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
      "rag-index": cmd_rag_index, "rag-ask": cmd_rag_ask,
-     "kg-build": cmd_kg_build, "kg-ingest": cmd_kg_ingest, "kg-find": cmd_kg_find,
+     "kg-build": cmd_kg_build, "kg-ingest": cmd_kg_ingest, "kg-ask": cmd_kg_ask,
+     "kg-search": cmd_kg_search, "kg-find": cmd_kg_find,
      "kg-neighbors": cmd_kg_neighbors, "kg-timeline": cmd_kg_timeline,
      "kg-path": cmd_kg_path, "kg-stats": cmd_kg_stats,
      "agent-run": cmd_agent_run, "agent-eval": cmd_agent_eval}[args.cmd](args)

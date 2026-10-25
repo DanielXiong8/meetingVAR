@@ -33,7 +33,7 @@ from pathlib import Path
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.15.0"
+APP_VERSION = "0.16.0"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -1678,6 +1678,64 @@ class Backend:
             return {"ok": False, "error": "请输入消息"}
         return self._agent_bridge(["agent_chat_send", folder, conversation_id,
                                    message.strip()[:2000]], use_llm=True, timeout=300)
+
+    def kg_status(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["kg_status", folder], timeout=60)
+
+    def kg_build(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["kg_build", folder], timeout=300)
+
+    def kg_ingest(self, folder: str, session: str = "", all_sessions: bool = False) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        sid = session if self._agent_valid_session(session) else ""
+        return self._agent_bridge(["kg_ingest", folder, sid,
+                                   "true" if all_sessions else "false",
+                                   "false", "20"], use_llm=True, timeout=900)
+
+    def kg_neighbors(self, folder: str, query: str, depth: int = 1, as_of: str = "") -> dict:
+        if not folder or not Path(folder).is_dir() or not str(query or "").strip():
+            return {"ok": False, "error": "项目或实体无效"}
+        return self._agent_bridge(["kg_neighbors", folder, str(query)[:300],
+                                   str(max(1, min(3, int(depth)))),
+                                   str(as_of or "")[:40]], timeout=60)
+
+    def kg_timeline(self, folder: str, query: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not str(query or "").strip():
+            return {"ok": False, "error": "项目或实体无效"}
+        return self._agent_bridge(["kg_timeline", folder, str(query)[:300]], timeout=60)
+
+    def kg_path(self, folder: str, src: str, dst: str, max_depth: int = 3) -> dict:
+        if not folder or not Path(folder).is_dir() or not src or not dst:
+            return {"ok": False, "error": "项目或实体无效"}
+        return self._agent_bridge(["kg_path", folder, str(src)[:300], str(dst)[:300],
+                                   str(max(1, min(4, int(max_depth))))], timeout=60)
+
+    def kg_merge(self, folder: str, source: str, target: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not source or not target:
+            return {"ok": False, "error": "项目或实体无效"}
+        return self._agent_bridge(["kg_merge", folder, str(source)[:300],
+                                   str(target)[:300]], timeout=60)
+
+    def kg_review_edge(self, folder: str, edge_id: str, status: str) -> dict:
+        if status not in {"asserted", "pending", "retracted", "superseded"}:
+            return {"ok": False, "error": "状态无效"}
+        return self._agent_bridge(["kg_review_edge", folder, edge_id, status], timeout=60)
+
+    def kg_ask(self, folder: str, question: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not str(question or "").strip():
+            return {"ok": False, "error": "项目或问题无效"}
+        return self._agent_bridge(["kg_ask", folder, str(question)[:1000]],
+                                  use_llm=True, timeout=300)
+
+    def kg_search(self, folder: str, query: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not str(query or "").strip():
+            return {"ok": False, "error": "项目或查询无效"}
+        return self._agent_bridge(["kg_search", folder, str(query)[:500]], timeout=120)
 
     def rag_index(self, folder: str, include_meetings: bool = True) -> dict:
         if not folder or not Path(folder).is_dir():
