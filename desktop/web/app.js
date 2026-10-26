@@ -850,6 +850,9 @@ function showSkills() {
       <button class="skill-btn" data-prompt="计算当前项目全库阅读的字数、块数和预计耗时，并说明是否值得现在跑。">全库阅读预算</button>
       <button class="skill-btn" data-prompt="在最近会议里搜索关于交付时间的原话，并给出引用。">找原话</button>
       <button class="skill-btn" data-prompt="列出当前项目记忆里所有未决问题和风险，并给出来源。">未决问题</button>
+      <button class="skill-btn" data-prompt="帮我把最近一次命中的会议片段生成证据包。">生成证据包</button>
+      <button class="skill-btn" data-prompt="打开承诺账本，看看谁改了口，原来的承诺是什么。">承诺账本</button>
+      <button class="skill-btn" data-prompt="找回上次提到交付时间的那段原话和具体时间戳。">找回 30 秒</button>
     </div></div></div>`;
   $("chatThread").appendChild(row);
   row.querySelectorAll(".skill-btn").forEach((btn) => {

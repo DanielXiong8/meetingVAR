@@ -20,10 +20,15 @@ from ..llm import chat_result
 from .digest_skill import MeetingDigestSkill
 from .loop import AgentLoop
 from .memory_intent import is_memory_request, propose_memory
+from .evidence_skills import (CommitmentLedgerSkill, EvidencePackSkill,
+                              FindMomentSkill)
 
 _SAFE_ID = re.compile(r"[0-9a-f]{32}")
 _GREETING = re.compile(r"^(你好|您好|hi|hello|在吗|早上好|下午好|晚上好|谢谢|好的|ok)[!！。.\s]*$", re.I)
 _SUMMARY = re.compile(r"总结|纪要|复盘|主要决定|行动项|未决问题|决议", re.I)
+_EVIDENCE_PACK = re.compile(r"证据包|导出.{0,8}证据|打包.{0,8}证据|evidence\s*pack", re.I)
+_COMMITMENT_LEDGER = re.compile(r"承诺账本|谁改口|改口|承诺.{0,8}变|交付.{0,8}改|截止.{0,8}改", re.I)
+_FIND_MOMENT = re.compile(r"找回|定位|哪一段|哪段|30\s*秒|三十秒|原话.{0,6}哪|片段.{0,6}哪", re.I)
 _KNOWLEDGE = re.compile(r"文件|文档|资料|规范|知识库|说明书|手册|需求|RAG", re.I)
 _MEETING = re.compile(
     r"会议|项目|纪要|交付|决定|承诺|风险|进度|任务|上次|哪次|谁|什么时候|讨论|记录|"
@@ -425,6 +430,16 @@ class ChatAgent:
                         text += ("\n我从本次会议里找到 "
                                  f"{len(memory_action['payload']['items'])} 条可写入的记忆，"
                                  "确认后保存到项目记忆。")
+            elif kind == "save_evidence_pack":
+                from .evidence_skills import EvidencePackSkill
+                skill = EvidencePackSkill(self.project_root, self.data_dir)
+                result = skill.run(
+                    session_id=str(payload.get("session_id") or ""),
+                    clip_id=str(payload.get("clip_id") or ""),
+                    query=str(payload.get("query") or ""))
+                status = "done" if result.get("ok") else "failed"
+                text = ("证据包已生成：" + str(result.get("zip_path", ""))
+                        if result.get("ok") else "证据包生成失败。")
             elif kind == "save_memory":
                 from .memory import FACT_TYPES, FactStore
                 items = payload.get("items") if isinstance(payload.get("items"), list) else []
@@ -555,6 +570,57 @@ class ChatAgent:
                 answer = "要记住什么？请把内容写在“记住”后面，例如：记住：项目周五交付第一版。"
                 assistant = {"role": "assistant", "content": answer,
                              "ts": round(time.time(), 3), "mode": "memory"}
+            self.conversation = self.store.append(self.conversation_id, assistant)
+            self._roll_summary()
+            return {"ok": True, "conversation_id": self.conversation_id,
+                    "title": self.conversation.get("title", "新对话"),
+                    "message": assistant, "conversation": self.conversation}
+
+        if _EVIDENCE_PACK.search(text):
+            try:
+                plan = EvidencePackSkill(self.project_root, self.data_dir).propose(query=text)
+                action = {"id": uuid.uuid4().hex, "type": "save_evidence_pack",
+                          "label": "生成证据包：" + plan["title"],
+                          "payload": plan, "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                          "status": "pending", "result": ""}
+                self.store.add_actions(self.conversation_id, [action])
+                answer = (f"我找到证据片段「{plan['title']}」。\n"
+                          "确认后我会生成 ZIP：音频、屏幕帧、转写、manifest 和 SHA256 校验。")
+                assistant = {"role": "assistant", "content": answer,
+                             "ts": round(time.time(), 3), "mode": "skill",
+                             "actions": [{"id": action["id"], "type": action["type"],
+                                          "label": action["label"]}]}
+            except Exception:
+                answer = "没有找到可打包的证据片段。需要先有一场命中并保存片段的会议。"
+                assistant = {"role": "assistant", "content": answer,
+                             "ts": round(time.time(), 3), "mode": "skill"}
+            self.conversation = self.store.append(self.conversation_id, assistant)
+            self._roll_summary()
+            return {"ok": True, "conversation_id": self.conversation_id,
+                    "title": self.conversation.get("title", "新对话"),
+                    "message": assistant, "conversation": self.conversation}
+
+        if _COMMITMENT_LEDGER.search(text):
+            report = CommitmentLedgerSkill(self.project_root).run(text)
+            assistant = {"role": "assistant", "content": report.get("answer") or "承诺账本为空。",
+                         "ts": round(time.time(), 3), "mode": "skill",
+                         "citations": report.get("citations", []),
+                         "ledger": report.get("rows", [])[:40],
+                         "grounded": bool(report.get("rows")), "answered": bool(report.get("rows"))}
+            self.conversation = self.store.append(self.conversation_id, assistant)
+            self._roll_summary()
+            return {"ok": True, "conversation_id": self.conversation_id,
+                    "title": self.conversation.get("title", "新对话"),
+                    "message": assistant, "conversation": self.conversation}
+
+        if _FIND_MOMENT.search(text):
+            report = FindMomentSkill(self.project_root, self.data_dir, limit=5).run(text)
+            assistant = {"role": "assistant", "content": report.get("answer") or "没有找到匹配片段。",
+                         "ts": round(time.time(), 3), "mode": "skill",
+                         "citations": report.get("citations", []),
+                         "segments": report.get("segments", []),
+                         "grounded": bool(report.get("segments")),
+                         "answered": bool(report.get("segments"))}
             self.conversation = self.store.append(self.conversation_id, assistant)
             self._roll_summary()
             return {"ok": True, "conversation_id": self.conversation_id,

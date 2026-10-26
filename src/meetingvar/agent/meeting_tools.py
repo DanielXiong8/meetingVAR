@@ -234,6 +234,22 @@ def _read_kg_path(args: dict, context: ToolContext) -> dict:
     return {**result, "src": src, "dst": dst, "trust": "project-kg"}
 
 
+def _read_find_moment(args: dict, context: ToolContext) -> dict:
+    from .evidence_skills import FindMomentSkill
+
+    catalog = (context.extra or {}).get("catalog")
+    data_dir = catalog.pool.parent if isinstance(catalog, SessionCatalog) else None
+    return FindMomentSkill(context.project_root, data_dir).run(
+        args["query"], session_id=args.get("session_id", ""),
+        limit=max(1, min(10, int(args.get("limit", 5)))))
+
+
+def _read_commitment_ledger(args: dict, context: ToolContext) -> dict:
+    from .evidence_skills import CommitmentLedgerSkill
+
+    return CommitmentLedgerSkill(context.project_root).run(args.get("query", ""))
+
+
 def _read_graph_search(args: dict, context: ToolContext) -> dict:
     from ..kg.graphrag import GraphRAG
 
@@ -596,6 +612,27 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "required": [],
         },
     ), _read_kg_path)
+
+    registry.register(ToolSpec(
+        name="find_moment",
+        description="按自然语言找回会议里的具体 30–90 秒片段（时间戳/原句/片段ID）",
+        read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=10000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500},
+                           "session_id": {"type": "string"},
+                           "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+    ), _read_find_moment)
+
+    registry.register(ToolSpec(
+        name="commitment_ledger",
+        description="查看承诺/行动/决定账本：谁承诺、何时、是否被改口",
+        read_only=True, side_effect_scope="none", timeout_s=15, max_output_chars=8000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"query": {"type": "string"}}, "required": []},
+    ), _read_commitment_ledger)
 
     registry.register(ToolSpec(
         name="search_graph",

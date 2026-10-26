@@ -287,6 +287,45 @@ def _kg_store(args):
     return GraphStore(project)
 
 
+def cmd_evidence_pack(args) -> None:
+    import json as _json
+    from . import config
+    from .agent.evidence_skills import EvidencePackSkill
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[evidence] 项目文件夹无效: {project}")
+    report = EvidencePackSkill(project, config.DATA_DIR).run(
+        session_id=args.session or "", clip_id=args.clip or "",
+        query=args.query or "", out_dir=Path(args.out) if args.out else None)
+    print(_json.dumps(report, ensure_ascii=False) if args.json else
+          f"[evidence] {report['zip_path']}", flush=True)
+
+
+def cmd_commitment_ledger(args) -> None:
+    import json as _json
+    from .agent.evidence_skills import CommitmentLedgerSkill
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[ledger] 项目文件夹无效: {project}")
+    report = CommitmentLedgerSkill(project).run(args.query or "")
+    print(_json.dumps(report, ensure_ascii=False) if args.json else report["answer"], flush=True)
+
+
+def cmd_find_moment(args) -> None:
+    import json as _json
+    from . import config
+    from .agent.evidence_skills import FindMomentSkill
+
+    project = Path(args.project)
+    if not project.is_dir():
+        raise SystemExit(f"[moment] 项目文件夹无效: {project}")
+    report = FindMomentSkill(project, config.DATA_DIR, limit=args.limit).run(
+        args.query, session_id=args.session or "", limit=args.limit)
+    print(_json.dumps(report, ensure_ascii=False) if args.json else report["answer"], flush=True)
+
+
 def cmd_kg_ask(args) -> None:
     import json as _json
     from . import config
@@ -899,6 +938,23 @@ def main() -> None:
     kb.add_argument("--no-meetings", action="store_true")
     kb.add_argument("--reset", action="store_true", help="清空图后重建（会删除 LLM 抽取边）")
     kb.add_argument("--json", action="store_true")
+    ep = sub.add_parser("evidence-pack", help="把一个片段导出为可校验证据包 ZIP")
+    ep.add_argument("--project", required=True)
+    ep.add_argument("--session", default="")
+    ep.add_argument("--clip", default="")
+    ep.add_argument("--query", default="")
+    ep.add_argument("--out", default="")
+    ep.add_argument("--json", action="store_true")
+    cl = sub.add_parser("commitment-ledger", help="承诺账本：谁承诺、何时、是否改口")
+    cl.add_argument("--project", required=True)
+    cl.add_argument("--query", default="")
+    cl.add_argument("--json", action="store_true")
+    fm = sub.add_parser("find-moment", help="按自然语言找回会议 30–90 秒片段")
+    fm.add_argument("--project", required=True)
+    fm.add_argument("--query", required=True)
+    fm.add_argument("--session", default="")
+    fm.add_argument("--limit", type=int, default=5)
+    fm.add_argument("--json", action="store_true")
     ka = sub.add_parser("kg-ask", help="GraphRAG 问答：图关系+项目资料+引用")
     ka.add_argument("--project", required=True)
     ka.add_argument("--question", required=True)
@@ -1023,6 +1079,8 @@ def main() -> None:
      "agent-focus": cmd_agent_focus, "agent-memory": cmd_agent_memory,
      "rag-index": cmd_rag_index, "rag-ask": cmd_rag_ask,
      "kg-build": cmd_kg_build, "kg-ingest": cmd_kg_ingest, "kg-ask": cmd_kg_ask,
+     "evidence-pack": cmd_evidence_pack, "commitment-ledger": cmd_commitment_ledger,
+     "find-moment": cmd_find_moment,
      "kg-search": cmd_kg_search, "kg-find": cmd_kg_find,
      "kg-neighbors": cmd_kg_neighbors, "kg-timeline": cmd_kg_timeline,
      "kg-path": cmd_kg_path, "kg-stats": cmd_kg_stats,

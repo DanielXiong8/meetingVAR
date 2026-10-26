@@ -408,6 +408,27 @@ class FactStore:
         fact.setdefault("source_refs", metadata.get("source_refs", []))
         return fact
 
+    def history(self, name: str) -> list[dict]:
+        """Previous snapshots + current fact, ordered by version."""
+        target = self._target(name)
+        rows = []
+        versions_dir = self.versions_dir / target.stem
+        if versions_dir.is_dir():
+            for path in sorted(versions_dir.glob("v*.md")):
+                try:
+                    rows.append(self.read_path(path))
+                except (OSError, ValueError):
+                    continue
+        if target.exists():
+            try:
+                rows.append(self.read_path(target))
+            except (OSError, ValueError):
+                pass
+        unique = {}
+        for row in rows:
+            unique[int(row.get("version", 1))] = row
+        return [unique[key] for key in sorted(unique)]
+
     def read(self, name: str) -> dict:
         target = self._target(name)
         if not target.exists():
