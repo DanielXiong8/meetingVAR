@@ -6,6 +6,8 @@
 
 截至 2026-10-27，远端默认分支 `main` 位于 0.8.0（`91aa4dc`），开发分支 `feat/agent-runtime` 位于 0.17.0（`00605df`）。新版本仍有项目资料、全库理解和预算/试跑操作，但整体已改成 Agent 工作区、抽屉和审批卡片。因此，合并到新版本前要把本次的视觉层级与交互行为移植到对应新界面，不能整组覆盖新分支的 `desktop/web/index.html`、`app.js`、`style.css`。
 
+本次草稿 PR：[ #35 · meetingVAR desktop UI hierarchy and handoff skill](https://github.com/DanielXiong8/meetingVAR/pull/35)。GitHub 当前标记它与 `feat/agent-runtime` 有冲突；这份 PR 用来审查原实现与交接材料，移植到最新界面并解决冲突后再进入可合并状态。
+
 本分支待审内容包括：
 
 - `desktop/web/index.html`、`desktop/web/app.js`、`desktop/web/style.css`：简化项目理解区域，增加清晰的操作层级、状态提示、交互反馈与蓝紫配色。
@@ -27,8 +29,8 @@
 
 Windows 验收仍需在目标运行环境完成。真实讯飞、实时兴趣 API、音频设备、屏幕采集、完整模型环境及安装包均未由合成预览验证。不要把本地 mock 的凭证检测、理解、写词或会议保存当成真实服务成功。
 
-## 手机端 agent 状态
+## Codex agent 接手入口
 
-- 可读取的对话/任务：当前账号中尚未识别到对应的手机端 agent。
-- 可共享入口：本仓库的 `codex/ui-hierarchy` 分支；推送后可从 GitHub 查看本文件、skill 和预览代码。
-- 接手确认：待手机端 agent 回复其目标分支与移植安排后补记。
+- 先打开 [草稿 PR #35](https://github.com/DanielXiong8/meetingVAR/pull/35) 查看原始实现、设计记录和冲突状态。
+- 按 `.agents/skills/meetingvar-desktop-ui/SKILL.md` 在 `feat/agent-runtime` 当前提交上移植适用的界面层级与交互；保留新版 Agent 工作区、抽屉和审批卡片。
+- PR 合并前完成 `references/windows-review.md` 所列 Windows WebView2 验收；补充目标分支上的实际验证结果。
