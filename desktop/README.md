@@ -1,5 +1,7 @@
 # meetingVAR 桌面壳 v0.1.2
 
+UI 结构与跨平台预览说明见 [UI 整理记录](../docs/UI_REFACTOR_0.1.2.md)。合并前请读 [UI 交接说明](../docs/UI_PRE_MERGE_HANDOFF.md)；仓库级 Codex skill 位于 [meetingVAR Desktop UI](../.agents/skills/meetingvar-desktop-ui/SKILL.md)。普通浏览器联调可运行 `python3 desktop/preview_ui.py`，只加载合成数据；最终 Windows 桌面入口仍为 `desktop/app.py`。
+
 ## 0.1.2：API兴趣判断与讯飞RTASR
 
 - 实时 `go/record` 停用结巴词匹配和TF-IDF直接保存；确认词只用于专业术语纠错。离线 replay/bench 保留旧规则用于实验。

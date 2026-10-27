@@ -12,8 +12,106 @@ const state = {
 /* ---------- 小工具 ---------- */
 function esc(s) {
   return String(s == null ? "" : s)
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
+// Labels accept both Windows and POSIX separators; paths passed to the bridge stay untouched.
+function fileName(path) { return String(path || "").split(/[\\/]/).pop(); }
+function uiIcon(name) { return `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-${name}"></use></svg>`; }
+function badge(text, kind = "") { return `<span class="badge${kind ? " badge-" + kind : ""}">${esc(text)}</span>`; }
+function showNotice(id, kind, title, detail = "", action = null) {
+  const box = $(id);
+  box.className = `notice notice-${kind}`;
+  box.setAttribute("role", kind === "error" ? "alert" : "status");
+  box.replaceChildren();
+  const icon = document.createElement("span");
+  icon.className = "notice-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = ({error: "!", success: "✓", warning: "!", info: "i"})[kind] || "";
+  const content = document.createElement("div");
+  content.className = "notice-content";
+  const heading = document.createElement("div");
+  heading.className = "notice-title";
+  heading.textContent = title;
+  content.appendChild(heading);
+  if (detail) {
+    const description = document.createElement("div");
+    description.className = "notice-detail";
+    description.textContent = detail;
+    content.appendChild(description);
+  }
+  box.append(icon, content);
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn btn-secondary btn-sm";
+    button.textContent = action.label || "重试";
+    button.onclick = async () => {
+      button.disabled = true;
+      try { await action.run(); }
+      catch (e) { showNotice(id, "error", "操作未完成", String(e), action); }
+      finally { if (button.isConnected) button.disabled = false; }
+    };
+    box.appendChild(button);
+  }
+  box.hidden = false;
+  return content;
+}
+function hideNotice(id) { $(id).hidden = true; $(id).replaceChildren(); }
+
+/* Viewport-aware help, available on hover, focus and click. No native title delay. */
+let helpTrigger = null, helpTimer = null;
+function hideHelp() {
+  clearTimeout(helpTimer);
+  if (helpTrigger) helpTrigger.removeAttribute("aria-describedby");
+  helpTrigger = null;
+  $("helpTooltip").hidden = true;
+}
+function showHelp(trigger) {
+  const text = trigger.dataset.tooltip;
+  if (!text) return;
+  hideHelp();
+  helpTrigger = trigger;
+  trigger.setAttribute("aria-describedby", "helpTooltip");
+  const tip = $("helpTooltip");
+  tip.textContent = text;
+  tip.hidden = false;
+  const rect = trigger.getBoundingClientRect();
+  const left = Math.max(16, Math.min(rect.left, window.innerWidth - tip.offsetWidth - 16));
+  const below = rect.bottom + 8;
+  const top = below + tip.offsetHeight <= window.innerHeight - 16
+    ? below : Math.max(16, rect.top - tip.offsetHeight - 8);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+function deferHideHelp() {
+  clearTimeout(helpTimer);
+  helpTimer = setTimeout(() => {
+    if (helpTrigger !== document.activeElement && !$("helpTooltip").matches(":hover")) hideHelp();
+  }, 150);
+}
+document.addEventListener("pointerover", (event) => {
+  const trigger = event.target.closest(".info-button[data-tooltip]");
+  if (trigger) showHelp(trigger);
+  else if (event.target.closest("#helpTooltip")) clearTimeout(helpTimer);
+});
+document.addEventListener("pointerout", (event) => {
+  if (event.target.closest(".info-button, #helpTooltip")) deferHideHelp();
+});
+document.addEventListener("focusin", (event) => {
+  const trigger = event.target.closest(".info-button[data-tooltip]");
+  if (trigger) showHelp(trigger); else hideHelp();
+});
+document.addEventListener("focusout", deferHideHelp);
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest(".info-button[data-tooltip]");
+  if (trigger) showHelp(trigger);
+  else if (!event.target.closest("#helpTooltip")) hideHelp();
+});
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") hideHelp(); });
+window.addEventListener("resize", hideHelp);
+$("workspace").addEventListener("scroll", hideHelp);
+
 function fmtClock(sec) {
   sec = Math.max(0, Math.floor(sec));
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -36,6 +134,7 @@ function toast(msg, ms = 5000) {
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
 function switchPage(name) {
+  hideHelp();
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
   if (name === "library") refreshLibrary();
@@ -178,7 +277,7 @@ function handleEvent(ev) {
     else toast("全库理解中断：" + (ev.error || ""), 9000);
   } else if (ev.type === "transcribe_done") {
     if (ev.ok) {
-      toast("文件转写完成：" + (ev.out || "").split("\\").pop(), 9000);
+      toast("文件转写完成：" + fileName(ev.out), 9000);
       pushTicker("", "系统", "文件转写完成 → " + (ev.out || ""), "sys");
     } else {
       toast("文件转写失败：" + (ev.error || "未知错误"), 9000);
@@ -189,12 +288,16 @@ function handleEvent(ev) {
 
 function pushTicker(t, spk, text, kind) {
   state.ticker.push({ t, spk, text, kind });
-  const body = $("ticker");
+  const isLog = kind === "sys" || kind === "err";
+  const body = $(isLog ? "eventLog" : "ticker");
   const div = document.createElement("div");
   div.className = "tk" + (kind ? " " + kind : "");
   div.innerHTML = `<span class="t">${esc(t)}</span><span class="s">${esc(spk)}</span>${esc(text)}`;
   body.appendChild(div);
-  if (state.follow) body.scrollTop = body.scrollHeight;
+  if (isLog) {
+    $("logCount").textContent = body.children.length;
+    body.scrollTop = body.scrollHeight;
+  } else if (state.follow) body.scrollTop = body.scrollHeight;
 }
 $("ticker").addEventListener("scroll", () => {
   const box = $("ticker");
@@ -294,7 +397,9 @@ $("btnRec").onclick = async () => {
   state.captionCount = 0; state.lastCaptionAt = null; state.phase = "loading"; state.screen = {};
   state.partials.clear(); $("partialCaption").hidden = true;
   $("interestStatus").textContent = "正在准备兴趣判断…";
-  $("ticker").innerHTML = ""; $("statHits").textContent = "命中 0";
+  $("ticker").innerHTML = ""; $("eventLog").replaceChildren(); $("logCount").textContent = "0";
+  hideNotice("meetingNotice");
+  $("statHits").textContent = "命中 0";
   $("captionCount").textContent = "0 句"; $("statSpeakers").textContent = "说话人 —";
   $("screenPreview").hidden = true; $("screenPreview").removeAttribute("src");
   $("screenEmpty").hidden = false; $("screenEmpty").textContent = "等待屏幕首帧…";
@@ -307,7 +412,11 @@ $("btnRec").onclick = async () => {
   }
   catch (e) { r = {ok: false, error: String(e)}; }
   finally { state.starting = false; $("btnRec").disabled = false; }
-  if (!r.ok) { state.phase = "idle"; $("captureStatus").textContent = "启动失败"; toast("启动失败：" + (r.error || "")); return; }
+  if (!r.ok) {
+    state.phase = "idle"; $("captureStatus").textContent = "启动失败";
+    showNotice("meetingNotice", "error", "会议未能启动", r.error || "请检查引擎与 API 配置", {run: () => $("btnRec").onclick()});
+    return;
+  }
   setRunning(true, r.started_at);
   const cfg0 = state.cfg || {};
   const streaming = cfg0.asr_engine === "xfyun_rtasr";
@@ -346,7 +455,7 @@ function renderTree(nodes, box, depth) {
     row.className = "tree-row" + (n.dir ? " tree-dir" : "");
     row.style.paddingLeft = (6 + depth * 14) + "px";
     row.innerHTML =
-      `<span class="tree-ico">${n.dir ? "📁" : fileGlyph(n.name)}</span>` +
+      `<span class="tree-ico">${n.dir ? uiIcon("folder") : fileGlyph(n.name)}</span>` +
       `<span class="tree-name">${esc(n.name)}</span>` +
       (!n.dir ? `<span class="tree-size">${fmtSize(n.size)}</span>` : "");
     box.appendChild(row);
@@ -354,62 +463,93 @@ function renderTree(nodes, box, depth) {
       const kids = document.createElement("div");
       kids.hidden = depth >= 1; // 顶层目录默认展开，更深层折叠
       renderTree(n.children || [], kids, depth + 1);
-      row.onclick = () => { kids.hidden = !kids.hidden; row.classList.toggle("collapsed", kids.hidden); };
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.setAttribute("aria-label", n.name);
+      row.setAttribute("aria-expanded", String(!kids.hidden));
+      const toggle = () => {
+        kids.hidden = !kids.hidden;
+        row.classList.toggle("collapsed", kids.hidden);
+        row.setAttribute("aria-expanded", String(!kids.hidden));
+      };
+      row.onclick = toggle;
+      row.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
+      };
       box.appendChild(kids);
     }
   }
 }
 async function scanProject(path) {
+  if (undState.running || undState.starting || undState.planning) { toast("请先等待或取消当前理解任务"); return; }
+  const scanVersion = (state.scanVersion || 0) + 1;
+  state.scanVersion = scanVersion;
   state.project = path;
-  resetUnderstand();  // 换项目：清空全库理解卡片（结果属于旧项目）
+  state.scan = null;
+  resetUnderstand();
   $("projPath").textContent = path;
+  $("projManual").value = path;
   $("homeProject").textContent = path;
   $("rpProjName").textContent = path;
-  $("scanMeta").textContent = "读取中…（大文件夹约需数秒到半分钟）";
-  $("scanTerms").innerHTML = "";
-  $("sideTree").innerHTML = "";
+  $("scanMeta").replaceChildren();
+  $("scanTerms").replaceChildren();
+  $("sideTree").replaceChildren();
   $("treeStat").textContent = "";
   $("btnUseProject").disabled = true;
-  const d = await pywebview.api.scan_project(path);
+  $("btnScanInput").disabled = true;
+  $("btnPick").disabled = true;
+  showNotice("scanStatus", "busy", "正在读取项目资料");
+  let d;
+  try { d = await pywebview.api.scan_project(path); }
+  catch (e) { d = {ok: false, error: String(e)}; }
+  if (scanVersion !== state.scanVersion) return;
   state.scan = d;
+  $("btnScanInput").disabled = false;
+  $("btnPick").disabled = false;
   if (!d.ok) {
-    $("scanMeta").textContent = "读取失败：" + (d.error || "");
-    $("sideTree").innerHTML = `<div class="muted" style="padding:4px 8px">读取失败：${esc(d.error || "")}</div>`;
+    showNotice("scanStatus", "error", "项目读取失败", d.error || "请检查文件夹路径", {run: () => scanProject(path)});
+    syncUnderstandButtons();
     return;
   }
+  hideNotice("scanStatus");
   renderTree(d.tree || [], $("sideTree"), 0);
-  $("treeStat").textContent = "（" + (d.doc_count || 0) + " 份文档）";
-  let meta = `文档 ${d.doc_count} 份`;
+  $("treeStat").textContent = `${d.doc_count || 0} 份`;
+  let meta = badge(`${d.doc_count || 0} 份文档`);
   if (d.skipped && d.skipped.length) {
-    const head = d.skipped.slice(0, 3).map(esc).join("、");
-    meta += ` · 跳过 ${d.skipped.length} 个非文本文件（${head}${d.skipped.length > 3 ? " 等" : ""}）`;
+    meta += `<span class="badge">已跳过 ${d.skipped.length} 个非文本文件</span>`;
   }
-  $("scanMeta").textContent = meta;
+  $("scanMeta").innerHTML = meta;
   const chips = (obj, n = 20) => Object.keys(obj).slice(0, n)
     .map((w) => `<span class="chip"><b>${esc(w)}</b></span>`).join("");
   let html = "";
-  if (d.repo && d.repo.is_repo && Object.keys(d.repo.top || {}).length) html += `<h3>代码符号（L0）</h3><div class="chips">${chips(d.repo.top)}</div>`;
-  if (d.persons && d.persons.length) html += `<h3>人物</h3><div class="chips">${d.persons.map((p) => `<span class="chip">${esc(p)}</span>`).join("")}</div>`;
+  if (d.repo && d.repo.is_repo && Object.keys(d.repo.top || {}).length) html += `<details class="rawterms"><summary>代码符号</summary><div class="chips">${chips(d.repo.top)}</div></details>`;
+  if (d.persons && d.persons.length) html += `<details class="rawterms"><summary>人物 · ${d.persons.length}</summary><div class="chips">${d.persons.map((person) => `<span class="chip">${esc(person)}</span>`).join("")}</div></details>`;
   if (d.terms && Object.keys(d.terms).length) {
-    // 原始 L1 词表默认折叠：实测在小说/杂文档上产出的多是 A4/AM5/碎片这类噪音，
-    // 真正该看的候选词走下面的「全库理解」。这里只留调试入口，不再抢视线。
-    html += `<details class="rawterms"><summary class="muted">原始抽取（未治理，仅供调试）· ${d.term_count} 个词</summary>` +
-      `<div class="chips">${chips(d.terms, 40)}</div></details>`;
+    html += `<details class="rawterms"><summary>原始抽取 · ${d.term_count || 0} 个词（调试）</summary><div class="chips">${chips(d.terms, 40)}</div></details>`;
   }
-  if (d.notes && d.notes.length) html += `<div class="muted">${d.notes.map(esc).join("；")}</div>`;
-  if (!html) html = `<div class="muted">没有可从文本抽取的内容（图片/压缩包不会被解析）</div>`;
-  $("scanTerms").innerHTML = html;
+  const notes = [...(d.notes || []), ...(d.skipped || []).map((name) => `跳过：${name}`)];
+  if (notes.length) html += `<details class="rawterms"><summary>读取明细 · ${notes.length}</summary><div class="muted">${notes.map(esc).join("<br>")}</div></details>`;
+  $("scanTerms").innerHTML = html
+    ? `<details class="rawterms"><summary>项目索引与读取明细</summary><div>${html}</div></details>` : "";
   $("btnUseProject").disabled = false;
-  await pywebview.api.set_config({ last_project: path });
+  syncUnderstandButtons();
+  try { await pywebview.api.set_config({last_project: path}); }
+  catch (e) { showNotice("scanStatus", "error", "项目已读取，但未能保存最近项目", String(e), {run: () => scanProject(path)}); }
 }
 $("btnPick").onclick = async () => {
-  const p = await pywebview.api.pick_folder();
-  if (p) scanProject(p);
+  try {
+    const path = await pywebview.api.pick_folder();
+    if (path) await scanProject(path);
+  } catch (e) { showNotice("scanStatus", "error", "无法打开文件夹选择器", String(e), {run: () => $("btnPick").onclick()}); }
 };
 $("btnScanInput").onclick = () => {
-  const p = $("projManual").value.trim();
-  if (p) scanProject(p);
+  const path = $("projManual").value.trim();
+  if (path) return scanProject(path);
+  $("projManual").focus();
 };
+$("projManual").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.isComposing && !$("btnScanInput").disabled) $("btnScanInput").click();
+});
 $("btnUseProject").onclick = () => { switchPage("home"); toast("已就绪——回主页按「开始会议」"); };
 
 /* ---------- 会议库（按项目分组：项目 → 场次 → 详情） ---------- */
@@ -495,14 +635,14 @@ function applyProviderUi(provider) {
 }
 function applyAsrUi(engine) {
   $("cfgAsr").value = engine;
-  $("xfyunRow").hidden = engine === "local";
-  $("xfyunResult").hidden = engine === "local";
-  $("captionHelp").textContent = engine === "xfyun_rtasr"
+  $("xfyunSettings").hidden = engine === "local";
+  $("captionHelp").dataset.tooltip = engine === "xfyun_rtasr"
     ? "讯飞RTASR临时字幕持续更新，句尾定稿后进入兴趣判断。"
     : "当前使用分块识别；字幕延迟包含音频块时长与推理耗时。";
 }
 async function refreshLlm() {
   const st = await pywebview.api.llm_status();
+  $("llmStatus").className = "badge" + (st.up ? " badge-success" : "");
   $("llmStatus").textContent = st.up
     ? `● 运行中（${st.model || "模型已载入"}）`
     : (st.managed ? "○ 启动中…（首次加载约 30-60 秒）" : "○ 未运行");
@@ -554,6 +694,7 @@ async function loadConfig() {
   $("cfgModel").value = cfg.llm_model || "";
   $("cfgApiKey").value = cfg.llm_api_key || "";
   applyProviderUi(cfg.llm_provider || "local");
+  updateUnderstandProvider();
   if (cfg.last_project) {
     state.project = cfg.last_project;
     $("homeProject").textContent = cfg.last_project;
@@ -575,6 +716,8 @@ $("btnSaveCfg").onclick = async () => {
   });
   state.cfg = await pywebview.api.get_config();
   refreshLlm();
+  updateUnderstandProvider();
+  invalidateUnderstandPlan();
   toast("配置已保存");
 };
 
@@ -591,28 +734,42 @@ $("btnXfyunDir").onclick = async () => {
     $("cfgXfyunDir").value = p;
     await pywebview.api.set_config({ xfyun_dir: p });
     state.cfg = await pywebview.api.get_config();
-    $("xfyunResult").textContent = "文件夹已保存，点「检测」检查对应服务凭证。";
+    showNotice("xfyunResult", "info", "凭证目录已保存", "点击检测凭证检查配置格式。");
   }
 };
-$("btnXfyunCheck").onclick = async () => {
-  const dir = $("cfgXfyunDir").value.trim();
-  await pywebview.api.set_config({ xfyun_dir: dir });
-  state.cfg = await pywebview.api.get_config();
-  $("xfyunResult").textContent = "检查配置中（不发送音频）…";
-  const r = await pywebview.api.check_xfyun();
-  if (!r.ok && !r.rtasr && !r.iat && !r.lfasr) {
-    $("xfyunResult").textContent = "✗ " + (r.error || "未找到可用凭证");
-    return;
-  }
-  const mark = (x) => x ? (x.valid ? (x.ok === false ? "✗ " : "✓ ") : "✗ ") : "—";
-  const parts = [
-    `${mark(r.rtasr)}RTASR连续实时转写` + (r.rtasr && r.rtasr.error ? `：${r.rtasr.error}` : ""),
-    `${mark(r.iat)}IAT分块听写备用` + (r.iat && r.iat.error ? `：${r.iat.error}` : ""),
-    `${mark(r.lfasr)}录音文件转写（文件转写工具）` + (r.lfasr && r.lfasr.error ? `：${r.lfasr.error}` : ""),
-  ];
-  if (r.notes && r.notes.length) parts.push("提示：" + r.notes.join("；"));
-  $("xfyunResult").textContent = parts.join("　|　");
-};
+async function checkXfyun() {
+  $("btnXfyunCheck").disabled = true;
+  showNotice("xfyunResult", "busy", "正在检查凭证格式");
+  try {
+    await pywebview.api.set_config({xfyun_dir: $("cfgXfyunDir").value.trim()});
+    state.cfg = await pywebview.api.get_config();
+    const result = await pywebview.api.check_xfyun();
+    const currentKey = $("cfgAsr").value === "xfyun_rtasr" ? "rtasr" : "iat";
+    const current = result[currentKey];
+    const valid = !!(current && current.valid && current.ok !== false);
+    const checks = [["rtasr", "RTASR"], ["iat", "IAT"], ["lfasr", "文件转写"]];
+    const content = showNotice("xfyunResult", valid ? "success" : "error",
+      valid ? "当前识别服务凭证格式通过" : "未找到当前服务的可用凭证",
+      valid ? "格式检查不代表服务连接或配额验证通过。" : ((current && current.error) || result.error || "请核对所选服务和凭证目录。"),
+      valid ? null : {run: checkXfyun});
+    const metrics = document.createElement("div");
+    metrics.className = "metric-row";
+    metrics.innerHTML = checks.map(([key, label]) => {
+      const item = result[key];
+      const ok = item && item.valid && item.ok !== false;
+      return badge(`${label} · ${ok ? "格式通过" : "未通过"}`, ok ? "success" : "error");
+    }).join("");
+    content.appendChild(metrics);
+    if (result.notes && result.notes.length) {
+      const notes = document.createElement("details");
+      notes.className = "rawterms";
+      notes.innerHTML = `<summary>检测明细</summary><div class="muted">${result.notes.map(esc).join("<br>")}</div>`;
+      content.appendChild(notes);
+    }
+  } catch (e) { showNotice("xfyunResult", "error", "凭证检测未完成", String(e), {run: checkXfyun}); }
+  finally { $("btnXfyunCheck").disabled = false; }
+}
+$("btnXfyunCheck").onclick = checkXfyun;
 
 /* ---------- 模型厂商（本地 / 自定义 API） ---------- */
 $("cfgProvider").onchange = async () => {
@@ -620,161 +777,305 @@ $("cfgProvider").onchange = async () => {
   await pywebview.api.set_config({ llm_provider: $("cfgProvider").value });
   state.cfg = await pywebview.api.get_config();
   refreshLlm();
+  updateUnderstandProvider();
+  invalidateUnderstandPlan();
   toast($("cfgProvider").value === "custom" ? "使用自定义 OpenAI 兼容 API" : "使用本地模型服务");
 };
-$("btnTestLlm").onclick = async () => {
-  await pywebview.api.set_config({
-    llm_base_url: $("cfgBaseUrl").value.trim(),
-    llm_model: $("cfgModel").value.trim(),
-    llm_api_key: $("cfgApiKey").value.trim(),
-  });
-  state.cfg = await pywebview.api.get_config();
-  $("llmTestResult").textContent = "测试中…";
-  const r = await pywebview.api.test_llm();
-  $("llmTestResult").textContent = r.ok
-    ? `✓ ${r.note || "连通"}` + (r.models && r.models.length ? `：${r.models.join(", ")}` : "")
-    : "✗ " + (r.error || "失败");
-  refreshLlm();
-};
+async function testLlm() {
+  $("btnTestLlm").disabled = true;
+  showNotice("llmTestResult", "busy", "正在测试生成");
+  try {
+    await pywebview.api.set_config({llm_base_url: $("cfgBaseUrl").value.trim(), llm_model: $("cfgModel").value.trim(), llm_api_key: $("cfgApiKey").value.trim()});
+    state.cfg = await pywebview.api.get_config();
+    const result = await pywebview.api.test_llm();
+    showNotice("llmTestResult", result.ok ? "success" : "error", result.ok ? "API 生成测试通过" : "API 生成测试失败",
+      result.ok ? (result.note || "已收到生成结果") : (result.error || "请检查 API 地址、模型和凭证"), result.ok ? null : {run: testLlm});
+    refreshLlm();
+    invalidateUnderstandPlan();
+  } catch (e) { showNotice("llmTestResult", "error", "API 测试未完成", String(e), {run: testLlm}); }
+  finally { $("btnTestLlm").disabled = false; }
+}
+$("btnTestLlm").onclick = testLlm;
 
 /* ---------- 文件转写工具（媒体文件 → 讯飞 → transcript.txt） ---------- */
-let tfTimer = null;
+let tfTimer = null, tfPath = "", tfPolling = false;
 async function pollTf() {
-  const st = await pywebview.api.transcribe_media_status();
-  const line = $("tfLine");
-  if (st.running) {
-    line.hidden = false;
-    line.textContent = `文件转写中：${(st.file || "").split("\\").pop()} · ${st.progress || "…"}`;
-    return;
+  if (tfPolling) return;
+  tfPolling = true;
+  try {
+    const status = await pywebview.api.transcribe_media_status();
+    if (status.running) { showNotice("tfLine", "busy", "文件转写中", `${fileName(status.file)} · ${status.progress || "正在处理"}`); return; }
+    if (!status.done) return;
+    clearInterval(tfTimer); tfTimer = null;
+    $("btnTf").disabled = false;
+    showNotice("tfLine", status.ok ? "success" : "error", status.ok ? "文件转写完成" : "文件转写失败",
+      status.ok ? status.out : status.error, status.ok ? null : {run: () => startTranscription(tfPath)});
+  } catch (e) {
+    showNotice("tfLine", "error", "无法读取转写进度", String(e), {label: "重试连接", run: pollTf});
+  } finally { tfPolling = false; }
+}
+async function startTranscription(path) {
+  if (state.running) { toast("请先结束会议，再进行文件转写"); return; }
+  tfPath = path;
+  $("btnTf").disabled = true;
+  try {
+    const result = await pywebview.api.transcribe_media_start(path);
+    if (!result.ok) throw new Error(result.error || "无法启动转写任务");
+    showNotice("tfLine", "busy", "文件转写中", fileName(path));
+    if (tfTimer) clearInterval(tfTimer);
+    tfTimer = setInterval(pollTf, 2000);
+  } catch (e) {
+    $("btnTf").disabled = false;
+    showNotice("tfLine", "error", "文件转写未能启动", String(e), {run: () => startTranscription(path)});
   }
-  if (!st.done) return;
-  clearInterval(tfTimer); tfTimer = null;
-  line.hidden = false;
-  line.textContent = st.ok ? `✓ 转写完成：${st.out}` : `✗ 转写失败：${st.error}`;
-  if (st.ok && st.out) toast("转写稿已生成：" + st.out.split("\\").pop(), 9000);
 }
 $("btnTf").onclick = async () => {
-  if (state.running) { toast("会议进行中，先停止会议再做文件转写（避免抢云端配额）"); return; }
-  const p = await pywebview.api.pick_media();
-  if (!p) return;
-  const r = await pywebview.api.transcribe_media_start(p);
-  if (!r.ok) { toast("无法开始转写：" + (r.error || "")); return; }
-  $("tfLine").hidden = false;
-  $("tfLine").textContent = `文件转写中：${p.split("\\").pop()} · 启动…`;
-  toast("已开始转写（讯飞云端，通常每分钟音频几秒出结果）");
-  if (tfTimer) clearInterval(tfTimer);
-  tfTimer = setInterval(pollTf, 2000);
+  if (state.running) { toast("请先结束会议，再进行文件转写"); return; }
+  const path = await pywebview.api.pick_media();
+  if (path) await startTranscription(path);
 };
-/* ---------- 全库理解（项目页：预算 → 后台跑 → 勾选 → 写词表） ---------- */
-let undTimer = null;
+
+/* ---------- Understanding: plan, run, resume, review. Backend contract unchanged. ---------- */
+let undTimer = null, undPolling = false;
+const undState = {plan: null, planning: false, starting: false, running: false, maxChunks: 0, cancelled: false, resultReady: false, termsWritten: false};
+function syncProjectJourney() {
+  const sourceReady = !!(state.scan && state.scan.ok);
+  const budgetReady = !!(undState.plan && undState.plan.ready);
+  const active = undState.starting || undState.running;
+  const resultReady = undState.resultReady && !active;
+  const complete = [sourceReady, budgetReady, resultReady, undState.termsWritten];
+  const allComplete = complete.every(Boolean);
+  const current = !sourceReady ? 0 : !budgetReady ? 1 : !resultReady ? 2 : 3;
+  const available = [!active && !undState.planning, sourceReady, budgetReady || active, resultReady];
+  document.querySelectorAll(".journey-step").forEach((step, index) => {
+    step.dataset.state = complete[index] ? "complete" : index === current ? "current" : "pending";
+    if (index === current && !allComplete) step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
+    step.disabled = !available[index];
+    step.querySelector(".step-number").innerHTML = complete[index] ? uiIcon("check") : String(index + 1);
+  });
+}
+document.querySelectorAll(".journey-step").forEach((step) => {
+  step.onclick = () => {
+    const targets = {source: "projManual", budget: "btnUndPlan", read: undState.running ? "btnUndCancel" : "btnUndGo", confirm: "btnUndWrite"};
+    const target = $(targets[step.dataset.step]);
+    if (!target) return;
+    target.scrollIntoView({behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center"});
+    if (!target.disabled) target.focus({preventScroll: true});
+  };
+});
+function syncUnderstandButtons() {
+  const busy = undState.planning || undState.starting || undState.running;
+  const ready = !!(undState.plan && undState.plan.ready && state.scan && state.scan.ok);
+  $("btnUndGo").disabled = busy || !ready;
+  $("btnUndSmall").disabled = busy || !ready;
+  $("btnUndPlan").disabled = busy || !state.project || !(state.scan && state.scan.ok);
+  $("btnUndCancel").hidden = !undState.running;
+  $("btnPick").disabled = busy;
+  $("btnScanInput").disabled = busy;
+  $("projManual").disabled = busy;
+  $("btnTreeRefresh").disabled = busy;
+  $("undCard").setAttribute("aria-busy", String(busy));
+  $("btnUndPlan").dataset.loading = String(undState.planning);
+  $("btnUndPlan").textContent = undState.planning ? "计算中…" : "先算预算";
+  $("btnUndGo").dataset.loading = String(undState.starting || undState.running);
+  $("btnUndGo").textContent = undState.starting ? "正在启动…" : undState.running ? "理解中…" : undState.resultReady ? "重新理解" : "开始全库理解";
+  syncProjectJourney();
+}
+function updateUnderstandProvider() {
+  const provider = (state.cfg || {}).llm_provider || "local";
+  $("undProvider").textContent = PROVIDER_LABEL[provider] || provider;
+  $("undProviderHelp").dataset.tooltip = provider === "custom"
+    ? "项目文档块将发送至设置中的自定义 API。预算不包含厂商报价，实际用量以厂商账单为准。"
+    : "本地模型在本机处理项目资料。模型服务需先在设置页启动。";
+}
 function resetUnderstand() {
-  if (undTimer) { clearInterval(undTimer); undTimer = null; }
-  $("undPlanLine").textContent = "";
-  $("undProgress").textContent = "";
+  if (undTimer) clearInterval(undTimer);
+  undTimer = null;
+  undState.plan = null;
+  undState.running = false;
+  undState.cancelled = false;
+  undState.resultReady = false;
+  undState.termsWritten = false;
+  $("undPlanLine").hidden = true;
+  $("undPlanLine").replaceChildren();
+  hideNotice("undProgress");
+  hideNotice("undFeedback");
   $("undResult").hidden = true;
-  $("undResult").innerHTML = "";
-  $("btnUndGo").disabled = true;
-  $("btnUndSmall").disabled = true;
-  $("btnUndCancel").hidden = true;
+  $("undResult").replaceChildren();
+  $("btnUndGo").textContent = "开始全库理解";
+  updateUnderstandProvider();
+  syncUnderstandButtons();
+}
+function invalidateUnderstandPlan() {
+  if (undState.running || undState.starting || undState.planning) return;
+  undState.plan = null;
+  $("undPlanLine").hidden = true;
+  hideNotice("undFeedback");
+  syncUnderstandButtons();
 }
 async function undPoll() {
-  const st = await pywebview.api.understand_status();
-  if (st.running) {
-    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重复花算力）`;
-    $("btnUndCancel").hidden = false;
-    return;
-  }
-  $("btnUndCancel").hidden = true;
-  if (!st.done) return;
-  clearInterval(undTimer); undTimer = null;
-  const r = st.result || {};
-  $("undProgress").textContent = st.ok
-    ? `✓ 读毕 ${r.chunks_read}/${r.chunks_total} 块 · 覆盖 ${r.covered_chars}/${r.unique_chars} 字（${r.coverage_pct}%）· 缓存命中 ${r.cache_hits} 块`
-    : `✗ 中断：${st.error || "未知错误"}（已完成块保留，可续跑）`;
-  if (st.ok) renderUnderstandResult(r);
+  if (undPolling) return;
+  undPolling = true;
+  try {
+    const status = await pywebview.api.understand_status();
+    if (status.folder && status.folder !== state.project) return;
+    if (status.running) {
+      const content = showNotice("undProgress", "busy", "正在理解项目资料", status.progress || "等待模型返回");
+      const progress = document.createElement("progress");
+      progress.className = "progress-track";
+      progress.setAttribute("aria-label", "项目理解进度");
+      const match = (status.progress || "").match(/(\d+)\s*\/\s*(\d+)\s*块/);
+      if (match && Number(match[2]) > 0) { progress.max = Number(match[2]); progress.value = Number(match[1]); }
+      content.appendChild(progress);
+      return;
+    }
+    if (!status.done) return;
+    clearInterval(undTimer); undTimer = null;
+    undState.running = false;
+    syncUnderstandButtons();
+    hideNotice("undProgress");
+    const result = status.result || {};
+    if (status.ok) {
+      showNotice("undFeedback", "success", undState.maxChunks ? "小样试跑完成" : "项目理解完成");
+      $("undFeedback").querySelector(".notice-content").insertAdjacentHTML("beforeend", `<div class="metric-row">${badge(`已读 ${result.chunks_read || 0}/${result.chunks_total || 0} 块`)}${badge(`覆盖 ${result.coverage_pct || 0}%`)}${badge(`缓存命中 ${result.cache_hits || 0} 块`)}</div>`);
+      renderUnderstandResult(result);
+      $("btnUndGo").textContent = "重新理解";
+    } else {
+      showNotice("undFeedback", undState.cancelled ? "info" : "error", undState.cancelled ? "理解任务已取消" : "全库理解已中断",
+        status.error || "已完成块保留，可继续运行。", {label: undState.cancelled ? "继续理解" : "重试", run: () => startUnderstand(undState.maxChunks)});
+    }
+  } catch (e) {
+    showNotice("undFeedback", "error", "无法读取理解进度", String(e), {label: "重试连接", run: undPoll});
+  } finally { undPolling = false; }
 }
-function renderUnderstandResult(r) {
-  const box = $("undResult");
-  const terms = r.terms || [];
+function renderUnderstandResult(result) {
+  const terms = result.terms || [];
+  undState.resultReady = true;
+  undState.termsWritten = false;
   const parts = [];
-  if (r.overview) parts.push(`<div class="muted">一句话理解：${esc(r.overview)}</div>`);
-  parts.push(`<div class="row"><b>候选词</b><span class="muted">数字=文档中出现次数；勾选后只用于专业词纠错，不直接触发保存</span>
-    <button class="btn btn-primary" id="btnUndWrite">写入项目词表</button></div>`);
-  parts.push('<div class="chips und-chips">' + terms.map((t, i) =>
-    `<label class="chip und-chip" title="${esc(t.why || "")}"><input type="checkbox" class="und-pick" data-term="${esc(t.term)}" checked> ${esc(t.term)} <span class="muted">x${t.count}</span></label>`
-  ).join("") + "</div>");
-  if ((r.persons || []).length) {
-    parts.push('<div class="muted" style="margin-top:6px">人物：' +
-      r.persons.map((p) => `${esc(p.name)}(x${p.count})`).join("、") + "</div>");
-  }
-  if ((r.events || []).length) {
-    parts.push('<details style="margin-top:6px"><summary class="muted">事件摘录（' +
-      r.events.length + ' 条）</summary>' + r.events.slice(0, 8).map((e) =>
-        `<div class="muted">· ${esc(e.what)}${e.quote ? `（原句：${esc(e.quote)}）` : ""}</div>`).join("") + "</details>");
-  }
-  box.innerHTML = parts.join("");
-  box.hidden = false;
-  $("btnUndWrite").onclick = async () => {
-    const picked = [...document.querySelectorAll(".und-pick:checked")].map((c) => c.dataset.term);
-    if (!picked.length) { toast("没有勾选任何词"); return; }
-    const w = await pywebview.api.terms_write(state.project, picked);
-    if (!w.ok) { toast("写入失败：" + (w.error || "")); return; }
-    toast(`已写入 ${w.count} 词 → 下次「开始会议」自动采用（${(w.out || "").split("\\").pop()}）`, 9000);
+  if (result.overview) parts.push(`<div class="result-overview">${esc(result.overview)}</div>`);
+  parts.push(`<div class="result-heading"><div class="section-heading"><h3>确认词表</h3><button type="button" class="info-button" aria-label="关于确认词表" data-tooltip="数字表示词语在文档中出现的次数。勾选后写入项目词表，下次会议用于专业词纠错；不会直接触发保存。">i</button></div><button class="btn btn-primary" id="btnUndWrite" ${terms.length ? "" : "disabled"}>写入项目词表</button></div>`);
+  if (terms.length) parts.push(`<div class="selection-toolbar"><span id="termSelectionCount" class="badge" role="status">已选 ${terms.length} / ${terms.length}</span><button type="button" id="btnTermsAll" class="btn btn-ghost btn-sm">全选</button><button type="button" id="btnTermsNone" class="btn btn-ghost btn-sm">清空</button></div>`);
+  parts.push('<div class="chips und-chips">' + terms.map((term) =>
+    `<label class="chip und-chip selected" title="${esc(term.why || "")}"><input type="checkbox" class="und-pick" data-term="${esc(term.term)}" checked> ${esc(term.term)} <span class="muted">×${esc(term.count || 0)}</span></label>`
+  ).join("") + '</div><div id="termsFeedback" hidden></div>');
+  if ((result.persons || []).length) parts.push(`<details class="rawterms"><summary>人物 · ${result.persons.length}</summary><div class="chips">${result.persons.map((person) => `<span class="chip">${esc(person.name)} ${badge(`×${person.count}`)}</span>`).join("")}</div></details>`);
+  if ((result.events || []).length) parts.push(`<details class="rawterms"><summary>事件摘录 · ${result.events.length}</summary><div class="muted">${result.events.slice(0, 8).map((event) => `<p>${esc(event.what)}${event.quote ? `（原句：${esc(event.quote)}）` : ""}</p>`).join("")}</div></details>`);
+  $("undResult").innerHTML = parts.join("");
+  $("undResult").hidden = false;
+  const inputs = [...$("undResult").querySelectorAll(".und-pick")];
+  const updateSelection = () => {
+    const count = inputs.filter((input) => input.checked).length;
+    inputs.forEach((input) => input.closest("label").classList.toggle("selected", input.checked));
+    if ($("termSelectionCount")) $("termSelectionCount").textContent = `已选 ${count} / ${terms.length}`;
+    $("btnUndWrite").disabled = count === 0;
+    undState.termsWritten = false;
+    hideNotice("termsFeedback");
+    syncProjectJourney();
   };
+  inputs.forEach((input) => input.addEventListener("change", updateSelection));
+  if (terms.length) {
+    $("btnTermsAll").onclick = () => { inputs.forEach((input) => { input.checked = true; }); updateSelection(); };
+    $("btnTermsNone").onclick = () => { inputs.forEach((input) => { input.checked = false; }); updateSelection(); };
+  }
+  $("btnUndWrite").onclick = async () => {
+    const picked = inputs.filter((input) => input.checked).map((input) => input.dataset.term);
+    if (!picked.length) return;
+    const project = state.project;
+    const button = $("btnUndWrite");
+    button.disabled = true;
+    try {
+      const written = await pywebview.api.terms_write(project, picked);
+      if (state.project !== project || !button.isConnected) return;
+      if (!written.ok) throw new Error(written.error || "写入失败");
+      undState.termsWritten = true;
+      syncProjectJourney();
+      showNotice("termsFeedback", "success", `已写入 ${written.count} 个专业词`, "下次开始会议时自动采用。");
+    } catch (e) {
+      if (state.project === project && button.isConnected) showNotice("termsFeedback", "error", "词表写入失败", String(e), {run: () => button.onclick()});
+    } finally { if (button.isConnected) button.disabled = !inputs.some((input) => input.checked); }
+  };
+  syncUnderstandButtons();
 }
-$("btnUndPlan").onclick = async () => {
-  if (!state.project) { toast("先选项目文件夹"); return; }
-  $("undPlanLine").textContent = "计算中…";
-  const p = await pywebview.api.understand_plan(state.project);
-  if (!p.ok) { $("undPlanLine").textContent = "失败：" + (p.error || ""); return; }
-  $("undProvider").textContent = p.label || (p.provider === "custom" ? "自定义 API" : "本地模型");
-  $("undEgress").textContent = p.egress || "";
-  const hrs = p.est_local_minutes >= 90 ? `${(p.est_local_minutes / 60).toFixed(1)} 小时` : `${p.est_local_minutes} 分钟`;
-  // 摘要一行 + 明细折叠（曾被几十条去重说明糊成一面墙——实测教训）
-  let line = `全库 ${p.chars} 字 / ${p.chunks.length} 块；本地模型预计 ~${hrs}`;
-  if (p.notes_summary) line += `；${p.notes_summary}`;
-  line += "；云端厂商通常快 10~50 倍（费用在厂商侧）";
-  let extra = "";
-  if (p.notes && p.notes.length) {
-    extra = `<details class="rawterms"><summary class="muted">明细（${p.notes.length} 条）</summary>` +
-      `<div class="muted">${p.notes.map(esc).join("<br>")}</div></details>`;
-  }
-  if (!p.ready && p.error) {
-    extra = `<div class="pick-warn">✗ 模型未就绪：${esc(p.error)}</div>` + extra;
-  }
-  $("undPlanLine").innerHTML = esc(line) + extra;
-  $("btnUndGo").disabled = !p.ready;
-  $("btnUndSmall").disabled = !p.ready;
-};
-$("btnUndGo").onclick = async () => {
-  if (state.running) { toast("会议进行中——全库理解会抢占模型资源，请先结束会议"); return; }
-  const r = await pywebview.api.understand_start(state.project, 0);
-  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
-  $("undResult").hidden = true;
-  $("undProgress").textContent = "启动中…";
-  if (undTimer) clearInterval(undTimer);
-  undTimer = setInterval(undPoll, 2000);
-};
-$("btnUndSmall").onclick = async () => {
-  if (state.running) { toast("会议进行中——请先结束会议再跑全库理解"); return; }
-  const r = await pywebview.api.understand_start(state.project, 5);
-  if (!r.ok) { toast("启动失败：" + (r.error || "")); return; }
-  toast("小样试跑：只读前 5 块，用来先看产出质量");
-  $("undResult").hidden = true;
-  if (undTimer) clearInterval(undTimer);
-  undTimer = setInterval(undPoll, 2000);
-};
+async function planUnderstand() {
+  if (!state.project || undState.planning || undState.running || undState.starting) return;
+  undState.planning = true;
+  undState.plan = null;
+  syncUnderstandButtons();
+  hideNotice("undFeedback");
+  $("undPlanLine").hidden = true;
+  showNotice("undProgress", "busy", "正在计算预算");
+  try {
+    const plan = await pywebview.api.understand_plan(state.project);
+    if (!plan.ok) throw new Error(plan.error || "无法读取预算");
+    undState.plan = plan;
+    $("undProvider").textContent = plan.label || PROVIDER_LABEL[plan.provider] || "本地模型";
+    $("undProviderHelp").dataset.tooltip = plan.egress || $("undProviderHelp").dataset.tooltip;
+    const chunks = (plan.chunks || []).length;
+    let metrics = badge(`${plan.chars || 0} 字`) + badge(`${chunks} 块`);
+    if (plan.provider === "local" && Number.isFinite(plan.est_local_minutes)) {
+      const minutes = plan.est_local_minutes;
+      const duration = minutes >= 90 ? `${(minutes / 60).toFixed(1)} 小时` : `${minutes} 分钟`;
+      metrics += badge(`预计约 ${duration}`);
+    }
+    const notes = plan.notes || [];
+    $("undPlanLine").innerHTML = `<div class="metric-row">${metrics}</div>` + (notes.length ? `<details class="rawterms"><summary>预算明细 · ${notes.length}</summary><div class="muted">${notes.map(esc).join("<br>")}</div></details>` : "");
+    $("undPlanLine").hidden = false;
+    if (!plan.ready) showNotice("undFeedback", "error", "项目理解模型尚未就绪", plan.error || "请检查设置中的模型与服务。", {run: planUnderstand});
+  } catch (e) { showNotice("undFeedback", "error", "预算计算失败", String(e), {run: planUnderstand}); }
+  finally { undState.planning = false; hideNotice("undProgress"); syncUnderstandButtons(); }
+}
+async function startUnderstand(maxChunks = 0) {
+  if (undState.running || undState.starting || undState.planning) return;
+  if (state.running) { showNotice("undFeedback", "warning", "会议进行中", "请先结束会议，再理解项目资料。"); return; }
+  if (!undState.plan || !undState.plan.ready) { await planUnderstand(); if (!undState.plan || !undState.plan.ready) return; }
+  undState.starting = true;
+  undState.maxChunks = maxChunks;
+  undState.cancelled = false;
+  syncUnderstandButtons();
+  hideNotice("undFeedback");
+  showNotice("undProgress", "busy", maxChunks ? "正在启动小样试跑" : "正在启动全库理解");
+  try {
+    const result = await pywebview.api.understand_start(state.project, maxChunks);
+    if (!result.ok) throw new Error(result.error || "无法启动理解任务");
+    undState.running = true;
+    undState.resultReady = false;
+    undState.termsWritten = false;
+    $("undResult").hidden = true;
+    if (undTimer) clearInterval(undTimer);
+    undTimer = setInterval(undPoll, 2000);
+  } catch (e) {
+    hideNotice("undProgress");
+    showNotice("undFeedback", "error", "理解任务未能启动", String(e), {run: () => startUnderstand(maxChunks)});
+  } finally { undState.starting = false; syncUnderstandButtons(); }
+}
+$("btnUndPlan").onclick = planUnderstand;
+$("btnUndGo").onclick = () => startUnderstand(0);
+$("btnUndSmall").onclick = () => startUnderstand(5);
 $("btnUndCancel").onclick = async () => {
-  const r = await pywebview.api.understand_cancel();
-  toast(r.ok ? "已取消（已完成块保留，可续跑）" : (r.error || "取消失败"));
+  $("btnUndCancel").disabled = true;
+  try {
+    const result = await pywebview.api.understand_cancel();
+    if (!result.ok) throw new Error(result.error || "取消失败");
+    undState.cancelled = true;
+    showNotice("undProgress", "busy", "正在取消理解任务", "已完成块会保留。");
+  } catch (e) { showNotice("undFeedback", "error", "无法取消任务", String(e), {run: () => $("btnUndCancel").onclick()}); }
+  finally { $("btnUndCancel").disabled = false; }
 };
 
 $("btnTreeRefresh").onclick = () => { if (state.project) scanProject(state.project); };
-$("btnTestEngine").onclick = async () => {
-  $("testResult").textContent = "测试中…";
-  const r = await pywebview.api.test_engine();
-  $("testResult").textContent = r.ok ? `引擎正常：Python ${r.python} · meetingvar ${r.meetingvar}` : "失败：" + (r.error || "");
-};
+async function testEngine() {
+  $("btnTestEngine").disabled = true;
+  showNotice("testResult", "busy", "正在检查引擎");
+  try {
+    const result = await pywebview.api.test_engine();
+    showNotice("testResult", result.ok ? "success" : "error", result.ok ? "引擎检查通过" : "引擎检查失败",
+      result.ok ? `Python ${result.python} · meetingVAR ${result.meetingvar}` : result.error, result.ok ? null : {run: testEngine});
+  } catch (e) { showNotice("testResult", "error", "引擎检查未完成", String(e), {run: testEngine}); }
+  finally { $("btnTestEngine").disabled = false; }
+}
+$("btnTestEngine").onclick = testEngine;
 $("btnOpenCfg").onclick = () => pywebview.api.open_config_dir();
 
 /* ---------- 导航/弹窗事件 ---------- */
@@ -785,6 +1086,7 @@ $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") answer
 
 /* ---------- 启动 ---------- */
 async function boot() {
+  syncUnderstandButtons();
   const info = await pywebview.api.bootstrap();
   state.mediaBase = info.media_base;
   $("ver").textContent = "v" + info.version;

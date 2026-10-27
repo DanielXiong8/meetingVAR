@@ -1,0 +1,4 @@
+interface:
+  display_name: "meetingVAR Desktop UI"
+  short_description: "Review and refine meetingVAR desktop UI"
+  default_prompt: "Use $meetingvar-desktop-ui to review or update the desktop interface while preserving current pywebview behavior and Windows compatibility."
