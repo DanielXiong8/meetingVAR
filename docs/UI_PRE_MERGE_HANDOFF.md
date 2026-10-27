@@ -6,7 +6,7 @@
 
 截至 2026-10-27，远端默认分支 `main` 位于 0.8.0（`91aa4dc`），开发分支 `feat/agent-runtime` 位于 0.17.0（`00605df`）。新版本仍有项目资料、全库理解和预算/试跑操作，但整体已改成 Agent 工作区、抽屉和审批卡片。因此，合并到新版本前要把本次的视觉层级与交互行为移植到对应新界面，不能整组覆盖新分支的 `desktop/web/index.html`、`app.js`、`style.css`。
 
-本次草稿 PR：[ #35 · meetingVAR desktop UI hierarchy and handoff skill](https://github.com/DanielXiong8/meetingVAR/pull/35)。GitHub 当前标记它与 `feat/agent-runtime` 有冲突；这份 PR 用来审查原实现与交接材料，移植到最新界面并解决冲突后再进入可合并状态。
+本次草稿 PR：[PR #35 · meetingVAR desktop UI hierarchy and handoff skill](https://github.com/DanielXiong8/meetingVAR/pull/35)。GitHub 当前标记它与 `feat/agent-runtime` 有冲突；这份 PR 用来审查原实现与交接材料，移植到最新界面并解决冲突后再进入可合并状态。
 
 本分支待审内容包括：
 
@@ -33,4 +33,8 @@ Windows 验收仍需在目标运行环境完成。真实讯飞、实时兴趣 AP
 
 - 先打开 [草稿 PR #35](https://github.com/DanielXiong8/meetingVAR/pull/35) 查看原始实现、设计记录和冲突状态。
 - 按 `.agents/skills/meetingvar-desktop-ui/SKILL.md` 在 `feat/agent-runtime` 当前提交上移植适用的界面层级与交互；保留新版 Agent 工作区、抽屉和审批卡片。
-- PR 合并前完成 `references/windows-review.md` 所列 Windows WebView2 验收；补充目标分支上的实际验证结果。
+- PR 合并前完成 `.agents/skills/meetingvar-desktop-ui/references/windows-review.md` 所列 Windows WebView2 验收；补充目标分支上的实际验证结果。
+
+### 可直接交给 Codex agent 的任务
+
+请先读本交接文档及 `.agents/skills/meetingvar-desktop-ui/SKILL.md`，再审查 PR #35。以当前 `feat/agent-runtime` 最新提交为代码基线，把 PR 中仍适用的信息层级、颜色、状态提示和键盘交互移植到新版项目面板；保留新版 Agent 工作区、抽屉和审批卡片，不要把 0.1.2 的旧页面整体覆盖到新分支。解决移植产生的冲突，运行适用于当前分支的检查，并明确列出 macOS 模拟和 Windows WebView2 实测的区别。若无法进行 Windows 实测，在 PR 中标成待验收，不要宣称通过。完成后更新交接文档中的目标提交、改动文件和验证结果，并提交一个供审查的 PR；不要直接合并。
