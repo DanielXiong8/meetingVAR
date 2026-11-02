@@ -58,16 +58,20 @@ function switchPage(name, push = true) {
   const target = document.getElementById("page-" + name);
   if (!target) return;
   const home = document.getElementById("page-home");
+  const isPanel = target.classList.contains("panel");
   if (name === "home") {
     document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-home"));
     document.body.classList.remove("panel-open");
     $("panelScrim").hidden = true;
-  } else {
+  } else if (isPanel) {
     if (home) home.classList.add("active");
     document.querySelectorAll(".page.panel").forEach((p) => p.classList.toggle("active", p === target));
-    target.classList.add("active");
     document.body.classList.add("panel-open");
     $("panelScrim").hidden = false;
+  } else {
+    document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p === target));
+    document.body.classList.remove("panel-open");
+    $("panelScrim").hidden = true;
   }
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
   const workspace = document.querySelector(".workspace");
@@ -183,7 +187,7 @@ function handleEvent(ev) {
     if (SYS_LINE_RE.test(ev.text)) pushTicker("", "系统", ev.text.trim(), "sys");
   } else if (ev.type === "hit") {
     state.hits += 1;
-    $("statHits").textContent = "命中 " + state.hits;
+    $("statHits").textContent = "��中 " + state.hits;
     toast("VAR! " + ev.text.replace(/^.*VAR!\s*/, ""));
     pushTicker("", "★", ev.text, "hit");
   } else if (ev.type === "ask") {
@@ -325,7 +329,7 @@ setInterval(() => {
       state.silenceHinted = true;
       const src = (state.cfg && state.cfg.audio_source) || "both";
       const hint = src === "loopback"
-        ? "已 90 秒未听到语音：当前是【仅系统声音】模式——请确认电脑在播放声音（或到设置页改为「系统声音+麦克风」）。"
+        ? "已 90 秒未听到语音：当前是【仅系统声���】模式——请确认电脑在播放声音（或到设置页改为「系统声音+麦克风」）。"
         : "已 90 秒未听到可识别语音：请确认电脑在播放声音、且麦克风未被系统静音/被其他软件独占。";
       pushTicker("", "系统", hint, "sys");
     }
@@ -1112,7 +1116,7 @@ async function memoryAction(action, index) {
     else if (action === "delete") r = await pywebview.api.agent_memory_delete(state.project, fact.name, false);
     else if (action === "hard_delete") r = await pywebview.api.agent_memory_delete(state.project, fact.name, true);
     else r = await pywebview.api.agent_memory_resolve(state.project, fact.name, action);
-    if (!r || !r.ok) { toast("记忆操作失败：" + ((r && r.error) || "未知错误"), 9000); return; }
+    if (!r || !r.ok) { toast("记忆操作失败���" + ((r && r.error) || "未知错误"), 9000); return; }
     await reloadMemory();
     const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
   } finally { setAgentBusy(false); }
@@ -1513,7 +1517,7 @@ async function kgAsk() {
     const r = await pywebview.api.kg_ask(state.project, q);
     const box = $("kgAnswer");
     box.hidden = false;
-    if (!r || !r.ok) { box.innerHTML = `<div>GraphRAG 失败：${kgEsc((r && r.error) || "未知错误")}</div>`; return; }
+    if (!r || !r.ok) { box.innerHTML = `<div>GraphRAG 失���：${kgEsc((r && r.error) || "未知错误")}</div>`; return; }
     const cites = (r.citations || []).map((c) =>
       c.kind === "edge" ? `关系:${c.relation}(${c.src_name || c.src_id}→${c.dst_name || c.dst_id})`
         : `资料:${c.title || c.source_id || c.chunk_id}`).join("、");
