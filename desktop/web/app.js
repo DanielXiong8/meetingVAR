@@ -53,21 +53,25 @@ function toast(msg, ms = 5000) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
-const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", kg: "知识图谱", settings: "设置" };
+const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", evidence: "证据包", ledger: "承诺账本", agent: "Agent", kg: "知识图谱", settings: "设置" };
 function switchPage(name, push = true) {
   const target = document.getElementById("page-" + name);
   if (!target) return;
   const home = document.getElementById("page-home");
+  const isPanel = target.classList.contains("panel");
   if (name === "home") {
     document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === "page-home"));
     document.body.classList.remove("panel-open");
     $("panelScrim").hidden = true;
-  } else {
+  } else if (isPanel) {
     if (home) home.classList.add("active");
     document.querySelectorAll(".page.panel").forEach((p) => p.classList.toggle("active", p === target));
-    target.classList.add("active");
     document.body.classList.add("panel-open");
     $("panelScrim").hidden = false;
+  } else {
+    document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p === target));
+    document.body.classList.remove("panel-open");
+    $("panelScrim").hidden = true;
   }
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
   const workspace = document.querySelector(".workspace");
@@ -183,7 +187,7 @@ function handleEvent(ev) {
     if (SYS_LINE_RE.test(ev.text)) pushTicker("", "系统", ev.text.trim(), "sys");
   } else if (ev.type === "hit") {
     state.hits += 1;
-    $("statHits").textContent = "命中 " + state.hits;
+    $("statHits").textContent = "��中 " + state.hits;
     toast("VAR! " + ev.text.replace(/^.*VAR!\s*/, ""));
     pushTicker("", "★", ev.text, "hit");
   } else if (ev.type === "ask") {
@@ -325,7 +329,7 @@ setInterval(() => {
       state.silenceHinted = true;
       const src = (state.cfg && state.cfg.audio_source) || "both";
       const hint = src === "loopback"
-        ? "已 90 秒未听到语音：当前是【仅系统声音】模式——请确认电脑在播放声音（或到设置页改为「系统声音+麦克风」）。"
+        ? "已 90 秒未听到语音：当前是【仅系统声���】模式——请确认电脑在播放声音（或到设置页改为「系统声音+麦克风」）。"
         : "已 90 秒未听到可识别语音：请确认电脑在播放声音、且麦克风未被系统静音/被其他软件独占。";
       pushTicker("", "系统", hint, "sys");
     }
@@ -1112,7 +1116,7 @@ async function memoryAction(action, index) {
     else if (action === "delete") r = await pywebview.api.agent_memory_delete(state.project, fact.name, false);
     else if (action === "hard_delete") r = await pywebview.api.agent_memory_delete(state.project, fact.name, true);
     else r = await pywebview.api.agent_memory_resolve(state.project, fact.name, action);
-    if (!r || !r.ok) { toast("记忆操作失败：" + ((r && r.error) || "未知错误"), 9000); return; }
+    if (!r || !r.ok) { toast("记忆操作失败���" + ((r && r.error) || "未知错误"), 9000); return; }
     await reloadMemory();
     const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
   } finally { setAgentBusy(false); }
@@ -1273,7 +1277,7 @@ $("btnAgentRun").onclick = async () => {
     $("agentStatusLine").textContent =
       `Agent ${r.status}/${r.stop_reason} · ${r.steps || 0} 步 · ${r.tool_calls || 0} 次工具 · ` +
       (r.grounded ? "引用已校验" : "引用未校验");
-    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过校验", 8000);
+    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过��验", 8000);
   } catch (e) {
     $("agentStatusLine").textContent = "Agent 运行失败";
     toast("Agent 运行失败：" + e, 9000);
@@ -1513,7 +1517,7 @@ async function kgAsk() {
     const r = await pywebview.api.kg_ask(state.project, q);
     const box = $("kgAnswer");
     box.hidden = false;
-    if (!r || !r.ok) { box.innerHTML = `<div>GraphRAG 失败：${kgEsc((r && r.error) || "未知错误")}</div>`; return; }
+    if (!r || !r.ok) { box.innerHTML = `<div>GraphRAG 失���：${kgEsc((r && r.error) || "未知错误")}</div>`; return; }
     const cites = (r.citations || []).map((c) =>
       c.kind === "edge" ? `关系:${c.relation}(${c.src_name || c.src_id}→${c.dst_name || c.dst_id})`
         : `资料:${c.title || c.source_id || c.chunk_id}`).join("、");
@@ -1811,7 +1815,7 @@ function resetUnderstand() {
 async function undPoll() {
   const st = await pywebview.api.understand_status();
   if (st.running) {
-    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重复花算力）`;
+    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重���花算力）`;
     $("btnUndCancel").hidden = false;
     return;
   }
