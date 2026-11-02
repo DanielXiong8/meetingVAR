@@ -31,6 +31,8 @@
       <button class="side-item" id="btnSkills" aria-label="技能"><span class="side-ico">✦</span><span>技能</span></button>
       <button class="side-item navbtn" data-page="project" aria-label="项目"><span class="side-ico">▦</span><span>项目</span></button>
       <button class="side-item navbtn" data-page="library" aria-label="会议库"><span class="side-ico">▤</span><span>会议库</span></button>
+      <button class="side-item navbtn" data-page="evidence" aria-label="证据包"><span class="side-ico">▣</span><span>证据包</span></button>
+      <button class="side-item navbtn" data-page="ledger" aria-label="承诺账本"><span class="side-ico">≡</span><span>承诺账本</span></button>
       <button class="side-item navbtn" data-page="kg" aria-label="知识图谱"><span class="side-ico">◈</span><span>知识图谱</span></button>
     </nav>
 
@@ -200,7 +202,7 @@
             <div id="scanTerms" class="scan"></div>
 
             <div class="card und-card" id="undCard">
-              <div class="card-head"><div><b>全库理解</b><div class="muted">分层读完整个文件夹，覆盖率和耗时都能核算。</div></div></div>
+              <div class="card-head"><div><b>全库理解</b><div class="muted">分层��完整个文件夹，覆盖率和耗时都能核算。</div></div></div>
               <div class="muted">当前厂商：<span id="undProvider">—</span> · <span id="undEgress">—</span>（设置页可切换；本地模型不联网）</div>
               <div class="row">
                 <button id="btnUndPlan" class="btn">① 先算预算</button>
@@ -266,7 +268,7 @@
             <span class="mode-pill">跨会议</span>
           </div>
           <div class="agent-composer">
-            <textarea id="agentRunQuestion" rows="2" placeholder="例如：上次说周五交付，这次谁改了口？把两次原话找出来"></textarea>
+            <textarea id="agentRunQuestion" rows="2" placeholder="例如：上次说周五交付，这次谁改了口？把两次原���找出来"></textarea>
             <button id="btnAgentRun" class="send-btn">↑</button>
           </div>
           <div id="agentRunPlan" class="agent-plan muted"></div>
@@ -345,6 +347,22 @@
           </div>
           <div id="ragAnswer" class="agent-answer" hidden></div>
         </div>
+      </section>
+
+      <!-- 证据包 -->
+      <section id="page-evidence" class="page">
+        <div class="page-head evidence-page-head"><div><span class="agent-eyebrow">EVIDENCE PACK</span><h1>证据包</h1><p>把一次命中的会议片段整理成可校验、可回看的证据单元。</p></div><div class="row"><span class="status-pill ok">✓ 全部通过</span><button class="btn btn-primary">导出 ZIP</button></div></div>
+        <div class="evidence-summary card"><div><span class="pc-label">当前片段</span><b>交付时间变更</b><span class="muted">go_20261102_1000 · 00:14:32–00:15:28</span></div><div class="evidence-source-list"><span class="source-chip">MIC</span><span class="source-chip">SCREEN</span><span class="source-chip">本地</span></div></div>
+        <div class="evidence-layout"><div class="card evidence-transcript"><div class="card-head"><div><b>转写原文</b><div class="muted">当前句已由本地工具核对</div></div><span class="status-pill ok">已校验</span></div><div class="transcript-line"><time>00:14:48</time><b>小林</b><span>第一版原来计划周五交付，但今天改成下周三。</span></div><div class="transcript-line faded"><time>00:14:32</time><b>小王</b><span>我们先确认一下当前的资源安排。</span></div><audio controls preload="none" aria-label="证据片段音频"></audio></div><div class="card evidence-frames"><div class="card-head"><div><b>屏幕帧</b><div class="muted">12 张 · 5fps 采集</div></div><button class="btn">打开原图</button></div><div class="frame-grid"><span>14:32</span><span>14:41</span><span>14:50</span><span>15:02</span><span>15:14</span><span>15:28</span></div></div></div>
+        <div class="card evidence-files"><div class="card-head"><div><b>文件与完整性</b><div class="muted">manifest.json 记录来源、时间窗和采集设备</div></div><button class="btn">复制全部哈希</button></div><div class="file-hash-row"><span>audio.wav</span><code>a1b2c3d4…8f90</code><span class="status-pill ok">通过</span></div><div class="file-hash-row"><span>transcript.txt</span><code>c3d4e5f6…1a20</code><span class="status-pill ok">通过</span></div><div class="file-hash-row"><span>screens/frame_0001.jpg</span><code>e5f6a7b8…3c40</code><span class="status-pill ok">通过</span></div></div>
+      </section>
+
+      <!-- 承诺账本 -->
+      <section id="page-ledger" class="page">
+        <div class="page-head"><div><span class="agent-eyebrow">COMMITMENT LEDGER</span><h1>承诺账本</h1><p>看清承诺从哪里出现、由谁负责，以及后来是否发生了变化。</p></div><button class="btn">筛选</button></div>
+        <div class="ledger-toolbar"><span class="status-pill">3 条生效中</span><span class="status-pill">1 条已变更</span><input class="input" placeholder="搜索承诺、负责人或原话…"></div>
+        <div class="card ledger-table-wrap"><table class="ledger-table"><thead><tr><th>承诺 / 行动</th><th>负责人</th><th>截止</th><th>状态</th><th>首次出现</th><th>最后更新</th></tr></thead><tbody><tr><td><b>交付第一版</b><small>决定 · 周五交付第一版</small></td><td>小王 <span class="diff-arrow">→</span> 小李</td><td><span class="old-value">周五</span> <span class="diff-arrow">→</span> <strong>下周三</strong></td><td><span class="status-pill warm">已变更</span></td><td><code>10/28 10:12</code></td><td><code>11/02 10:18</code></td></tr><tr><td><b>完成测试方案</b><small>行动项 · 输出测试范围</small></td><td>小林</td><td>本周四</td><td><span class="status-pill ok">生效中</span></td><td><code>11/01 16:24</code></td><td><code>11/01 16:24</code></td></tr></tbody></table></div>
+        <div class="card ledger-evidence"><div class="card-head"><div><b>原句与来源</b><div class="muted">选择一条承诺查看它的证据链</div></div><span class="source-chip">go_20261028_1000 · 00:14:32</span></div><blockquote>“第一版周五交，小王负责。”</blockquote><blockquote>“交付时间改到下周三，小李接手。”</blockquote><button class="btn">跳到会议片段</button></div>
       </section>
 
       <!-- 知识图谱 -->
@@ -486,7 +504,7 @@
               <div class="card usage-card">
                 <div class="card-head"><div><b>每日 Token 趋势</b><div class="muted">本地 Agent 的 prompt + completion tokens。</div></div></div>
                 <div id="usageChart" class="usage-chart"></div>
-                <div id="usageEmpty" class="muted" hidden>还没有 Agent 调用记录。运行一次「Agent 深度检索」后，这里会出现真实统计。</div>
+                <div id="usageEmpty" class="muted" hidden>还没有 Agent 调用记录。运行一次「Agent 深度检索」后，这里会出��真实统计。</div>
               </div>
               <div class="card usage-card">
                 <div class="card-head"><div><b>模型用量</b><div class="muted">按 token 占比。</div></div></div>

@@ -53,7 +53,7 @@ function toast(msg, ms = 5000) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
-const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", kg: "知识图谱", settings: "设置" };
+const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", evidence: "证据包", ledger: "承诺账本", agent: "Agent", kg: "知识图谱", settings: "设置" };
 function switchPage(name, push = true) {
   const target = document.getElementById("page-" + name);
   if (!target) return;
@@ -1277,7 +1277,7 @@ $("btnAgentRun").onclick = async () => {
     $("agentStatusLine").textContent =
       `Agent ${r.status}/${r.stop_reason} · ${r.steps || 0} 步 · ${r.tool_calls || 0} 次工具 · ` +
       (r.grounded ? "引用已校验" : "引用未校验");
-    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过校验", 8000);
+    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过��验", 8000);
   } catch (e) {
     $("agentStatusLine").textContent = "Agent 运行失败";
     toast("Agent 运行失败：" + e, 9000);
@@ -1815,7 +1815,7 @@ function resetUnderstand() {
 async function undPoll() {
   const st = await pywebview.api.understand_status();
   if (st.running) {
-    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重复花算力）`;
+    $("undProgress").textContent = `全库理解中：${st.progress || "…"}（可随时取消；已完成块会缓存，续跑不重���花算力）`;
     $("btnUndCancel").hidden = false;
     return;
   }
