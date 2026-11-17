@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: '会议 agent · AI 会议工作台',
-  description: '一个把会议、项目与行动项连接起来的 AI 工作台。',
+  title: 'meetingVAR · 个人会议证据层',
+  description: '把重要结论连接回原话、画面和时间戳。',
   generator: 'v0.app',
   icons: {
     icon: [

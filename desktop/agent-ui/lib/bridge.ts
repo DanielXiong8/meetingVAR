@@ -121,6 +121,15 @@ function mockCall(method: string, args: any[]): any {
     }
   }
   if (method === 'list_sessions' || method === 'list_library') return []
+  if (method === 'bootstrap') return { ok: true, meeting_running: false, llm: { up: false } }
+  if (method === 'evidence_packs') return { ok: true, packs: [] }
+  if (method === 'commitment_ledger') return { ok: true, rows: [] }
+  if (method === 'find_moment') return { ok: true, segments: [], answer: '浏览器预览未连接会议证据' }
+  if (method === 'workspace_start') return { ok: false, error: '浏览器预览未连接桌面引擎，未启动项目认知' }
+  if (method === 'set_config') return { ok: true, preview_only: true }
+  if (method === 'session_detail') return { sid: String(args[0] || ''), minutes: '', clips: [] }
+  if (method === 'screen_state') return { ok: true, screen: {}, phase: 'idle', running: false }
+  if (method === 'architecture') return { ok: true, architecture_status: 'not_built', groups: [], edges: [], generation: { mode: 'none' } }
   if (method === 'chat_new') {
     return { ok: true, conversation_id: 'mock-conversation', title: '新对话' }
   }

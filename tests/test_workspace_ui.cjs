@@ -80,15 +80,10 @@ for (const command of ['understand_start', 'understand_status', 'understand_plan
 assert.equal(page.includes('Math.max(Number(rag'), false)
 assert.ok(page.includes('answerMetadata(reply)'))
 assert.ok(page.includes('item.answer_status'))
-assert.ok(page.includes('result.extracted'))
-assert.equal(page.includes('result.summarized'), false)
-assert.ok(page.includes('result.map_totals'))
-assert.ok(page.includes('result.coverage?.explore'))
-assert.ok(page.includes("state.status === 'oriented'"))
-assert.ok(page.includes("state.status === 'paused_budget'"))
-assert.ok(page.includes("state.status === 'mapped_awaiting_model'"))
-assert.equal(page.includes('本轮各阶段已完成'), false)
-assert.equal(page.includes('本轮阶段已完成'), false)
+assert.ok(page.includes('result?.coverage'))
+assert.ok(page.includes("state?.job_status === 'oriented'"))
+assert.ok(page.includes("state?.job_status === 'paused_budget'"))
+assert.ok(page.includes("state?.job_status === 'mapped_awaiting_model'"))
 assert.ok(page.includes('关键认知是带来源的暂定理解'))
 assert.ok(page.includes('ArchitecturePanel'))
 assert.ok(page.includes("call('architecture_generate'"), 'AI architecture generation must use the backend bridge')
@@ -96,33 +91,35 @@ assert.ok(page.includes("call('architecture_save'"), 'manual modules and owners 
 assert.ok(page.includes('AI 生成架构'))
 assert.ok(page.includes('添加模块'))
 assert.ok(page.includes('负责人'))
-assert.ok(page.includes("['项目架构', '架构']"))
-assert.ok(page.includes('await startAutoUnderstand(currentProject, null, true)'), 'explicit refresh starts a new investigation')
-assert.ok(page.includes('void startAutoUnderstand(currentProject, null, false)'), 'periodic polls never force new model budget')
-// Workspace status is icon-only until the user opens it.
+assert.ok(page.includes('var-shell'), 'game-inspired mission-control shell must be rendered')
+assert.ok(page.includes('MEETING INTELLIGENCE'))
+assert.ok(page.includes("call('workspace_start', currentProject, 1)"), 'explicit refresh starts a new investigation')
+assert.ok(page.includes('startAutoUnderstand(path, null, false)'), 'project polling never forces a new budget')
+// Workspace status is compact until the user opens it.
 assert.ok(page.includes("event?.type === 'partial_line'"), 'stream partial captions must be consumed')
 assert.ok(page.includes('live-captions'), 'live captions must have a visible block')
-assert.ok(page.includes('auto-project-fab'))
 assert.ok(page.includes('const [open, setOpen] = useState(false)'))
-assert.equal(page.includes('<AutoProjectCard state={autoProject} defaultOpen'), false)
-assert.ok(page.includes('<AutoProjectCard key={currentProject} state={autoProject}'))
 assert.ok(page.includes('useEffect(() => { setOpen(false) }, [state?.folder])'))
 assert.equal(page.includes('setOpen(true) }, [state'), false, 'status changes never reopen the card')
+// Evidence and action results remain on the trusted bridge, not browser mocks.
+assert.ok(page.includes("call('evidence_verify', currentProject, pack.name)"))
+assert.ok(page.includes("call('commitment_ledger', currentProject)"))
+assert.ok(page.includes("call('chat_action_status', project, cid, action.id)"))
+assert.ok(page.includes("call('poll_events', cursor, false)"))
 // Expected unreadable files are grouped by the tested helper, not dumped raw.
 assert.ok(page.includes("@/lib/workspace-issues"))
-assert.ok(page.includes('summarizeWorkspaceIssues(result.errors)'))
+assert.ok(page.includes('summarizeWorkspaceIssues'))
 assert.ok(page.includes('原始状态（调试）'))
-assert.equal(page.includes("summary>{JSON.stringify({ coverage: result.coverage || {}, errors: result.errors || [] }, null, 2)}</pre></details>"), false)
 // Render only the workspace component with a minimal hook/JSX harness. This
 // checks click/poll/project transitions without booting a browser or user app.
-const cardSource = page.slice(page.indexOf('const AUTO_STAGE_LABELS'), page.indexOf('function ThinkingCard'))
+const cardSource = page.slice(page.indexOf('function AutoProjectCard'), page.indexOf('function ArchitecturePanel'))
 const cardOutput = ts.transpileModule(cardSource + '\nexports.AutoProjectCard = AutoProjectCard', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021, jsx: ts.JsxEmit.React },
 }).outputText
 const hookState = [], effectState = []
 let hookIndex = 0, effectIndex = 0, effects = []
 const cardModule = {}
-const icons = Object.fromEntries(['RefreshCw', 'Sparkles', 'ChevronDown'].map((name) => [name, name]))
+const icons = Object.fromEntries(['RefreshCw', 'Sparkles', 'ChevronDown', 'Orbit'].map((name) => [name, name]))
 vm.runInNewContext(cardOutput, {
   exports: cardModule, ...icons, summarizeWorkspaceIssues: issueModule.summarizeWorkspaceIssues,
   React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }) },
@@ -155,19 +152,19 @@ function elements(tree) {
 }
 const stateA = { folder: 'C:/projects/A', status: 'running', result: { stages: {}, errors: [] } }
 let tree = renderCard(stateA)
-assert.ok(elements(tree).some((row) => row.props.className === 'auto-project-fab-row'))
-elements(tree).find((row) => row.props['aria-label'] === '打开工作区同步详情').props.onClick()
+assert.ok(tree.props.className.includes('collapsed'))
+elements(tree).find((row) => row.props.className === 'auto-project-toggle').props.onClick()
 tree = renderCard(stateA)
-assert.ok(tree.props.className.includes('expanded'))
+assert.ok(!tree.props.className.includes('collapsed'))
 tree = renderCard({ ...stateA, status: 'paused_budget', result: { errors: [{ code: 'output_budget_exhausted' }] } })
-assert.ok(tree.props.className.includes('expanded'), 'polling must preserve explicit open choice')
+assert.ok(!tree.props.className.includes('collapsed'), 'polling must preserve explicit open choice')
 elements(tree).find((row) => row.props.className === 'auto-project-toggle').props.onClick()
 tree = renderCard({ ...stateA, status: 'oriented' })
-assert.equal(tree.props.className, 'auto-project-fab-row', 'completion must not reopen a collapsed card')
-elements(tree).find((row) => row.props['aria-label'] === '打开工作区同步详情').props.onClick()
+assert.ok(tree.props.className.includes('collapsed'), 'completion must not reopen a collapsed card')
+elements(tree).find((row) => row.props.className === 'auto-project-toggle').props.onClick()
 renderCard(stateA)
 tree = renderCard({ ...stateA, folder: 'C:/projects/B' })
-assert.equal(tree.props.className, 'auto-project-fab-row', 'project switch resets to icon-only')
+assert.ok(tree.props.className.includes('collapsed'), 'project switch resets to compact')
 ;(async () => {
   let delivered = 0
   const stop = bridge.subscribeWorkspace('C:/projects/A', () => { delivered++ }, error => { throw error })
