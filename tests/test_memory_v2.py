@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import uuid
 from pathlib import Path
 
@@ -72,15 +73,19 @@ class MemoryV2Tests(unittest.TestCase):
         self.assertEqual(list(self.store.facts_dir.glob("*.md")), [])
 
     def test_chat_remember_requires_confirmation_then_writes(self):
-        agent = ChatAgent(self.project, llm=lambda *a, **k: "unused")
-        result = agent.ask("记住：项目周五交付第一版，负责人小林。")
-        self.assertEqual(result["message"]["mode"], "memory")
-        action_id = result["message"]["actions"][0]["id"]
-        done = agent.execute_action(action_id)
+        agent=ChatAgent(self.project,llm=lambda *a,**k:"unused")
+        proposal={"type":"save_memory","label":"记住周五交付","payload":{"items":[{"title":"周五交付",
+                  "body":"项目周五交付第一版，负责人小林。","fact_type":"commitment","source_refs":["message_1"]}]}}
+        with patch("meetingvar.agent.chat.AgentLoop") as loop:
+            loop.return_value.run.return_value={"answer":"请确认记忆","ui_actions":[proposal],"stop_reason":"action_pending"}
+            result=agent.ask("记住：项目周五交付第一版，负责人小林。")
+        action_id=result["message"]["actions"][0]["id"]
+        self.assertEqual(agent.operations.get(action_id)["status"],"awaiting_approval")
+        done=agent.execute_action(action_id)
         self.assertTrue(done["ok"])
-        facts = FactStore(self.project).list_facts()
-        self.assertEqual(len(facts), 1)
-        self.assertIn("周五", facts[0]["name"])
+        facts=FactStore(self.project).list_facts()
+        self.assertEqual(len(facts),1)
+        self.assertIn("周五",facts[0]["name"])
 
     def test_quick_candidates_and_conversation_summary(self):
         rows = [{"id": "turn_1", "text": "我们决定采用第二方案，负责人小林，周五交付第一版。"},
@@ -101,10 +106,9 @@ class MemoryV2Tests(unittest.TestCase):
 
     def test_llm_semantic_summary_and_conflict_judge(self):
         agent = ChatAgent(self.project, llm=lambda prompt: "LLM 摘要：交付改到周五。")
-        agent.conversation["messages"] = [
-            {"role": "user" if i % 2 == 0 else "assistant", "content": f"消息 {i}"}
-            for i in range(12)
-        ]
+        for i in range(24):
+            agent.store.append(agent.conversation_id,
+                {"role":"user" if i % 2 == 0 else "assistant","content":f"消息 {i}"})
         agent._roll_summary()
         self.assertEqual(agent.conversation["summary"], "LLM 摘要：交付改到周五。")
 

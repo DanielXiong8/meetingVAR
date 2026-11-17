@@ -7,7 +7,7 @@ const state = {
   speakers: new Set(), project: "", scan: null, mediaBase: "",
   askQueue: [], askOpen: false, ticker: [], phase: "idle", follow: true, captionCount: 0,
   lastCaptionAt: null, screen: {}, starting: false, polling: false, partials: new Map(),
-  agentFocus: [], agentFocusSources: [], agentFacts: [], agentMemoryFacts: [], agentBusy: false,
+  agentMemoryFacts: [], agentBusy: false,
   pageHistory: ["home"], pageIndex: 0, usage: null, usageRange: 7, libraryGroups: [], consolePinned: false,
   chatId: "", chatMessages: [], chatBusy: false,
   kgCy: null, kgSelected: [], kgElements: [],
@@ -53,7 +53,7 @@ function toast(msg, ms = 5000) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
-const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", agent: "Agent", kg: "知识图谱", settings: "设置" };
+const PAGE_TITLES = { home: "新任务", project: "项目", library: "会议库", kg: "知识图谱", settings: "设置" };
 function switchPage(name, push = true) {
   const target = document.getElementById("page-" + name);
   if (!target) return;
@@ -80,7 +80,6 @@ function switchPage(name, push = true) {
     state.pageIndex = state.pageHistory.length - 1;
   }
   if (name === "library") refreshLibrary();
-  if (name === "agent") loadAgentPage();
   if (name === "kg") loadKgPage();
   if (name === "settings") loadUsage();
 }
@@ -155,7 +154,7 @@ async function poll() {
   if (state.polling) return;
   state.polling = true;
   try {
-    const res = await pywebview.api.poll_events(state.next);
+    const res = await pywebview.api.poll_events(state.next, true);
     state.next = res.next;
     for (const ev of res.events) handleEvent(ev);
     if (res.phase) state.phase = res.phase;
@@ -533,16 +532,24 @@ async function scanProject(path) {
   $("scanMeta").textContent = "读取中…（大文件夹约需数秒到半分钟）";
   $("scanTerms").innerHTML = "";
   $("sideTree").innerHTML = "";
+  const inspectorTree = $("inspectorTree");
+  if (inspectorTree) inspectorTree.innerHTML = "";
   $("treeStat").textContent = "";
   $("btnUseProject").disabled = true;
+  if ($("inspectorProject")) $("inspectorProject").textContent = path;
   const d = await pywebview.api.scan_project(path);
   state.scan = d;
   if (!d.ok) {
     $("scanMeta").textContent = "读取失败：" + (d.error || "");
     $("sideTree").innerHTML = `<div class="muted" style="padding:4px 8px">读取失败：${esc(d.error || "")}</div>`;
+    if (inspectorTree) inspectorTree.innerHTML = `<div class="inspector-empty">读取失败：${esc(d.error || "")}</div>`;
     return;
   }
   renderTree(d.tree || [], $("sideTree"), 0);
+  if (inspectorTree) {
+    inspectorTree.innerHTML = "";
+    renderTree(d.tree || [], inspectorTree, 0);
+  }
   $("treeStat").textContent = "（" + (d.doc_count || 0) + " 份文档）";
   let meta = `文档 ${d.doc_count} 份`;
   if (d.skipped && d.skipped.length) {
@@ -574,6 +581,8 @@ async function scanProject(path) {
 function updateComposer() {
   const cfg = state.cfg || {};
   $("homeProject").textContent = state.project || "选择项目";
+  const inspectorProject = $("inspectorProject");
+  if (inspectorProject) inspectorProject.textContent = state.project || "未选择项目";
   $("composerModel").textContent = cfg.llm_provider === "custom"
     ? (cfg.llm_model || "自定义 API") : "本地模型";
   $("composerMode").textContent = "只读 Agent";
@@ -606,6 +615,33 @@ function chatCitations(msg) {
     ? (msg.grounded ? "引用已校验" : "引用未通过校验")
     : "";
   return `<div class="chat-cites">${stateText ? stateText + " · " : ""}依据：${parts.map((p) => `<span class="cite">${p}</span>`).join("")}</div>`;
+}
+function chatFocus(msg) {
+  const items = msg.focus || [];
+  if (!items.length) return "";
+  return `<div class="chat-payload"><div class="chat-payload-head"><b>会前关注</b><span class="muted">${items.length} 条 · 确认后保存</span></div>` +
+    items.map((item) => `<div class="chat-payload-item"><span class="payload-mark">◇</span><span><b>${agentEsc(item.title)}</b>` +
+      `${item.why ? `<small>${agentEsc(item.why)}</small>` : ""}</span></div>`).join("") + `</div>`;
+}
+function chatFacts(msg) {
+  const items = msg.facts || [];
+  if (!items.length) return "";
+  return `<div class="chat-payload"><div class="chat-payload-head"><b>会后事实</b><span class="muted">${agentEsc(msg.facts_session || "")} · ${items.length} 条 · 确认后写入</span></div>` +
+    items.map((item) => {
+      const bits = [item.owner ? "负责人 " + item.owner : "", item.due ? "截止 " + item.due : "",
+                    item.confidence != null ? "置信 " + Number(item.confidence).toFixed(2) : ""].filter(Boolean).join(" · ");
+      return `<div class="chat-payload-item"><span class="payload-type">${agentEsc(agentType(item.fact_type))}</span><span>` +
+        `<b>${agentEsc(item.title)}</b>${bits ? `<small>${agentEsc(bits)}</small>` : ""}` +
+        `${item.evidence_text ? `<span class="payload-evidence">${agentEsc(item.evidence_text.slice(0, 500))}</span>` : ""}</span></div>`;
+    }).join("") + `</div>`;
+}
+function chatMemory(msg) {
+  const rows = msg.memory || [];
+  if (!rows.length) return "";
+  return `<div class="chat-payload"><div class="chat-payload-head"><b>项目记忆</b><span><span class="muted">${rows.length} 条</span> <button class="btn btn-mini" data-memory-open>管理</button></span></div>` +
+    rows.map((fact) => `<div class="chat-payload-item"><span class="payload-type">${agentEsc(agentType(fact.type))}</span><span>` +
+      `<b>${agentEsc(fact.description || fact.name || "")}</b>` +
+      `<small>${agentEsc([fact.owner, fact.due, memoryStatusLabel(fact.status)].filter(Boolean).join(" · "))}</small></span></div>`).join("") + `</div>`;
 }
 function chatActions(msg) {
   const actions = msg.actions || [];
@@ -653,6 +689,10 @@ function chatNode(msg) {
     if (tools) body.insertAdjacentHTML("beforeend", tools);
     const cites = chatCitations(msg);
     if (cites) body.insertAdjacentHTML("beforeend", cites);
+    [chatFocus, chatFacts, chatMemory].forEach((render) => {
+      const payload = render(msg);
+      if (payload) body.insertAdjacentHTML("beforeend", payload);
+    });
     const actions = chatActions(msg);
     if (actions) body.appendChild(actions);
   }
@@ -847,6 +887,10 @@ function showSkills() {
     <div class="skill-grid">
       <button class="skill-btn" data-prompt="列出最近的会议，并总结每场的主要决定、行动项和未决问题。">最近会议总结</button>
       <button class="skill-btn" data-prompt="查看当前项目的进展、已保存事实和会前关注，告诉我现在最需要确认什么。">项目进度</button>
+      <button class="skill-btn" data-prompt="根据项目材料生成会前关注清单。">会前关注</button>
+      <button class="skill-btn" data-prompt="从最近一场会议提取会后事实：承诺、决定、行动项、风险。">会后事实</button>
+      <button class="skill-btn" data-prompt="查看项目记忆里生效中的事实。">项目记忆</button>
+      <button class="skill-btn" data-prompt="建立项目知识库索引，并告诉我来源和片段数量。">刷新知识库</button>
       <button class="skill-btn" data-prompt="计算当前项目全库阅读的字数、块数和预计耗时，并说明是否值得现在跑。">全库阅读预算</button>
       <button class="skill-btn" data-prompt="在最近会议里搜索关于交付时间的原话，并给出引用。">找原话</button>
       <button class="skill-btn" data-prompt="列出当前项目记忆里所有未决问题和风险，并给出来源。">未决问题</button>
@@ -986,56 +1030,8 @@ function agentType(t) { return AGENT_TYPE_LABEL[t] || t || "事实"; }
 function agentEsc(s) { return esc(s == null ? "" : String(s)); }
 function setAgentBusy(busy, text) {
   state.agentBusy = busy;
-  const page = $("page-agent");
-  if (page) page.classList.toggle("agent-busy", busy);
-  if (text) $("agentStatusLine").textContent = text;
-  ["btnFocusGen", "btnFocusSave", "btnFactsPreview", "btnFactsSave", "btnAsk", "btnAgentRun", "btnMemory", "btnRagIndex", "btnRagForce", "btnRagAsk", "btnKgSearch", "btnKgAsk", "btnKgBuild", "btnKgIngest", "btnKgMerge"]
-    .forEach((id) => { const el = $(id); if (el) el.disabled = busy || (id.endsWith("Save") && !((id === "btnFocusSave" ? state.agentFocus.length : state.agentFacts.length))); });
-}
-function renderAgentStatus(st) {
-  if (!st || !st.ok) { $("agentStatusLine").textContent = "Agent 状态不可用：" + ((st && st.error) || "未知错误"); return; }
-  const counts = st.by_type || {};
-  const dist = Object.keys(counts).map((k) => `${agentType(k)} ${counts[k]}`).join(" · ");
-  const pending = st.pending_conflicts ? ` · 待确认冲突 ${st.pending_conflicts}` : "";
-  $("agentStatusLine").textContent = `项目记忆 ${st.facts || 0} 条${dist ? "（" + dist + "）" : ""}${pending} · 会前关注 ${(st.focus || []).length} 项`;
-}
-function renderFocus(items, sources) {
-  state.agentFocus = Array.isArray(items) ? items : [];
-  state.agentFocusSources = Array.isArray(sources) ? sources : state.agentFocusSources;
-  const box = $("focusList");
-  if (!state.agentFocus.length) { box.className = "agent-list muted"; box.textContent = "暂无关注清单，点「生成关注清单」让 Agent 阅读项目材料。"; $("btnFocusSave").disabled = true; return; }
-  box.className = "agent-list";
-  box.innerHTML = state.agentFocus.map((item, i) =>
-    `<div class="agent-item"><label><input type="checkbox" class="agent-pick agent-focus-pick" data-index="${i}" checked>
-      <span><span class="title">${agentEsc(item.title)}</span>
-      <span class="meta">${agentEsc(item.why || "")}</span></span></label></div>`).join("");
-  $("btnFocusSave").disabled = state.agentBusy;
-}
-function renderSessions(sessions) {
-  const select = $("agentSession");
-  const current = select.value;
-  const available = (sessions || []).filter((s) => s.has_transcript);
-  select.innerHTML = '<option value="">选择有转写的会话</option>' + available.map((s) => {
-    const when = s.mtime ? new Date(s.mtime * 1000).toLocaleString() : "";
-    return `<option value="${agentEsc(s.sid)}">${agentEsc(s.sid)} · ${when}${s.clips != null ? " · " + s.clips + " 片段" : ""}</option>`;
-  }).join("");
-  if (current && [...select.options].some((o) => o.value === current)) select.value = current;
-}
-function renderFacts(items) {
-  state.agentFacts = Array.isArray(items) ? items : [];
-  const box = $("factsList");
-  if (!state.agentFacts.length) { box.className = "agent-list muted"; box.textContent = "没有可写入的会议事实（可能没有明确事件或模型未配置）。"; $("btnFactsSave").disabled = true; return; }
-  box.className = "agent-list";
-  box.innerHTML = state.agentFacts.map((item, i) => {
-    const bits = [item.owner ? "负责人 " + item.owner : "", item.due ? "截止 " + item.due : "",
-                  item.severity ? "严重度 " + item.severity : "",
-                  item.confidence != null ? "置信 " + Number(item.confidence).toFixed(2) : ""].filter(Boolean).join(" · ");
-    return `<div class="agent-item"><label><input type="checkbox" class="agent-pick agent-fact-pick" data-index="${i}" checked>
-      <span><span class="agent-type">${agentEsc(agentType(item.fact_type))}</span><span class="title">${agentEsc(item.title)}</span>
-      ${bits ? `<span class="meta">${agentEsc(bits)}</span>` : ""}
-      ${item.evidence_text ? `<span class="evidence">${agentEsc(item.evidence_text.slice(0, 900))}</span>` : ""}</span></label></div>`;
-  }).join("");
-  $("btnFactsSave").disabled = state.agentBusy;
+  ["btnMemory", "btnKgSearch", "btnKgAsk", "btnKgBuild", "btnKgIngest", "btnKgMerge"]
+    .forEach((id) => { const el = $(id); if (el) el.disabled = busy; });
 }
 function memoryStatusLabel(status) {
   return { active: "生效中", "pending-conflict": "待确认冲突", superseded: "已被替代",
@@ -1114,178 +1110,20 @@ async function memoryAction(action, index) {
     else r = await pywebview.api.agent_memory_resolve(state.project, fact.name, action);
     if (!r || !r.ok) { toast("记忆操作失败：" + ((r && r.error) || "未知错误"), 9000); return; }
     await reloadMemory();
-    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
   } finally { setAgentBusy(false); }
 }
 
-function renderRagStatus(st) {
-  const status = (st && st.status) || {};
-  const rag = status || {};
-  $("ragStatus").textContent = `${rag.documents || 0} 个来源 · ${rag.chunks || 0} 个片段`;
-  if ($("ragHint")) {
-    const emb = rag.embedding ? "BGE 向量已启用" : "仅 FTS5（未找到 embedding 模型）";
-    $("ragHint").textContent = emb;
-  }
-}
-function renderRagAnswer(r) {
-  const box = $("ragAnswer");
-  box.hidden = false;
-  if (!r || !r.ok) {
-    box.innerHTML = `<div>RAG 失败：${agentEsc((r && (r.error || r.error_code)) || "未知错误")}</div>`;
-    return;
-  }
-  const cites = (r.citations || []).map((c) => {
-    const when = c.start_ts != null ? ` @${fmtClock(c.start_ts)}` : "";
-    return `${c.source_type === "meeting" ? "会议" : "资料"}:${c.title || c.source_id}${when}`;
-  });
-  box.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
-    `<div class="cites">依据：${agentEsc(cites.join("、") || "无")}${r.grounded ? "" : "（未通过引用校验）"}</div>`;
-}
-async function loadRagStatus() {
-  if (!state.project) return;
-  try {
-    const r = await pywebview.api.rag_status(state.project);
-    renderRagStatus(r);
-  } catch (e) { /* older builds */ }
-}
-async function loadAgentPage() {
-  const project = state.project || "";
-  $("agentProject").textContent = project || "（未选择项目——先去「项目」页选择）";
-  if (!project) { $("agentStatusLine").textContent = "需要先选择项目"; renderFocus([]); renderFacts([]); renderMemory([]); return; }
-  setAgentBusy(true, "加载项目记忆与关注清单…");
-  try {
-    const st = await pywebview.api.agent_status(project);
-    renderAgentStatus(st);
-    renderFocus(st && st.ok ? st.focus : [], st && st.ok ? st.focus_sources : []);
-    const sessions = await pywebview.api.list_sessions();
-    renderSessions(sessions);
-    const mem = await pywebview.api.agent_memory(project, "",
-      ($("memoryFilter") && $("memoryFilter").value) || "active");
-    renderMemory(mem && mem.ok ? mem : {});
-    await loadRagStatus();
-  } catch (e) {
-    $("agentStatusLine").textContent = "当前安装版本不支持 Agent 页面，请重新安装新版。";
-  } finally { setAgentBusy(false); }
-}
-$("btnFocusGen").onclick = async () => {
+function openMemoryModal() {
   if (!state.project) { toast("先选择项目"); switchPage("project"); return; }
-  if (state.agentBusy) return;
-  setAgentBusy(true, "Agent 正在阅读项目材料并生成关注清单…");
-  try {
-    const r = await pywebview.api.agent_focus_preview(state.project);
-    if (!r || !r.ok) { $("agentStatusLine").textContent = "关注清单生成失败"; toast("生成失败：" + ((r && r.error) || "未知错误"), 9000); return; }
-    renderFocus(r.items || [], r.sources || []);
-    $("agentStatusLine").textContent = `已生成 ${(r.items || []).length} 条关注点，勾选后保存`;
-    toast("已生成 " + (r.items || []).length + " 条关注点，勾选后保存");
-  } finally { setAgentBusy(false); }
-};
-$("btnFocusSave").onclick = async () => {
-  const picked = [...document.querySelectorAll(".agent-focus-pick:checked")].map((c) => state.agentFocus[Number(c.dataset.index)]).filter(Boolean);
-  if (!picked.length) { toast("没有勾选关注点"); return; }
-  setAgentBusy(true, "保存会前关注清单…");
-  try {
-    const r = await pywebview.api.agent_focus_save(state.project, picked, state.agentFocusSources || []);
-    if (!r || !r.ok) { toast("保存失败：" + ((r && r.error) || "未知错误"), 9000); return; }
-    toast("关注清单已保存；下次会议的项目上下文会采用");
-    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
-  } finally { setAgentBusy(false); }
-};
-$("btnFactsPreview").onclick = async () => {
-  const session = $("agentSession").value;
-  if (!session) { toast("先选择一个已保存会话"); return; }
-  if (!state.project) { toast("先选择项目"); return; }
-  setAgentBusy(true, "Agent 正在提取并核对会议事实…");
-  try {
-    const r = await pywebview.api.agent_extract_preview(session, state.project);
-    if (!r || !r.ok) { $("agentStatusLine").textContent = "事实提取失败"; toast("提取失败：" + ((r && r.error) || "未知错误"), 9000); return; }
-    renderFacts(r.items || []);
-    $("agentStatusLine").textContent = `候选 ${r.candidates || 0} 条 · 核对通过 ${r.verified || 0} 条 · 勾选后写入`;
-    toast(`候选 ${r.candidates || 0} 条，核对通过 ${r.verified || 0} 条；勾选后写入`);
-  } finally { setAgentBusy(false); }
-};
-$("btnFactsSave").onclick = async () => {
-  const session = $("agentSession").value;
-  const picked = [...document.querySelectorAll(".agent-fact-pick:checked")].map((c) => state.agentFacts[Number(c.dataset.index)]).filter(Boolean);
-  if (!session) { toast("先选择会话"); return; }
-  if (!picked.length) { toast("没有勾选事实"); return; }
-  setAgentBusy(true, "正在写入项目记忆…");
-  try {
-    const r = await pywebview.api.agent_facts_save(session, state.project, picked);
-    if (!r || !r.ok) { toast("写入失败：" + ((r && r.error) || "未知错误"), 9000); return; }
-    toast(`已写入 ${r.written || 0} 条会议事实`);
-    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
-    const mem = await pywebview.api.agent_memory(state.project, ""); renderMemory(mem && mem.ok ? mem.facts : []);
-  } finally { setAgentBusy(false); }
-};
-$("btnAsk").onclick = async () => {
-  const q = $("agentQuestion").value.trim();
-  if (!q) { toast("请输入问题"); return; }
-  if (!state.project) { toast("先选择项目"); return; }
-  setAgentBusy(true, "Agent 正在检索项目记忆并回答…");
-  try {
-    const r = await pywebview.api.agent_ask(state.project, q);
-    const answer = $("agentAnswer");
-    answer.hidden = false;
-    if (!r || !r.ok) { $("agentStatusLine").textContent = "问答失败"; answer.textContent = "无法回答：" + ((r && r.error) || "未知错误"); return; }
-    $("agentStatusLine").textContent = !r.answered ? "项目记忆中没有足够依据" : (r.grounded ? "回答完成（引用已校验）" : "回答完成（未通过引用校验）");
-    const cites = (r.sources || []).map((s) => s.name).join("、");
-    answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
-      `<div class="cites">依据：${agentEsc(cites || "无")}${r.answered && !r.grounded ? "（未通过事实引用校验）" : ""}</div>`;
-  } finally { setAgentBusy(false); }
-};
-function renderAgentRun(r) {
-  const plan = (r.plan || []).map((step, i) => `${i + 1}. ${step.goal || ""}${step.tool ? " → " + step.tool : ""}`).join(" · ");
-  $("agentRunPlan").textContent = plan ? "计划：" + plan : "";
-  const obs = r.observations || [];
-  const box = $("agentRunSteps");
-  box.className = obs.length ? "agent-list" : "agent-list muted";
-  box.innerHTML = obs.length ? obs.map((o, i) =>
-    `<div class="agent-item"><span class="agent-type">${i + 1}</span><span class="title">${agentEsc(o.tool)}</span>
-     <div class="meta">${agentEsc(JSON.stringify(o.arguments || {}).slice(0, 500))}</div></div>`).join("")
-    : "没有调用工具";
-  const answer = $("agentRunAnswer");
-  answer.hidden = false;
-  const citations = (r.citations || []).map((c) =>
-    c.kind === "turn" ? `${c.session_id}:${(c.turn_ids || []).join(",")}` :
-    (c.kind === "conversation" ? `对话:${c.conversation_id}` :
-     (c.kind === "document" ? `资料:${c.title || c.source_id || c.chunk_id}` :
-      (c.kind === "node" ? `实体:${c.name || c.node_id}` :
-       (c.kind === "edge" ? `关系:${c.relation || c.edge_id || c.id}` : c.name))))).join("、");
-  const stateText = !r.answered ? "没有足够依据" :
-    r.grounded ? "回答完成（引用已校验）" : "回答完成（引用未通过校验）";
-  answer.innerHTML = `<div>${agentEsc(r.answer || "没有回答")}</div>` +
-    `<div class="cites">${agentEsc(stateText)}${citations ? " · 依据：" + agentEsc(citations) : ""}</div>`;
+  $("memoryModal").hidden = false;
+  reloadMemory();
 }
-$("btnAgentRun").onclick = async () => {
-  if (!state.project) { toast("先选择项目"); switchPage("project"); return; }
-  const q = $("agentRunQuestion").value.trim();
-  if (!q) { toast("请输入 Agent 问题"); return; }
-  if (state.agentBusy) return;
-  setAgentBusy(true, "Agent 正在规划并调用工具…");
-  try {
-    const r = await pywebview.api.agent_run(state.project, q, 8, "auto");
-    if (!r || (!r.ok && !r.answer)) {
-      $("agentStatusLine").textContent = "Agent 运行失败";
-      toast("Agent 运行失败：" + ((r && (r.error || r.stop_reason)) || "未知错误"), 9000);
-      return;
-    }
-    renderAgentRun(r);
-    $("agentStatusLine").textContent =
-      `Agent ${r.status}/${r.stop_reason} · ${r.steps || 0} 步 · ${r.tool_calls || 0} 次工具 · ` +
-      (r.grounded ? "引用已校验" : "引用未校验");
-    toast(r.grounded ? "Agent 完成，引用已校验" : "Agent 完成，但引用未通过校验", 8000);
-  } catch (e) {
-    $("agentStatusLine").textContent = "Agent 运行失败";
-    toast("Agent 运行失败：" + e, 9000);
-  } finally { setAgentBusy(false); }
-};
+function closeMemoryModal() { $("memoryModal").hidden = true; }
+$("btnMemoryClose").onclick = closeMemoryModal;
 $("btnMemory").onclick = async () => {
   if (!state.project) { toast("先选择项目"); return; }
   setAgentBusy(true, "检索项目记忆…");
-  try {
-    await reloadMemory();
-    $("agentStatusLine").textContent = "项目记忆已刷新";
-  } finally { setAgentBusy(false); }
+  try { await reloadMemory(); } finally { setAgentBusy(false); }
 };
 $("memoryFilter").onchange = () => { if (state.project) reloadMemory(); };
 $("agentMemoryQuery").addEventListener("keydown", (event) => {
@@ -1309,37 +1147,16 @@ $("btnMemEditSave").onclick = async () => {
     $("memoryEditor").hidden = true;
     toast("记忆已保存");
     await reloadMemory();
-    const st = await pywebview.api.agent_status(state.project); renderAgentStatus(st);
   } finally { setAgentBusy(false); }
 };
-
-async function buildRagIndex(force) {
-  if (!state.project) { toast("先选择项目"); return; }
-  if (state.agentBusy) return;
-  setAgentBusy(true, force ? "强制重建项目知识库…" : "增量更新项目知识库…");
-  try {
-    const r = await pywebview.api.rag_index(state.project, true);
-    if (!r || !r.ok) { toast("RAG 索引失败：" + ((r && (r.error || r.error_code)) || "未知错误"), 12000); return; }
-    await loadRagStatus();
-    toast(`知识库已更新：${r.documents || 0} 个来源 / ${r.chunks || 0} 个片段${r.embedding ? "（含向量）" : ""}`, 9000);
-  } catch (e) { toast("RAG 索引失败：" + e, 12000); }
-  finally { setAgentBusy(false); }
-}
-$("btnRagIndex").onclick = () => buildRagIndex(false);
-$("btnRagForce").onclick = () => buildRagIndex(true);
-$("btnRagAsk").onclick = async () => {
-  const q = $("ragQuestion").value.trim();
-  if (!q) { toast("请输入问题"); return; }
-  if (!state.project) { toast("先选择项目"); return; }
-  setAgentBusy(true, "RAG 正在检索项目资料与会议记录…");
-  try {
-    const r = await pywebview.api.rag_ask(state.project, q);
-    renderRagAnswer(r);
-    $("agentStatusLine").textContent = r && r.grounded ? "RAG 回答完成（引用已校验）" : "RAG 回答完成（未通过引用校验）";
-  } finally { setAgentBusy(false); }
-};
-$("ragQuestion").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") { event.preventDefault(); $("btnRagAsk").click(); }
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-memory-open]")) openMemoryModal();
+});
+$("memoryModal").addEventListener("click", (event) => {
+  if (event.target === $("memoryModal")) closeMemoryModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("memoryModal").hidden) closeMemoryModal();
 });
 
 /* ---------- 知识图谱 ---------- */
@@ -1355,6 +1172,17 @@ function kgAsOfValue() {
   return value ? `${value}T23:59:59+0800` : "";
 }
 function kgColor(kind) { return KG_COLORS[kind] || "#94a3b8"; }
+function renderKgSessions(sessions) {
+  const select = $("kgSession");
+  if (!select) return;
+  const current = select.value;
+  const available = (sessions || []).filter((s) => s.has_transcript);
+  select.innerHTML = '<option value="">选择有转写的会话</option>' + available.map((s) => {
+    const when = s.mtime ? new Date(s.mtime * 1000).toLocaleString() : "";
+    return `<option value="${kgEsc(s.sid)}">${kgEsc(s.sid)} · ${when}</option>`;
+  }).join("");
+  if (current && [...select.options].some((o) => o.value === current)) select.value = current;
+}
 function initKgGraph() {
   if (state.kgCy || !window.cytoscape) return;
   state.kgCy = cytoscape({
@@ -1532,9 +1360,9 @@ async function kgBuild() {
   } finally { setAgentBusy(false); }
 }
 async function kgIngest() {
-  const session = $("agentSession") ? $("agentSession").value : "";
+  const session = ($("kgSession") && $("kgSession").value) || "";
   if (!state.project) { toast("先选择项目"); return; }
-  if (!session) { toast("先到 Agent 页选择一个有转写的会话"); return; }
+  if (!session) { toast("先在知识图谱页选择一个有转写的会话"); return; }
   setAgentBusy(true, "Agnes 正在抽取实体/关系（可能需要几十秒）…");
   try {
     const r = await pywebview.api.kg_ingest(state.project, session, false);
@@ -1563,7 +1391,7 @@ async function loadKgPage() {
   await loadKgStatus();
   try {
     const sessions = await pywebview.api.list_sessions();
-    renderSessions(sessions);
+    renderKgSessions(sessions);
   } catch (e) { /* session picker is optional */ }
   const name = state.project.split(/[\\/]/).filter(Boolean).pop() || "";
   if (name && !$("kgQuery").value) {
@@ -2165,6 +1993,22 @@ document.querySelectorAll(".page").forEach((page) => {
   page.prepend(close);
 });
 $("panelScrim").onclick = () => switchPage("home");
+
+document.querySelectorAll("[data-inspector-tab]").forEach((tab) => {
+  tab.onclick = () => {
+    document.querySelectorAll("[data-inspector-tab]").forEach((item) => {
+      item.classList.toggle("selected", item === tab);
+    });
+    const files = tab.dataset.inspectorTab === "files";
+    $("inspectorFiles").hidden = !files;
+    $("inspectorNotes").hidden = files;
+  };
+});
+$("btnInspectorCollapse").onclick = () => {
+  $("appShell").classList.toggle("inspector-collapsed");
+};
+$("btnInspectorProject").onclick = () => switchPage("project");
+$("btnInspectorLibrary").onclick = () => switchPage("library");
 
 $("fileViewerClose").onclick = () => { $("fileViewer").hidden = true; };
 $("btnViewerOpen").onclick = async () => {

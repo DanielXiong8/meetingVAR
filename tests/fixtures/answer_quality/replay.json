@@ -1,0 +1,1957 @@
+{
+  "dataset_kind": "synthetic",
+  "external_model_called": false,
+  "expected_adversarial_status": {
+    "01_project_overview": "passed",
+    "02_no_invented_owner_date": "failed",
+    "03_scoped_count": "passed",
+    "04_variant_count": "passed",
+    "05_missing_list_item": "failed",
+    "06_extra_out_of_scope_item": "failed",
+    "07_false_premise": "failed",
+    "08_follow_correction": "passed",
+    "09_ignore_correction": "failed",
+    "10_current_source_version": "passed",
+    "11_stale_source_version": "failed",
+    "12_real_id_wrong_proposition": "failed",
+    "13_correct_quote_opposite_conclusion": "failed",
+    "14_quote_wrong_page": "failed",
+    "15_quote_wrong_line": "failed",
+    "16_invented_quote": "failed",
+    "17_service_failure": "infra_failure",
+    "18_rate_limit_429": "infra_failure",
+    "19_empty_read_not_absence": "infra_failure",
+    "20_partial_coverage": "failed"
+  },
+  "variants": {
+    "A": {
+      "model_id": "synthetic-canned/no-model",
+      "generation": {
+        "temperature": 0,
+        "seed": 0,
+        "max_output_tokens": 512
+      },
+      "description": "scripted reference",
+      "reports": {
+        "01_project_overview": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "02_no_invented_owner_date": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "03_scoped_count": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "04_variant_count": {
+          "answer": "队列变体共3项。\n- 顺序队列\n- 链式队列\n- 循环队列",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "队列变体：顺序队列、链式队列、循环队列。\n这里只列队列变体。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "05_missing_list_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "06_extra_out_of_scope_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "07_false_premise": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "08_follow_correction": {
+          "answer": "阶段二：加入多轮更正与版本核验。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "09_ignore_correction": {
+          "answer": "阶段二：加入多轮更正与版本核验。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "10_current_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:6ead0c6e648a81959e229bd28142a27f8e8d60de5dc57bda08499e601a233ac1",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段二。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "11_stale_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:6ead0c6e648a81959e229bd28142a27f8e8d60de5dc57bda08499e601a233ac1",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段二。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "12_real_id_wrong_proposition": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "13_correct_quote_opposite_conclusion": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "14_quote_wrong_page": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "15_quote_wrong_line": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "16_invented_quote": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "17_service_failure": {
+          "answer": "服务读取失败，无法判断材料内容。",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "18_rate_limit_429": {
+          "answer": "服务限流，无法确认所有任务。",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "19_empty_read_not_absence": {
+          "answer": "读取为空，不能据此确认项目没有任务。",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "20_partial_coverage": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      },
+      "execution": {
+        "03_scoped_count": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "05_missing_list_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "06_extra_out_of_scope_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "17_service_failure": {
+          "failures": [
+            "service_unavailable"
+          ]
+        },
+        "18_rate_limit_429": {
+          "failures": [
+            "rate_limited"
+          ]
+        },
+        "19_empty_read_not_absence": {
+          "empty_units": [
+            "synthetic-project:p1"
+          ]
+        },
+        "20_partial_coverage": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        }
+      }
+    },
+    "B": {
+      "model_id": "synthetic-canned/no-model",
+      "generation": {
+        "temperature": 0,
+        "seed": 0,
+        "max_output_tokens": 512
+      },
+      "description": "scripted adversarial",
+      "reports": {
+        "01_project_overview": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "02_no_invented_owner_date": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。负责人：小王；截止日期：2026-12-01。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "03_scoped_count": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "04_variant_count": {
+          "answer": "队列变体共3项。\n- 顺序队列\n- 链式队列\n- 循环队列",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "队列变体：顺序队列、链式队列、循环队列。\n这里只列队列变体。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "05_missing_list_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          },
+          "items": [
+            "栈",
+            "队列",
+            "链表"
+          ],
+          "count": 3
+        },
+        "06_extra_out_of_scope_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表\n- 堆",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "07_false_premise": {
+          "answer": "默认会自动上传资料到云端以提高速度。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "08_follow_correction": {
+          "answer": "阶段二：加入多轮更正与版本核验。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "09_ignore_correction": {
+          "answer": "阶段一：离线原型验证。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "10_current_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:6ead0c6e648a81959e229bd28142a27f8e8d60de5dc57bda08499e601a233ac1",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段二。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "11_stale_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:2f1cae06c75ee79704c98754f0cb9db7ae9e34fd7aeee3b653e20376806e3479",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段一。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "12_real_id_wrong_proposition": {
+          "answer": "默认自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "13_correct_quote_opposite_conclusion": {
+          "answer": "引用虽写着“默认不自动上传资料到云端”，结论却是默认自动上传。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "14_quote_wrong_page": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "15_quote_wrong_line": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "16_invented_quote": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认自动上传资料到云端。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "17_service_failure": {
+          "answer": "",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "18_rate_limit_429": {
+          "answer": "",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          },
+          "errors": [
+            {
+              "http_status": 429,
+              "code": "rate_limit"
+            }
+          ]
+        },
+        "19_empty_read_not_absence": {
+          "answer": "项目没有任务。",
+          "citations": [],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "20_partial_coverage": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": true,
+          "grounded": true,
+          "answered": true,
+          "semantic_verified": true,
+          "source_validated": true,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      },
+      "execution": {
+        "03_scoped_count": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "05_missing_list_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "06_extra_out_of_scope_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "17_service_failure": {
+          "failures": [
+            "service_unavailable"
+          ]
+        },
+        "18_rate_limit_429": {
+          "failures": [
+            "rate_limited"
+          ]
+        },
+        "19_empty_read_not_absence": {
+          "empty_units": [
+            "synthetic-project:p1"
+          ]
+        },
+        "20_partial_coverage": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        }
+      }
+    },
+    "C": {
+      "model_id": "synthetic-canned/no-model",
+      "generation": {
+        "temperature": 0,
+        "seed": 0,
+        "max_output_tokens": 512
+      },
+      "description": "same adversarial text with self-reported flags flipped",
+      "reports": {
+        "01_project_overview": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "02_no_invented_owner_date": {
+          "answer": "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。负责人：小王；截止日期：2026-12-01。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "长期目标：建立可回溯的本地证据系统。\n当前阶段：阶段一，离线原型验证。\n当前任务：核验引用、记录工具失败、完善范围检索。\n材料没有指定任务负责人或截止日期。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "03_scoped_count": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "04_variant_count": {
+          "answer": "队列变体共3项。\n- 顺序队列\n- 链式队列\n- 循环队列",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "队列变体：顺序队列、链式队列、循环队列。\n这里只列队列变体。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "05_missing_list_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          },
+          "items": [
+            "栈",
+            "队列",
+            "链表"
+          ],
+          "count": 3
+        },
+        "06_extra_out_of_scope_item": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表\n- 堆",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "07_false_premise": {
+          "answer": "默认会自动上传资料到云端以提高速度。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "08_follow_correction": {
+          "answer": "阶段二：加入多轮更正与版本核验。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "09_ignore_correction": {
+          "answer": "阶段一：离线原型验证。负责人和日期未指定。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 2,
+              "quote": "阶段二：加入多轮更正与版本核验。\n任务负责人和日期仍未指定。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "10_current_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:6ead0c6e648a81959e229bd28142a27f8e8d60de5dc57bda08499e601a233ac1",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段二。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "11_stale_source_version": {
+          "answer": "当前阶段：阶段二。",
+          "citations": [
+            {
+              "source_id": "synthetic-updated",
+              "revision": "sha256:2f1cae06c75ee79704c98754f0cb9db7ae9e34fd7aeee3b653e20376806e3479",
+              "path": "synthetic/synthetic-updated.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "当前阶段：阶段一。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "12_real_id_wrong_proposition": {
+          "answer": "默认自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "13_correct_quote_opposite_conclusion": {
+          "answer": "引用虽写着“默认不自动上传资料到云端”，结论却是默认自动上传。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "14_quote_wrong_page": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 2,
+              "page_end": 2,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "15_quote_wrong_line": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 1,
+              "quote": "默认不自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "16_invented_quote": {
+          "answer": "前提不成立：默认不自动上传资料到云端。",
+          "citations": [
+            {
+              "source_id": "synthetic-project",
+              "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+              "path": "synthetic/synthetic-project.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 5,
+              "line_end": 5,
+              "quote": "默认自动上传资料到云端。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "17_service_failure": {
+          "answer": "",
+          "citations": [],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "18_rate_limit_429": {
+          "answer": "",
+          "citations": [],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          },
+          "errors": [
+            {
+              "http_status": 429,
+              "code": "rate_limit"
+            }
+          ]
+        },
+        "19_empty_read_not_absence": {
+          "answer": "项目没有任务。",
+          "citations": [],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        },
+        "20_partial_coverage": {
+          "answer": "范围内共3项。\n- 栈\n- 队列\n- 链表",
+          "citations": [
+            {
+              "source_id": "synthetic-structures",
+              "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+              "path": "synthetic/synthetic-structures.txt",
+              "page_start": 1,
+              "page_end": 1,
+              "line_start": 1,
+              "line_end": 4,
+              "quote": "范围：基础结构。\n栈。\n队列。\n链表。"
+            }
+          ],
+          "ok": false,
+          "grounded": false,
+          "answered": false,
+          "semantic_verified": false,
+          "source_validated": false,
+          "coverage": {
+            "complete": true,
+            "confirmed_absence": true
+          },
+          "steps": 3,
+          "tool_calls": 2,
+          "elapsed_ms": 0,
+          "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+          }
+        }
+      },
+      "execution": {
+        "03_scoped_count": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "05_missing_list_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "06_extra_out_of_scope_item": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        },
+        "17_service_failure": {
+          "failures": [
+            "service_unavailable"
+          ]
+        },
+        "18_rate_limit_429": {
+          "failures": [
+            "rate_limited"
+          ]
+        },
+        "19_empty_read_not_absence": {
+          "empty_units": [
+            "synthetic-project:p1"
+          ]
+        },
+        "20_partial_coverage": {
+          "read_units": [
+            "synthetic-structures:p1"
+          ]
+        }
+      }
+    }
+  }
+}

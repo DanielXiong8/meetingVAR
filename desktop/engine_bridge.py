@@ -70,6 +70,22 @@ def _build_tree(root: Path):
 
 
 
+def cmd_scan_project(folder: Path) -> dict:
+    from meetingvar.memory.preview import scan_project_folder
+    return scan_project_folder(folder)
+
+
+def cmd_commitment_ledger(folder: Path, query: str) -> dict:
+    from meetingvar.agent.evidence_skills import CommitmentLedgerSkill
+    return CommitmentLedgerSkill(folder).run(query)
+
+
+def cmd_find_moment(folder: Path, query: str, session_id: str, limit: int) -> dict:
+    from meetingvar import config
+    from meetingvar.agent.evidence_skills import FindMomentSkill
+    return FindMomentSkill(folder, config.DATA_DIR).run(query, session_id=session_id, limit=limit)
+
+
 def cmd_read_project_file(folder: Path, relative: str) -> dict:
     """Delegate to the shared, engine-independent preview implementation."""
     from meetingvar.memory.preview import read_project_file
@@ -353,6 +369,35 @@ def cmd_test_llm() -> dict:
     return {**{k: v for k, v in reply.items() if k != "content"}, "model": config.LLM_MODEL}
 
 
+def cmd_workspace_sync(folder: Path) -> dict:
+    """Refresh agent-maintained workspace memory; no model call."""
+    from meetingvar.agent.workspace import sync
+
+    return sync(Path(folder))
+
+
+def cmd_workspace_start(folder: Path, force: bool = False) -> dict:
+    import os
+    import subprocess
+    from meetingvar.agent.workspace_jobs import start
+
+    def launch(root, job_id):
+        flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) if os.name == 'nt' else 0
+        env = os.environ.copy()
+        for key in ('MEETINGVAR_OPERATION_OWNER_PID', 'MEETINGVAR_OPERATION_OWNER_START', 'MEETINGVAR_OPERATION_ID'):
+            env.pop(key, None)
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'workspace_run', str(root), job_id],
+                         cwd=str(Path(__file__).resolve().parent.parent), env=env,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags, start_new_session=os.name != 'nt', close_fds=True)
+    return start(folder, launch=launch, force=force)
+
+
+def cmd_workspace_status(folder: Path, job_id: str = '') -> dict:
+    from meetingvar.agent.workspace_jobs import snapshot
+    return snapshot(folder, job_id)
+
+
 def cmd_understand_plan(folder: Path) -> dict:
     """Offline budget plan; retain configuration failures returned by the planner."""
     from meetingvar.memory.probe import plan
@@ -548,13 +593,59 @@ def cmd_agent_chat_load(folder: Path, conversation_id: str) -> dict:
     return {"ok": True, "conversation": conversation}
 
 
-def cmd_agent_chat_send(folder: Path, conversation_id: str, message: str) -> dict:
+def _emit_progress(event: dict) -> None:
+    print("@@MEETINGVAR_EVENT " + json.dumps({"type": "agent_progress", **event},
+                                              ensure_ascii=False), flush=True)
+
+
+def cmd_agent_chat_send(folder: Path, conversation_id: str, message: str,
+                        mode: str = "agent", run_id: str = "") -> dict:
+    from uuid import UUID, uuid4
     from meetingvar.agent.chat import ChatAgent, ChatError
 
+    run_id = str(UUID(run_id)) if run_id else str(uuid4())
+    identity = {"folder": str(folder), "project": str(folder),
+                "conversation_id": conversation_id, "thread_id": conversation_id,
+                "run_id": run_id}
+    def progress(event: dict) -> None:
+        # Identity is supplied by the trusted invocation, never by model output.
+        _emit_progress({**event, **identity})
     try:
-        return ChatAgent(folder, conversation_id=conversation_id).ask(message)
+        result = ChatAgent(folder, conversation_id=conversation_id,
+                           progress=progress).ask(message, mode=mode, run_id=run_id)
+    except ChatError as exc:
+        result = {"ok": False, "error_code": exc.code, "error": exc.message}
+    return {**result, **identity}
+
+
+def cmd_chat_action_finalize(folder: Path, conversation_id: str, action_id: str,
+                             receipt_file: Path) -> dict:
+    from meetingvar.agent.chat import ChatAgent, ChatError
+
+    receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("ok"), bool):
+        return {"ok": False, "error": "操作完成回执无效"}
+    try:
+        return ChatAgent(folder, conversation_id=conversation_id).finalize_action(action_id, receipt)
     except ChatError as exc:
         return {"ok": False, "error_code": exc.code, "error": exc.message}
+
+
+def cmd_chat_action_status(folder: Path, conversation_id: str, action_id: str) -> dict:
+    from meetingvar.agent.operations import OperationStore
+
+    operation = OperationStore(folder).get(action_id)
+    if not operation or operation.get("thread_id") != conversation_id:
+        return {"ok": False, "error": "操作不存在或不属于此对话"}
+    return {"ok": True, "status": operation["status"],
+            "action_id": action_id, "result": operation.get("result"),
+            "folder": str(folder), "conversation_id": conversation_id}
+
+
+def cmd_chat_interrupt(folder: Path, run_id: str, reason: str) -> dict:
+    from meetingvar.agent.operations import OperationStore
+
+    return {"ok": True, "interrupted": OperationStore(folder).interrupt_run(run_id, reason=reason)}
 
 
 def cmd_agent_chat_postmeeting_offer(folder: Path, conversation_id: str = "") -> dict:
@@ -603,11 +694,118 @@ def cmd_rag_ask(folder: Path, question: str, limit: int = 8) -> dict:
     return RagIndex(folder, config.DATA_DIR).answer(question, limit=limit)
 
 
+def cmd_architecture(folder: Path) -> dict:
+    from meetingvar.agent.architecture import architecture_view
+    return architecture_view(folder)
+
+
+def cmd_architecture_generate(folder: Path) -> dict:
+    from meetingvar import config, llm
+    from meetingvar.agent.architecture import generate_architecture
+
+    def call(prompt: str) -> dict:
+        result = llm.chat_result(prompt, temperature=0.2, timeout=600, max_tokens=3000)
+        if result.get("ok"):
+            result["model"] = config.LLM_MODEL
+        return result
+
+    try:
+        profile = llm.client_profile()
+        context = int(profile.get("context_tokens") or 0)
+    except Exception:
+        context = 0
+    # Chinese characters are close to one token each; leave room for the
+    # instruction block and the 3000-token JSON answer.
+    max_chars = max(4000, min(40000, context - 6000)) if context else 20000
+    return generate_architecture(folder, call, model=config.LLM_MODEL,
+                                 max_digest_chars=max_chars)
+
+
+def cmd_architecture_save(folder: Path, payload: str) -> dict:
+    from meetingvar.agent.architecture import save_architecture
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "架构保存内容不是合法 JSON"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "架构保存内容必须是对象"}
+    return save_architecture(folder, data)
+
+
 def cmd_kg_status(folder: Path) -> dict:
     from meetingvar.kg.store import GraphStore
 
     store = GraphStore(folder)
     return {"ok": True, **store.stats(), "path": str(store.db_path)}
+
+
+def _now() -> str:
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def cmd_kg_list(folder: Path, limit: int = 800) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    # Listing must not merge or otherwise mutate project knowledge.
+    stats = store.stats()
+    return {"ok": True, "stats": stats,
+            "node_count": stats.get("nodes", 0), "edge_count": stats.get("edges", 0),
+            "nodes": store.nodes(status="active", limit=limit),
+            "edges": store.edges(status="all", limit=limit * 3)}
+
+
+def cmd_kg_add_node(folder: Path, kind: str, name: str, description: str = "") -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    try:
+        node = GraphStore(folder).upsert_node(kind=kind, name=name,
+                                              description=description,
+                                              confidence=1.0,
+                                              metadata={"source": "human"},
+                                              observed_at=_now())
+        return {"ok": True, "node": node}
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def cmd_kg_add_edge(folder: Path, src: str, dst: str, relation: str,
+                    valid_from: str = "") -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    store = GraphStore(folder)
+    head = store.get_node(src) or store.resolve(src)
+    tail = store.get_node(dst) or store.resolve(dst)
+    if not head or not tail:
+        return {"ok": False, "error": "关系端点不存在"}
+    try:
+        edge = store.upsert_edge(
+            src_id=head["id"], dst_id=tail["id"], relation=relation,
+            valid_from=valid_from or _now(), source_type="human",
+            source_id="ui", extractor="human", confidence=1.0,
+            status="asserted", label="")
+        return {"ok": True, "edge": edge, "src": head, "dst": tail}
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def cmd_kg_delete_node(folder: Path, identifier: str) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    return {"ok": True, **GraphStore(folder).delete_node(identifier)}
+
+
+def cmd_kg_delete_edge(folder: Path, identifier: str) -> dict:
+    from meetingvar.kg.store import GraphStore
+
+    return {"ok": True, "deleted": GraphStore(folder).delete_edge(identifier)}
+
+
+def cmd_kg_extract_project(folder: Path, max_chunks: int = 8) -> dict:
+    from meetingvar.kg.project_extract import extract_project
+
+    return extract_project(folder, max_chunks=max_chunks)
 
 
 def cmd_kg_build(folder: Path, reset: bool = False) -> dict:
@@ -788,13 +986,209 @@ def cmd_agent_memory_resolve(folder: Path, name: str, resolution: str) -> dict:
         return {"ok": False, "error": str(exc)[:200]}
 
 
+# Journal only actual mutations, never read-only navigation/search or chat-owned actions.
+_MUTATION_COMMANDS = {
+    "understand", "write_terms", "agent_focus_save", "agent_facts_save",
+    "agent_memory_update", "agent_memory_delete", "agent_memory_pin", "agent_memory_resolve",
+    "rag_index", "kg_add_node", "kg_add_edge", "kg_delete_node", "kg_delete_edge",
+    "kg_build", "kg_extract_project", "kg_ingest", "kg_merge", "kg_review_edge",
+    "digest_session",
+}
+_FACT_MUTATIONS = {"agent_facts_save", "agent_memory_update",
+                   "agent_memory_delete", "agent_memory_resolve"}
+
+
+def _begin_operation(cmd: str, args: list[str]):
+    import os
+    from uuid import uuid4
+    from meetingvar.agent.operations import OperationStore
+
+    if cmd not in _MUTATION_COMMANDS:
+        return None
+    root_index = 1 if cmd == "agent_facts_save" else 0
+    root = Path(args[root_index])
+    if not root.is_dir():
+        raise ValueError("项目文件夹无效")
+    store = OperationStore(root)
+    owner = os.environ.get("MEETINGVAR_CHAT_ACTION_ID", "")
+    if owner:
+        action = store.get(owner)
+        if (cmd != "understand" or not action or action.get("kind") != "start_project_reading"
+                or action.get("status") != "running"):
+            raise ValueError("聊天操作身份不匹配")
+        return None  # The desktop finalizes the original approved action.
+    arguments = {"argv": list(args)}
+    # Payload files are ephemeral transport, not a recoverable operation identity.
+    payload_index = {"write_terms": 1, "agent_focus_save": 1,
+                     "agent_facts_save": 2, "agent_memory_update": 2}.get(cmd)
+    if payload_index is not None:
+        arguments["payload"] = json.loads(Path(args[payload_index]).read_text(encoding="utf-8"))
+        arguments["argv"][payload_index] = "<payload>"
+    ident = os.environ.get("MEETINGVAR_OPERATION_ID") or str(uuid4())
+    prior = store.get(ident)
+    operation = store.create(cmd, arguments, operation_id=ident, run_id=ident, origin="desktop")
+    if prior is not None:
+        raise ValueError("操作 ID 已存在；请查询原操作结果，不自动重放写入")
+    store.claim(ident)
+    print("@@MEETINGVAR_EVENT " + json.dumps({"type": "operation_progress",
+          "folder": str(root), "operation_id": ident, "run_id": ident,
+          "status": "running"}, ensure_ascii=False), flush=True)
+    return store, ident, root
+
+
+def _finish_operation(context, cmd: str, payload: dict) -> dict:
+    store, ident, root = context
+    if cmd in _FACT_MUTATIONS and (payload.get("ok") is True or payload.get("written")):
+        try:
+            from meetingvar import config
+            from meetingvar.kg.build import GraphBuilder
+            projection = GraphBuilder(root, config.DATA_DIR).build(include_meetings=True, reset=False)
+            if projection.get("ok") is False:
+                raise ValueError("图谱投影返回失败")
+            payload["projection"] = projection
+        except Exception:
+            payload.update(ok=False, projection_pending=True, mutation_applied=True,
+                           error="事实已保存，但图谱投影待修复；请重建图谱（保留人工编辑）")
+    artifacts = []
+    for key in ("path", "out", "minutes_path"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            candidate = Path(value)
+            candidate = (candidate if candidate.is_absolute() else root / candidate).resolve()
+            if root.resolve() in candidate.parents and candidate.is_file():
+                artifacts.append(str(candidate))
+    try:
+        operation = store.finish(ident, payload, artifacts=artifacts)
+        return {**payload, "operation_id": ident, "run_id": ident,
+                "operation_status": operation["status"]}
+    except Exception:
+        # Preserve the mutation outcome and durable running identity for recovery.
+        return {**payload, "ok": False, "operation_id": ident, "run_id": ident,
+                "journal_pending": True, "error": "操作结果已返回，但记录未完成；请核对原操作，勿重复执行"}
+
+
+def cmd_digest_session(folder: Path, session_id: str) -> dict:
+    from meetingvar.report.generate import digest
+
+    out = digest(session_id, use_llm=True)
+    if out is None:
+        return {"ok": False, "error": "该会议没有可生成纪要的保存内容"}
+    path = out / "minutes.md"
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if not text or "〔模板版〕" in text or "MEETINGVAR_LLM_" in text:
+        return {"ok": False, "error": "模型没有返回有效纪要", "minutes_path": str(path)}
+    return {"ok": True, "minutes": text, "minutes_path": str(path),
+            "artifact_scope": "engine-reports; outside-project files are not operation artifacts"}
+
+
+def _reconcile_project_operations(folder: Path) -> dict:
+    from meetingvar.agent.operations import OperationStore
+
+    if not folder.is_dir():
+        return {"ok": False, "error": "项目文件夹无效"}
+    store = OperationStore(folder)
+    return {"ok": True, **store.reconcile_orphans(), "storage": store.storage_stats()}
+
+
+def cmd_operation_get(folder: Path, operation_id: str) -> dict:
+    from meetingvar.agent.operations import OperationStore
+
+    row = OperationStore(folder).get(operation_id)
+    return {"ok": row is not None, "operation": row}
+
+
+def cmd_host_operation_begin(folder: Path, kind: str, operation_id: str, payload_file: Path) -> dict:
+    from meetingvar.agent.operations import OperationStore
+    allowed = {"host.start_meeting", "host.stop_meeting", "host.transcribe_media", "host.manual_var",
+               "host.answer_prompt", "host.export_project_data", "host.delete_project_data"}
+    if kind not in allowed or not folder.is_dir():
+        return {"ok": False, "error": "不支持的宿主操作或项目"}
+    arguments = json.loads(payload_file.read_text(encoding="utf-8"))
+    store = OperationStore(folder)
+    if store.get(operation_id) is not None:
+        return {"ok": False, "error": "操作已存在，不自动重放", "operation_id": operation_id}
+    store.create(kind, arguments, operation_id=operation_id, run_id=operation_id, origin="desktop_control")
+    store.claim(operation_id)
+    return {"ok": True, "operation_id": operation_id, "status": "running"}
+
+
+def cmd_host_operation_finish(folder: Path, operation_id: str, payload_file: Path) -> dict:
+    from meetingvar.agent.operations import OperationStore
+    result = json.loads(payload_file.read_text(encoding="utf-8"))
+    store = OperationStore(folder)
+    row = store.get(operation_id)
+    if not row or not row["kind"].startswith("host.") or type(result.get("ok")) is not bool:
+        return {"ok": False, "error": "宿主执行回执无效"}
+    artifacts = []
+    artifact = result.get("out") or result.get("path")
+    if artifact:
+        target = Path(artifact).resolve()
+        if folder.resolve() in target.parents and target.is_file():
+            artifacts = [str(target)]
+        else:
+            result["artifact_scope"] = "outside_project_or_unverified"
+        if row["kind"] == "host.export_project_data" and result.get("ok") is True:
+            import hashlib
+            try:
+                expected = Path(row["arguments"]["target"]).resolve()
+                if target != expected or not target.is_file():
+                    raise ValueError("导出路径未核验")
+                digest = hashlib.sha256()
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                result.update(sha256=digest.hexdigest(), bytes=target.stat().st_size,
+                              confirmation="export_file_verified")
+            except (OSError, ValueError, KeyError):
+                result.update(ok=False, outcome_unknown=True, error="导出结果无法核验，请检查目标文件")
+    elif row["kind"] == "host.export_project_data" and result.get("ok") is True:
+        result.update(ok=False, outcome_unknown=True, error="导出没有返回目标文件")
+    status = "interrupted" if result.get("outcome_unknown") else None
+    done=store.finish(operation_id,result,status=status,artifacts=artifacts)
+    return {"ok": bool(result["ok"]), "operation_id": operation_id, "operation_status": done["status"],
+            "result": done["result"], "artifacts": done["artifacts"]}
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(json.dumps({"ok": False, "error": "usage: engine_bridge.py preview <folder> | check"}))
         return
     cmd = sys.argv[1]
+    operation = None
+    recovery = None
     try:
-        if cmd == "preview":
+        if cmd in {"scan_project", "preview", "agent_status", "agent_chat_new",
+                   "agent_chat_list", "agent_chat_load", "chat_action_status",
+                   "operation_get", "host_operation_begin"}:
+            recovery = _reconcile_project_operations(Path(sys.argv[2]))
+        if cmd in _MUTATION_COMMANDS:
+            operation = _begin_operation(cmd, sys.argv[2:])
+        if cmd == "host_operation_begin":
+            payload = cmd_host_operation_begin(Path(sys.argv[2]),sys.argv[3],sys.argv[4],Path(sys.argv[5]))
+        elif cmd == "workspace_sync":
+            payload = cmd_workspace_sync(Path(sys.argv[2]))
+        elif cmd == "workspace_start":
+            payload = cmd_workspace_start(Path(sys.argv[2]), len(sys.argv) > 3 and sys.argv[3] == '1')
+        elif cmd in {"workspace_status", "workspace_subscribe"}:
+            payload = cmd_workspace_status(Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else '')
+        elif cmd == "workspace_run":
+            from meetingvar.agent.workspace_jobs import run
+            payload = run(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "host_operation_finish":
+            payload = cmd_host_operation_finish(Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4]))
+        elif cmd == "operation_reconcile":
+            payload = _reconcile_project_operations(Path(sys.argv[2]))
+        elif cmd == "operation_get":
+            payload = cmd_operation_get(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "digest_session":
+            payload = cmd_digest_session(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "scan_project":
+            payload = cmd_scan_project(Path(sys.argv[2]))
+        elif cmd == "commitment_ledger":
+            payload = cmd_commitment_ledger(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "find_moment":
+            payload = cmd_find_moment(Path(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5]))
+        elif cmd == "preview":
             payload = cmd_preview(Path(sys.argv[2]))
         elif cmd == "check":
             payload = cmd_check()
@@ -843,17 +1237,47 @@ def main() -> None:
         elif cmd == "agent_chat_load":
             payload = cmd_agent_chat_load(Path(sys.argv[2]), sys.argv[3])
         elif cmd == "agent_chat_send":
-            payload = cmd_agent_chat_send(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+            payload = cmd_agent_chat_send(Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+                                          sys.argv[5] if len(sys.argv) > 5 else "agent",
+                                          sys.argv[6] if len(sys.argv) > 6 else "")
+        elif cmd == "chat_action_finalize":
+            payload = cmd_chat_action_finalize(Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5]))
+        elif cmd == "chat_action_status":
+            payload = cmd_chat_action_status(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
+        elif cmd == "chat_interrupt":
+            payload = cmd_chat_interrupt(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         elif cmd == "agent_chat_action":
             payload = cmd_agent_chat_action(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
         elif cmd == "agent_chat_postmeeting_offer":
             payload = cmd_agent_chat_postmeeting_offer(
                 Path(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "")
+        elif cmd == "architecture":
+            payload = cmd_architecture(Path(sys.argv[2]))
+        elif cmd == "architecture_generate":
+            payload = cmd_architecture_generate(Path(sys.argv[2]))
+        elif cmd == "architecture_save":
+            payload = cmd_architecture_save(Path(sys.argv[2]), sys.argv[3])
         elif cmd == "kg_status":
             payload = cmd_kg_status(Path(sys.argv[2]))
+        elif cmd == "kg_list":
+            payload = cmd_kg_list(Path(sys.argv[2]),
+                                  int(sys.argv[3]) if len(sys.argv) > 3 else 800)
+        elif cmd == "kg_add_node":
+            payload = cmd_kg_add_node(Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+                                      sys.argv[5] if len(sys.argv) > 5 else "")
+        elif cmd == "kg_add_edge":
+            payload = cmd_kg_add_edge(Path(sys.argv[2]), sys.argv[3], sys.argv[4],
+                                      sys.argv[5], sys.argv[6] if len(sys.argv) > 6 else "")
+        elif cmd == "kg_delete_node":
+            payload = cmd_kg_delete_node(Path(sys.argv[2]), sys.argv[3])
+        elif cmd == "kg_delete_edge":
+            payload = cmd_kg_delete_edge(Path(sys.argv[2]), sys.argv[3])
         elif cmd == "kg_build":
             payload = cmd_kg_build(Path(sys.argv[2]),
                                    sys.argv[3].lower() == "true" if len(sys.argv) > 3 else False)
+        elif cmd == "kg_extract_project":
+            payload = cmd_kg_extract_project(Path(sys.argv[2]),
+                                              int(sys.argv[3]) if len(sys.argv) > 3 else 8)
         elif cmd == "kg_ingest":
             payload = cmd_kg_ingest(Path(sys.argv[2]),
                                     sys.argv[3] if len(sys.argv) > 3 else "",
@@ -912,6 +1336,10 @@ def main() -> None:
                        "warnings": [], "error": "Agent/模型任务未能完成；内部异常详情未向输出公开"}
         else:
             payload = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if operation is not None:
+        payload = _finish_operation(operation, cmd, payload)
+    if recovery is not None:
+        payload["operation_recovery"] = recovery
     print(json.dumps(payload, ensure_ascii=False))
 
 

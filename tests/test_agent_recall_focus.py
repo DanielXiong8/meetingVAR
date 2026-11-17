@@ -121,7 +121,7 @@ class FocusTests(unittest.TestCase):
         data = json.loads((self.project / "meetingvar" / "agent_memory" / "focus.json").read_text(encoding="utf-8"))
         self.assertEqual(len(data["items"]), 2)
 
-    def test_focus_retries_shorter_material_on_context_budget(self):
+    def test_focus_context_budget_preserves_error_without_shorter_retry(self):
         (self.project / "long.md").write_text("项目背景。" * 2500, encoding="utf-8")
         calls = []
 
@@ -133,10 +133,18 @@ class FocusTests(unittest.TestCase):
 
         report = FocusAgent(project_root=self.project, dry_run=True,
                             approval=lambda items: True, max_chars=12000, llm=llm).preview()
-        self.assertTrue(report["ok"], report)
-        self.assertGreaterEqual(len(calls), 2)
+        self.assertFalse(report["ok"], report)
+        self.assertEqual(report["error_code"], "context_budget")
+        self.assertEqual(len(calls), 1)
         self.assertGreater(calls[0], 7000)
-        self.assertLessEqual(calls[-1], 7000)
+        self.assertEqual(report["budget"]["model_calls"], 1)
+        self.assertGreater(report["usage"]["prompt_tokens"], 0)
+        self.assertGreater(report["usage"]["completion_tokens"], 0)
+        self.assertFalse(report["saved"])
+        self.assertFalse((self.project / "meetingvar" / "agent_memory" / "focus.json").exists())
+        self.assertFalse(report["coverage"]["complete"])
+        self.assertEqual(report["coverage"]["processed"], 0)
+        self.assertEqual(report["coverage"]["failed"], 1)
 
     def test_focus_invalid_output_reports_error_code(self):
         report = FocusAgent(project_root=self.project, dry_run=True,

@@ -47,12 +47,36 @@ class ProbeTests(unittest.TestCase):
                                  side_effect=AssertionError("unexpected network operation"))
             blocker.start()
             self.addCleanup(blocker.stop)
+        # understand now takes the injecting host's client; tests may still stub
+        # the provider function, but the call goes through the same ModelClient
+        # boundary as production instead of a hidden global path.
+        from meetingvar.model_client import CallableModelClient
+
+        class ConfigClient(CallableModelClient):
+            @property
+            def cache_key(self):
+                return json.dumps(llm.client_profile(), sort_keys=True, ensure_ascii=False)
+
+        original = probe.understand
+        def injected(*args, **kwargs):
+            def chat(prompt, **kw):
+                # The legacy fake accepts only temperature/timeout.
+                return llm.chat_result(prompt, **{k: kw[k] for k in ("temperature", "timeout") if k in kw})
+            kwargs.setdefault("model_client", ConfigClient(
+                lambda messages, **kw: chat(messages[-1]["content"], **kw),
+                budget=llm.token_budget()))
+            return original(*args, **kwargs)
+        self._understand = mock.patch.object(probe, "understand", side_effect=injected)
+        self._understand.start()
+        self.addCleanup(self._understand.stop)
         (self.tmp / "a.txt").write_text(DOC_A, encoding="utf-8")
         # 副本只在尾部多两句（真实场景：副本与正本前 2 万字逐字节相同）——前缀包含/前缀全等必须抓到
         (self.tmp / "b_copy.txt").write_text(DOC_A + "\n补记：尾声。\n", encoding="utf-8")
-        (self.tmp / "bin.txt").write_bytes(b"PK\x03\x04" + b"\xd2" * 200)
 
     def test_dedupe_by_prefix_containment(self) -> None:
+        # A binary .txt is an unreadable source: it belongs to this skip test,
+        # not to fixtures whose sampling/coverage assertions assume full reads.
+        (self.tmp / "bin.txt").write_bytes(b"PK\x03\x04" + b"\xd2" * 200)
         docs, notes = probe.load_corpus(self.tmp)
         self.assertEqual([n for n, _ in docs], ["a.txt"], "近似副本应被去重；二进制应跳过")
         self.assertTrue(any("重复" in n for n in notes))
@@ -79,6 +103,7 @@ class ProbeTests(unittest.TestCase):
 
     def test_plan_notes_stats_and_summary(self) -> None:
         """预算行只给摘要（去重/跳过各几组），明细在 notes 里——曾把几十条说明糊一墙。"""
+        (self.tmp / "bin.txt").write_bytes(b"PK\x03\x04" + b"\xd2" * 200)
         p = probe.plan(self.tmp)
         st = p["notes_stats"]
         self.assertEqual(st["skipped"], 1, "bin.txt 应计 1 个跳过")
@@ -129,7 +154,7 @@ class ProbeTests(unittest.TestCase):
     def _fake_chat(self, calls: list):
         def fake(prompt, temperature=0.3, timeout=900):
             calls.append(prompt)
-            if "标题清单" in prompt:
+            if "标题清单" in prompt or "说明项目内容" in prompt:
                 return self._reply("这是一套测试文档集。")
             return self._reply(json.dumps({
                 "persons": [{"name": "温水", "role": "主角"}, {"name": "查无此人", "role": "编造"}],
@@ -199,7 +224,8 @@ class ProbeTests(unittest.TestCase):
                 self.assertEqual(len(calls), result["chunks_total"])
                 self.assertTrue(all(budget.fits(prompt) for prompt in calls))
                 self.assertTrue(all(ch["chars"] <= 6000 for ch in planned["chunks"]))
-                self.assertEqual(planned["budget"]["method"], "utf8_bytes_upper_bound")
+                # The estimator is named for what it is: an estimate, not a tokenizer bound.
+                self.assertEqual(planned["budget"]["method"], "estimated_tokens")
                 self.assertTrue(any("不是精确" in w for w in result["warnings"]))
                 chunks = probe.split_chunks(docs, budget=budget)
                 self.assertEqual("".join(ch["text"] for ch in chunks), docs[0][1])
@@ -346,19 +372,22 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(result["cache_hits"], 1)
         self.assertEqual(len(resumed), result["chunks_total"] - 1)
 
-    def test_empty_overview_is_a_warning_not_a_failed_reading(self):
+    def test_empty_overview_is_honest_partial_not_full_semantics(self):
+        """Read chunks stay valid, but a missing overview is not semantic completion."""
         fake = self._fake_chat([])
 
         def empty_overview(prompt, **kwargs):
-            return llm.error_result("empty_content") if "标题清单" in prompt else fake(prompt, **kwargs)
+            return llm.error_result("empty_content") if ("标题清单" in prompt or "说明项目内容" in prompt) else fake(prompt, **kwargs)
 
         with mock.patch.object(llm, "chat_result", empty_overview):
             result = probe.understand(self.tmp)
-        self.assertTrue(result["ok"])
-        self.assertTrue(result["complete"])
-        self.assertIsNone(result["error_code"])
+        self.assertEqual(result["chunks_read"], result["chunks_total"])
+        self.assertGreater(result["chunks_read"], 0)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["error_code"], "summary_failed")
         self.assertEqual(result["overview"], "")
-        self.assertTrue(any("概述未生成（empty_content）" in w for w in result["warnings"]))
+        self.assertTrue(any("概述未生成" in w for w in result["warnings"]))
 
     def test_cache_isolates_endpoint_full_model_budget_and_thinking(self):
         baseline = {"LLM_BASE_URL": "https://example.invalid/v1", "LLM_MODEL": "same-prefix-long-name-A",

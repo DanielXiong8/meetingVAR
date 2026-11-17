@@ -15,6 +15,7 @@ from typing import Callable
 
 from .memory import FactStore
 from .runtime import AgentRuntime
+from .model_calls import ToolModelCalls
 from .tools import ToolContext, ToolError, ToolRegistry, ToolSpec
 from .trace import TraceRecorder
 
@@ -215,13 +216,14 @@ class PostMeetingAgent:
     def __init__(self, *, session_id: str, transcript: list[dict], project_root: Path,
                  approval: Callable[[dict, list[dict]], bool] | None = None,
                  dry_run: bool = False, max_chars: int = 12000,
-                 llm: Callable[[str], object] | None = None):
+                 llm: Callable[[str], object] | None = None, model_client=None, model_budget=None):
         self.session_id = session_id
         self.transcript = transcript
         self.project_root = Path(project_root)
         self.dry_run = dry_run
         self.max_chars = max_chars
         self._llm = llm
+        self.model = ToolModelCalls(model_client=model_client, model_budget=model_budget, llm=llm)
         self._approval = approval
         self.fact_store = FactStore(self.project_root)
         trace_dir = self.project_root / "meetingvar" / "agent_memory" / "trace"
@@ -309,13 +311,7 @@ class PostMeetingAgent:
         return {"dry_run": False, "path": str(path), **preview}
 
     def _call_llm(self, prompt: str) -> list[dict]:
-        if self._llm is None:
-            from ..llm import chat_result
-            reply = chat_result(prompt, temperature=0.2, timeout=180)
-        else:
-            reply = self._llm(prompt)
-            if isinstance(reply, str):
-                reply = {"ok": True, "content": reply, "error_code": None}
+        reply = self.model.complete(prompt, temperature=0.2, timeout=180)
         if not isinstance(reply, dict):
             raise PostMeetingError("invalid_result", "模型返回格式无效")
         if not reply.get("ok"):
@@ -327,20 +323,32 @@ class PostMeetingAgent:
             raise PostMeetingError("invalid_output", "模型输出不是有效的会议事实 JSON") from None
 
     def _extract_candidates(self) -> tuple[list[dict], int]:
-        last_error = None
-        for limit in dict.fromkeys(max(1000, min(self.max_chars, n))
-                                   for n in (self.max_chars, 6000, 4000, 3000)):
+        # The shared request runner alone owns bounded provider retries. Never
+        # replay already charged chunks or shrink source content after failure.
+        chunks = _chunks(self.transcript, self.max_chars)
+        candidates = []
+        self._partial_candidates = []
+        self._extraction_coverage = {"scope": "provided_transcript_chunks", "total": len(chunks),
+            "processed": 0, "failed": 0, "truncated": False, "complete": False}
+        for chunk in chunks:
             try:
-                chunks = _chunks(self.transcript, limit)
-                candidates = []
-                for chunk in chunks:
-                    candidates.extend(self._call_llm(_prompt(chunk)))
-                return _merge(candidates)[:30], len(chunks)
-            except PostMeetingError as exc:
-                last_error = exc
-                if exc.code not in {"context_budget", "truncated", "invalid_output"}:
-                    break
-        raise last_error or PostMeetingError("extract_failed", "会议事实提取失败")
+                candidates.extend(self._call_llm(_prompt(chunk)))
+            except PostMeetingError:
+                self._partial_candidates = _merge(candidates)
+                self._extraction_coverage["failed"] += 1
+                raise
+            self._extraction_coverage["processed"] += 1
+        result = _merge(candidates)
+        self._extraction_coverage.update(complete=len(result) <= 30, truncated=len(result) > 30)
+        return result[:30], len(chunks)
+
+    def _report(self, report: dict) -> dict:
+        result = dict(report)
+        if hasattr(self, "_extraction_coverage"):
+            result["coverage"] = dict(self._extraction_coverage)
+        if getattr(self, "_partial_candidates", None):
+            result["partial_candidates"] = list(self._partial_candidates)
+        return self.model.report(result)
 
     @staticmethod
     def _normalize_item(item: dict) -> dict | None:
@@ -409,7 +417,7 @@ class PostMeetingAgent:
             report["errors"].append({"stage": "extract", "code": exc.code,
                                      "message": exc.message})
             self.runtime.fail(task, "extract_failed")
-            return report
+            return self._report(report)
         context = ToolContext(session_id=self.session_id, project_root=self.project_root,
                               transcript=self.transcript, fact_store=self.fact_store,
                               dry_run=True)
@@ -428,7 +436,7 @@ class PostMeetingAgent:
             report["verified"] += 1
         report["ok"] = True
         self.runtime.complete(task, {"candidates": report["candidates"], "verified": report["verified"]})
-        return report
+        return self._report(report)
 
     def _semantic_conflicts(self, item: dict) -> list[str]:
         from .memory_judge import llm_conflicts
@@ -439,7 +447,17 @@ class PostMeetingAgent:
                      ("owner", "due", "rationale", "severity")))
         if not related:
             return []
-        return llm_conflicts(item, related, self._llm or None)
+        calls = []
+        def complete(prompt):
+            reply = self.model.complete(prompt, temperature=0, timeout=20)
+            calls.append(reply)
+            return reply
+        result = llm_conflicts(item, related, complete)
+        if calls and not calls[-1].get("ok"):
+            reply = calls[-1]
+            raise PostMeetingError(str(reply.get("error_code") or "model_error"),
+                                   str(reply.get("error") or "冲突核验未完成"))
+        return result
 
     def save_items(self, items: list[dict]) -> dict:
         """Write selected, already-previewed items; each citation is re-verified."""
@@ -469,6 +487,12 @@ class PostMeetingAgent:
                 f"[{turn['id']}] {turn['speaker']}: {turn['text']}" for turn in evidence)
             if len(evidence_text) > 6000:
                 evidence_text = evidence_text[:6000] + "\n…[truncated]"
+            try:
+                conflicts = self._semantic_conflicts(item)
+            except PostMeetingError as exc:
+                report["skipped"] += 1
+                report["errors"].append({"stage": "conflict", "code": exc.code, "message": exc.message})
+                break
             created = self.runtime.run_tool(
                 task, self.registry, "create_meeting_fact",
                 {"fact_type": item["fact_type"], "title": item["title"],
@@ -477,7 +501,7 @@ class PostMeetingAgent:
                  "confidence": item["confidence"],
                  "evidence_turn_ids": item["evidence_turn_ids"],
                  "evidence_text": evidence_text,
-                 "conflict_with": self._semantic_conflicts(item)},
+                 "conflict_with": conflicts},
                 context=context, approval=lambda request: True,
                 idempotency_key=f"{self.session_id}:{item['fact_type']}:{item['title'].casefold()}",
                 fail_fast=False)
@@ -496,7 +520,7 @@ class PostMeetingAgent:
             else:
                 report["skipped"] += 1
                 report["errors"].append({"stage": "write", "code": created.get("error_code")})
-        write_failed = any(error.get("stage") in {"write", "validate"} for error in report["errors"])
+        write_failed = any(error.get("stage") in {"write", "validate", "conflict"} for error in report["errors"])
         report["ok"] = not write_failed
         if write_failed:
             report["error_code"] = "save_failed"
@@ -504,7 +528,7 @@ class PostMeetingAgent:
             self.runtime.fail(task, "save_failed")
         else:
             self.runtime.complete(task, {"written": report["written"]})
-        return report
+        return self._report(report)
 
     def run(self) -> dict:
         task = self.runtime.create("postmeeting_meeting_facts", {"session_id": self.session_id})
@@ -527,7 +551,7 @@ class PostMeetingAgent:
             report["errors"].append({"stage": "extract", "code": exc.code,
                                      "message": exc.message})
             self.runtime.fail(task, "extract_failed")
-            return report
+            return self._report(report)
 
         context = ToolContext(session_id=self.session_id, project_root=self.project_root,
                               transcript=self.transcript, fact_store=self.fact_store,
@@ -561,6 +585,12 @@ class PostMeetingAgent:
             if len(evidence_text) > 6000:
                 evidence_text = evidence_text[:6000] + "\n…[truncated]"
             try:
+                conflicts = self._semantic_conflicts(item)
+            except PostMeetingError as exc:
+                report["skipped"] += 1
+                report["errors"].append({"stage": "conflict", "code": exc.code, "message": exc.message})
+                break
+            try:
                 created = self.runtime.run_tool(
                     task, self.registry, "create_meeting_fact",
                     {"fact_type": item["fact_type"], "title": item["title"],
@@ -569,7 +599,7 @@ class PostMeetingAgent:
                      "confidence": item["confidence"],
                      "evidence_turn_ids": item["evidence_turn_ids"],
                      "evidence_text": evidence_text,
-                     "conflict_with": self._semantic_conflicts(item)},
+                     "conflict_with": conflicts},
                     context=context,
                     approval=lambda request, approved=approved: approved is True,
                     idempotency_key=f"{self.session_id}:{item['fact_type']}:{item['title'].casefold()}",
@@ -586,7 +616,7 @@ class PostMeetingAgent:
             else:
                 report["skipped"] += 1
                 report["errors"].append({"stage": "write", "code": created.get("error_code")})
-        write_failed = any(error.get("stage") == "write" for error in report["errors"])
+        write_failed = any(error.get("stage") in {"write", "conflict"} for error in report["errors"])
         if write_failed:
             report["ok"] = False
             report["error_code"] = "write_failed"
@@ -594,4 +624,4 @@ class PostMeetingAgent:
             self.runtime.fail(task, "write_failed")
         else:
             self.runtime.complete(task, {"candidates": report["candidates"], "written": report["written"]})
-        return report
+        return self._report(report)

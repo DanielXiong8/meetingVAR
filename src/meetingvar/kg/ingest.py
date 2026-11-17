@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .. import config
 from ..agent.sessions import SessionCatalog
+from ..memory.project_sessions import session_ids_for_project
 from .build import GraphBuilder
 from .extract import chunk_turns, extract_chunk
 from .link import EntityLinker
@@ -36,10 +37,14 @@ class GraphIngestor:
 
     def ingest_session(self, session_id: str, *, force: bool = False,
                        max_chars: int = 900) -> dict:
-        session = self.catalog.load(session_id)
-        turns = session.get("turns") or []
         report = {"ok": True, "session_id": session_id, "chunks": 0,
                   "entities": 0, "relations": 0, "skipped": 0, "errors": []}
+        if session_id not in session_ids_for_project(self.project_root, strict=True):
+            report.update(ok=False, errors=[{"stage": "membership",
+                                             "code": "session_not_in_project"}])
+            return report
+        session = self.catalog.load(session_id)
+        turns = session.get("turns") or []
         if not turns:
             report.update(ok=False, errors=[{"stage": "load", "code": "empty_transcript"}])
             return report
@@ -133,8 +138,9 @@ class GraphIngestor:
 
     def ingest_all(self, *, limit: int = 20, force: bool = False) -> dict:
         reports = []
-        for row in self.catalog.list_sessions(limit=limit):
-            reports.append(self.ingest_session(row["session_id"], force=force))
+        allowed = session_ids_for_project(self.project_root, strict=True)
+        for session_id in sorted(allowed)[:max(0, int(limit))]:
+            reports.append(self.ingest_session(session_id, force=force))
         return {"ok": all(row.get("ok") for row in reports), "sessions": len(reports),
                 "entities": sum(row.get("entities", 0) for row in reports),
                 "relations": sum(row.get("relations", 0) for row in reports),

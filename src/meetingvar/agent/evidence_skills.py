@@ -48,9 +48,10 @@ class EvidencePackSkill:
     def __init__(self, project_root: Path, data_dir: Path | None = None):
         self.project_root = Path(project_root)
         self.data_dir = Path(data_dir) if data_dir else Path(config.DATA_DIR)
-        self.catalog = SessionCatalog(self.data_dir)
+        self.catalog = SessionCatalog(self.data_dir, project_root=self.project_root)
 
     def _clip_files(self, session_id: str) -> list[dict]:
+        self.catalog._path(session_id)  # Reject unscoped direct clip requests.
         pool = self.data_dir / "pool" / session_id
         rows = []
         if not pool.is_dir():
@@ -245,10 +246,14 @@ class CommitmentLedgerSkill:
                 continue
             key = str(fact.get("canonical_key") or
                       f"{fact.get('type')}:{fact.get('description', '')}")
+            # Proposals are not revisions of the accepted commitment.
+            if fact.get("status") in {"pending-conflict", "rejected"}:
+                key = (key, str(fact.get("name", "")))
             groups.setdefault(key, []).append(fact)
         rows = []
         for group in groups.values():
-            current = max(group, key=lambda fact: (str(fact.get("created_at", "")),
+            current = max(group, key=lambda fact: (fact.get("status") == "active",
+                                                    str(fact.get("created_at", "")),
                                                     int(fact.get("version", 1))))
             history = []
             for fact in group:
@@ -256,9 +261,22 @@ class CommitmentLedgerSkill:
                     history.extend(self.store.history(str(fact.get("name", ""))))
                 except (OSError, ValueError):
                     history.append(fact)
-            unique = {int(fact.get("version", 1)): fact for fact in history}
-            group = [unique[key] for key in sorted(unique)] or group
-            group.sort(key=lambda fact: int(fact.get("version", 1)))
+            # Versions are per fact name, not global across a commitment.
+            unique = {(str(fact.get("name", "")), int(fact.get("version", 1))): fact
+                      for fact in history
+                      if fact.get("status") not in {"pending-conflict", "rejected"}}
+            successors = {str(fact.get("name", "")): str(fact.get("superseded_by", ""))
+                          for fact in group}
+
+            def history_order(fact):
+                name, seen = str(fact.get("name", "")), set()
+                while successors.get(name) and name not in seen:
+                    seen.add(name)
+                    name = successors[name]
+                return (-len(seen), str(fact.get("created_at", "")),
+                        str(fact.get("name", "")), int(fact.get("version", 1)))
+
+            group = sorted(unique.values(), key=history_order) or [current]
             text = " ".join(str(current.get(key, "")) for key in
                             ("name", "description", "body", "owner", "due"))
             if query and query.casefold() not in text.casefold():
@@ -301,7 +319,7 @@ class FindMomentSkill:
     def __init__(self, project_root: Path, data_dir: Path | None = None, limit: int = 5):
         self.project_root = Path(project_root)
         self.data_dir = Path(data_dir) if data_dir else Path(config.DATA_DIR)
-        self.catalog = SessionCatalog(self.data_dir)
+        self.catalog = SessionCatalog(self.data_dir, project_root=self.project_root)
         self.limit = max(1, min(10, int(limit)))
 
     def _clip_near(self, session_id: str, start: float, end: float) -> str:

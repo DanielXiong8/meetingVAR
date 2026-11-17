@@ -54,7 +54,7 @@ def propose_memory(text: str, history: list[dict] | None = None,
     content = match.group(1).strip()
     context = ""
     if _PRONOUN.match(content) or len(content) < 4:
-        recent = [m for m in (history or []) if m.get("content")][-4:]
+        recent = [m for m in (history or []) if m.get("role") == "user" and m.get("content")][-4:]
         if recent:
             context = "\n".join(
                 f"{'用户' if m.get('role') == 'user' else '助手'}：{str(m.get('content'))[:500]}"

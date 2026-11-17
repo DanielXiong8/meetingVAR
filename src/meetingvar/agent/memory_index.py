@@ -267,8 +267,9 @@ class MemoryIndex:
             filter_params.append(1 if pinned else 0)
         if not include_expired:
             now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-            clauses.append("(f.valid_to = '' OR f.valid_to IS NULL OR f.valid_to >= ?)")
-            filter_params.append(now)
+            clauses.append("(f.valid_to = '' OR f.valid_to IS NULL OR f.valid_to > ?)")
+            clauses.append("(f.valid_from = '' OR f.valid_from IS NULL OR f.valid_from <= ?)")
+            filter_params.extend((now, now))
         where = " AND ".join(clauses)
         fts_sql = ("SELECT f.*, bm25(facts_fts) AS rank FROM facts_fts "
                    "JOIN facts f ON f.name = facts_fts.name "

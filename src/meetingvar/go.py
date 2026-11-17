@@ -77,7 +77,8 @@ def register(sub) -> None:
                    help="api=大模型判断兴趣事件；manual=仅手动保存；专业词始终只用于纠错")
     g.add_argument("--no-ask-speakers", action="store_true", help="新说话人出现时不询问名字（默认询问）")
     g.add_argument("--duration", type=int, default=0, help="秒，0=直到 Ctrl+C")
-    g.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    g.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"],
+                   help="auto=有可用CUDA则用GPU，否则CPU")
     g.add_argument("--asr", choices=["local", "xfyun", "xfyun_rtasr"], default="local",
                    help="local=本地分块；xfyun=IAT分块；xfyun_rtasr=讯飞RTASR连续转写")
     g.add_argument("--xfyun-cred", default=None, help="对应讯飞服务凭证文件或目录")

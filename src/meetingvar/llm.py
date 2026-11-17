@@ -8,6 +8,7 @@ bound, not a guessed tokenizer for an unknown model.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 import http.client
 import json
 import os
@@ -29,11 +30,19 @@ _ERROR_MESSAGES = {
     "rate_limit": "模型服务请求受限，请稍后重试",
     "network": "模型服务连接失败、超时或暂时不可用",
     "http_error": "模型服务返回 HTTP 错误，请检查端点和请求参数",
+    "tools_unsupported": "模型服务明确不支持当前工具协议",
     "empty_content": "模型未返回有效最终内容（可能只有思考内容）",
     "truncated": "模型输出达到上限，截断结果未采用",
     "invalid_json": "模型返回的 JSON 或结果结构无效",
     "content_filtered": "模型服务未提供可用内容",
     "context_budget": "请求超出保守上下文预算，请调整分块、上下文或输出预算",
+    "input_too_large": "当前问题、权限或工具定义超过上下文预算，未删除请求或调用模型",
+    "invalid_messages": "消息结构无效，工具调用与结果必须完整配对",
+    "input_budget_exhausted": "本任务累计输入预算已用尽",
+    "output_budget_exhausted": "本任务累计输出预算已用尽",
+    "time_budget_exhausted": "本任务时间预算已用尽",
+    "invalid_result": "模型返回格式无效",
+    "model_client_error": "模型客户端执行失败",
 }
 _RETRYABLE = {"network", "rate_limit"}
 _FINISH_REASONS = {"stop", "length", "tool_calls", "function_call", "content_filter"}
@@ -75,14 +84,14 @@ class TokenBudget:
     # Reserve for the chat template and tokenizer differences separately.
     chat_overhead_tokens: int = 128
     margin_tokens: int = 512
-    method: str = "utf8_bytes_upper_bound"
+    method: str = "estimated_tokens"
 
     @property
     def input_limit(self) -> int:
         return self.context_tokens - self.max_output_tokens - self.margin_tokens
 
     def input_tokens(self, prompt: str) -> int:
-        return len(prompt.encode("utf-8")) + self.chat_overhead_tokens
+        return _estimate_tokens(str(prompt or "")) + self.chat_overhead_tokens
 
     def fits(self, prompt: str) -> bool:
         return self.input_tokens(prompt) <= self.input_limit
@@ -186,6 +195,8 @@ def _http_failure(exc: urllib.error.HTTPError) -> dict:
         code = "model_not_found"
     elif codes & {"context_length_exceeded", "context_window_exceeded"}:
         code = "context_budget"
+    elif codes & {"tools_not_supported", "unsupported_tools", "function_calling_not_supported", "tool_use_not_supported"}:
+        code = "tools_unsupported"
     elif exc.code == 429:
         code = "rate_limit"
     elif exc.code == 408 or 500 <= exc.code <= 599:
@@ -280,18 +291,11 @@ def _loopback_endpoint(profile: dict) -> bool:
 
 def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
                 max_tokens: int | None = None, thinking: str | None = None) -> dict:
-    """Generate once, with one safe retry when a reasoning model exhausts the budget.
-
-    Some OpenAI-compatible reasoning models count hidden reasoning tokens against
-    max_tokens and return no final content when finish_reason=length. If such a
-    response exposes reasoning_tokens, retry once with thinking disabled and a
-    larger output allowance. Providers that reject the extension keep the
-    original, truthful truncated result.
-    """
+    """Generate within the configured cap; preserve nonretryable failures."""
     try:
         profile = client_profile()
         context = _positive_int(profile["context_tokens"])
-        effective_max = profile["max_output_tokens"] if max_tokens is None else _positive_int(max_tokens)
+        effective_max = profile["max_output_tokens"] if max_tokens is None else min(profile["max_output_tokens"], _positive_int(max_tokens))
         effective_thinking = profile["thinking"] if thinking is None else str(thinking).strip().lower()
         if effective_thinking not in {"", "enabled", "disabled"}:
             raise ClientConfigError()
@@ -313,24 +317,6 @@ def chat_result(prompt: str, temperature: float = 0.3, timeout: int = 900,
         result = _request_once(prompt, temperature=temperature, timeout=timeout,
                                profile=profile, max_tokens=effective_max,
                                thinking=effective_thinking)
-    reasoning = (result.get("usage") or {}).get("completion_tokens_details", {}).get("reasoning_tokens", 0)
-    if result.get("error_code") != "truncated" or not isinstance(reasoning, int) or reasoning <= 0:
-        return result
-    retry_max = min(max(effective_max, 8192), context // 2)
-    retry_budget = TokenBudget(context, retry_max)
-    if retry_max <= effective_max or not retry_budget.fits(prompt):
-        return result
-    retried = _request_once(prompt, temperature=temperature, timeout=timeout,
-                            profile=profile, max_tokens=retry_max, thinking="disabled")
-    if retried.get("ok"):
-        retried["retried_without_thinking"] = True
-        retried["original_usage"] = result.get("usage") or {}
-        return retried
-    # Do not hide the original truncation if the provider does not support
-    # disabling thinking; the retry failure is diagnostic-only.
-    if retried.get("error_code") not in {"truncated", "http_error", "invalid_config"}:
-        result = dict(result)
-        result["thinking_retry_error"] = retried.get("error_code")
     return result
 
 
@@ -340,22 +326,36 @@ def chat(prompt: str, temperature: float = 0.3, timeout: int = 900) -> str | Non
     return result["content"] if result["ok"] else None
 
 
+def _estimate_tokens(text: str) -> int:
+    """Approximate model tokens: CJK ~1/char, other text ~4 chars/token."""
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    other = max(0, len(text) - cjk)
+    return cjk + (other + 3) // 4
+
+
 def _messages_bytes(messages: list[dict], tools: list[dict] | None = None) -> int:
-    """Conservative UTF-8 byte bound for a multi-turn tool-calling request."""
+    """Approximate token bound for a multi-turn tool-calling request.
+
+    The previous implementation compared UTF-8 bytes directly with the token
+    limit, which rejected ordinary Chinese conversations at a few thousand
+    characters. Estimate tokens instead of bytes.
+    """
     size = 0
     for message in messages:
-        size += len(str(message.get("role", "")).encode("utf-8")) + 16
+        size += _estimate_tokens(str(message.get("role", ""))) + 8
         content = message.get("content")
         if isinstance(content, str):
-            size += len(content.encode("utf-8"))
+            size += _estimate_tokens(content)
         elif content is not None:
-            size += len(json.dumps(content, ensure_ascii=False).encode("utf-8"))
+            size += _estimate_tokens(json.dumps(content, ensure_ascii=False))
         if message.get("tool_calls"):
-            size += len(json.dumps(message["tool_calls"], ensure_ascii=False).encode("utf-8"))
+            size += _estimate_tokens(json.dumps(message["tool_calls"], ensure_ascii=False))
+        if message.get("tool_call_id"):
+            size += _estimate_tokens(str(message["tool_call_id"]))
         if message.get("name"):
-            size += len(str(message["name"]).encode("utf-8"))
+            size += _estimate_tokens(str(message["name"]))
     if tools:
-        size += len(json.dumps(tools, ensure_ascii=False).encode("utf-8"))
+        size += _estimate_tokens(json.dumps(tools, ensure_ascii=False))
     return size
 
 
@@ -372,7 +372,7 @@ def chat_messages(messages: list[dict], *, tools: list[dict] | None = None,
     try:
         profile = client_profile()
         context = _positive_int(profile["context_tokens"])
-        effective_max = profile["max_output_tokens"] if max_tokens is None else _positive_int(max_tokens)
+        effective_max = profile["max_output_tokens"] if max_tokens is None else min(profile["max_output_tokens"], _positive_int(max_tokens))
         effective_thinking = profile["thinking"] if thinking is None else str(thinking).strip().lower()
         if effective_thinking not in {"", "enabled", "disabled"}:
             raise ClientConfigError()
@@ -438,7 +438,7 @@ def chat_messages(messages: list[dict], *, tools: list[dict] | None = None,
     if raw_calls is not None:
         if not isinstance(raw_calls, list):
             return error_result("invalid_json", finish_reason=finish, usage=usage)
-        for index, call in enumerate(raw_calls[:12]):
+        for index, call in enumerate(raw_calls):
             if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
                 continue
             function = call["function"]
@@ -461,3 +461,138 @@ def chat_messages(messages: list[dict], *, tools: list[dict] | None = None,
             "tool_calls": tool_calls, "error_code": None, "error": None,
             "retryable": False, "finish_reason": finish, "usage": usage,
             "native_tools": bool(raw_calls)}
+
+def chat_messages_stream(messages: list[dict], *, tools: list[dict] | None = None,
+                         tool_choice: str = "auto", temperature: float = 0.2,
+                         timeout: int = 300, max_tokens: int | None = None,
+                         thinking: str | None = None,
+                         on_delta: Callable[[str, str], None] | None = None) -> dict:
+    """Streaming variant of :func:`chat_messages`.
+
+    Tool calls are accumulated exactly like chat_messages. Only validated final
+    content is sent to ``on_delta``: buffering prevents split thinking tags or
+    provider-only reasoning from leaking through progress callbacks.
+    """
+    try:
+        profile = client_profile()
+        context = _positive_int(profile["context_tokens"])
+        effective_max = profile["max_output_tokens"] if max_tokens is None else min(profile["max_output_tokens"], _positive_int(max_tokens))
+        effective_thinking = profile["thinking"] if thinking is None else str(thinking).strip().lower()
+        if effective_thinking not in {"", "enabled", "disabled"}:
+            raise ClientConfigError()
+        budget = TokenBudget(context, effective_max)
+        if budget.input_limit <= budget.chat_overhead_tokens:
+            raise ClientConfigError()
+    except ClientConfigError as exc:
+        return error_result(exc.error_code)
+    if not isinstance(messages, list) or not messages:
+        return error_result("invalid_config")
+    if _messages_bytes(messages, tools) > budget.input_limit:
+        return error_result("context_budget")
+    body = {"model": profile["model"], "messages": messages,
+            "temperature": temperature, "max_tokens": effective_max, "stream": True}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice
+    if effective_thinking:
+        body["thinking"] = {"type": effective_thinking}
+    effort = str(getattr(config, "LLM_REASONING_EFFORT", "") or "").strip().lower()
+    if effort in {"none", "low", "medium", "high"}:
+        body["reasoning_effort"] = effort
+    try:
+        req = urllib.request.Request(
+            profile["endpoint"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {config.LLM_API_KEY}"})
+        host = urllib.parse.urlsplit(profile["endpoint"]).hostname
+        opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                  if host in {"127.0.0.1", "localhost", "::1"} else urllib.request.build_opener())
+        response = opener.open(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        return _http_failure(exc)
+    except (OSError, urllib.error.URLError, http.client.HTTPException):
+        return error_result("network")
+    except (ValueError, TypeError):
+        return error_result("invalid_config")
+
+    content = ""
+    reasoning = ""
+    tool_calls: dict[int, dict] = {}
+    finish = None
+    usage = {}
+    try:
+        with response:
+            for raw in response:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                usage = _safe_usage(chunk.get("usage")) or usage
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                    continue
+                choice = choices[0]
+                finish = choice.get("finish_reason") or finish
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                text = delta.get("content")
+                if isinstance(text, str):
+                    content += text
+                # Never retain or emit reasoning/reasoning_content.
+                fragments = delta.get("tool_calls") or []
+                if not isinstance(fragments, list):
+                    return error_result("invalid_json", usage=usage)
+                for call in fragments:
+                    if not isinstance(call, dict):
+                        return error_result("invalid_json", usage=usage)
+                    index = call.get("index")
+                    if type(index) is not int or index < 0:
+                        return error_result("invalid_json", usage=usage)
+                    item = tool_calls.setdefault(index, {"id": "", "type": "function",
+                                                         "function": {"name": "", "arguments": ""}})
+                    if call.get("id"):
+                        item["id"] = str(call["id"])
+                    function = call.get("function") or {}
+                    if not isinstance(function, dict):
+                        return error_result("invalid_json", usage=usage)
+                    if isinstance(function.get("name"), str):
+                        item["function"]["name"] += function["name"]
+                    if isinstance(function.get("arguments"), str):
+                        item["function"]["arguments"] += function["arguments"]
+    except (OSError, urllib.error.URLError, http.client.HTTPException):
+        return error_result("network")
+    open_calls = []
+    for index in sorted(tool_calls):
+        item = tool_calls[index]
+        if not item["id"]:
+            item["id"] = f"call_{index}"
+        if item["function"]["name"]:
+            open_calls.append(item)
+    if finish == "length":
+        return error_result("truncated", finish_reason=finish, usage=usage)
+    if finish == "content_filter":
+        return error_result("content_filtered", finish_reason=finish, usage=usage)
+    content = _final_text(content) or ""
+    if not open_calls and not content:
+        return error_result("empty_content", finish_reason=finish, usage=usage)
+    if callable(on_delta) and content:
+        try:
+            on_delta("content", content)
+        except Exception:
+            pass
+    return {"ok": True, "content": content, "message": {
+                "role": "assistant", "content": content or None,
+                "tool_calls": open_calls},
+            "tool_calls": open_calls,
+            "error_code": None, "error": None, "retryable": False,
+            "finish_reason": finish, "usage": usage,
+            "native_tools": bool(open_calls)}

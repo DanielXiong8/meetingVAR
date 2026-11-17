@@ -11,6 +11,7 @@ from typing import Callable
 
 from ..memory.files import SUPPORTED_TEXT_SUFFIXES, project_files, read_text_safely
 from .runtime import AgentRuntime
+from .model_calls import ToolModelCalls
 from .tools import ToolContext, ToolError, ToolRegistry, ToolSpec
 from .trace import TraceRecorder
 
@@ -42,12 +43,13 @@ class FocusError(RuntimeError):
 class FocusAgent:
     def __init__(self, *, project_root: Path, approval: Callable[[list[dict]], bool] | None = None,
                  dry_run: bool = False, max_chars: int = 12000,
-                 llm: Callable[[str], object] | None = None):
+                 llm: Callable[[str], object] | None = None, model_client=None, model_budget=None):
         self.project_root = Path(project_root)
         self.dry_run = dry_run
         self.max_chars = max(1000, int(max_chars))
         self._approval = approval
         self._llm = llm
+        self.model = ToolModelCalls(model_client=model_client, model_budget=model_budget, llm=llm)
         trace_dir = self.project_root / "meetingvar" / "agent_memory" / "trace"
         self.trace = TraceRecorder(trace_dir / "focus.jsonl")
         self.runtime = AgentRuntime(trace_dir / "tasks", trace=self.trace, max_steps=8)
@@ -103,13 +105,7 @@ class FocusAgent:
         return {"dry_run": False, "path": str(target), "items": args["items"]}
 
     def _call_llm(self, prompt: str) -> list[dict]:
-        if self._llm is None:
-            from ..llm import chat_result
-            reply = chat_result(prompt, temperature=0.2, timeout=120)
-        else:
-            reply = self._llm(prompt)
-            if isinstance(reply, str):
-                reply = {"ok": True, "content": reply}
+        reply = self.model.complete(prompt, temperature=0.2, timeout=120)
         if not isinstance(reply, dict):
             raise FocusError("invalid_result", "模型返回格式无效")
         if not reply.get("ok"):
@@ -178,7 +174,7 @@ class FocusAgent:
             report["error"] = "关注清单写入失败"
             report["errors"].append({"stage": "save", "code": saved.get("error_code")})
             self.runtime.fail(task, "save_failed")
-        return report
+        return self.model.report(report)
 
     def run(self) -> dict:
         task = self.runtime.create("premeeting_focus", {"project": self.project_root.name})
@@ -187,44 +183,42 @@ class FocusAgent:
                   "sources": [], "errors": []}
         material, names = _load_material(self.project_root, self.max_chars)
         report["sources"] = names
+        report["coverage"] = {"scope": "loaded_project_material_sample", "total": None,
+            "processed": 0, "failed": 0, "truncated": len(material) >= self.max_chars,
+            "complete": False, "sources_loaded": len(names)}
         if not material.strip():
             report["errors"].append({"stage": "read", "code": "no_readable_material"})
             self.runtime.fail(task, "no_readable_material")
-            return report
+            return self.model.report(report)
         items = []
         last_error = None
-        # A local 16K model cannot accept the same material size as a 32K
-        # cloud endpoint. Retry with a smaller material slice before failing.
-        limits = [self.max_chars, 6000, 4000, 3000]
-        for limit in dict.fromkeys(max(1000, min(self.max_chars, n)) for n in limits):
-            try:
-                items = self._call_llm(self._prompt(material[:limit]))
-                if items:
-                    break
+        try:
+            items = self._call_llm(self._prompt(material))
+            if not items:
                 last_error = FocusError("invalid_output", "模型没有给出可用的关注点")
-            except FocusError as exc:
-                last_error = exc
-                if exc.code not in {"context_budget", "truncated", "invalid_output"}:
-                    break
+        except FocusError as exc:
+            last_error = exc
         try:
             if not items:
                 raise last_error or FocusError("extract_failed", "关注清单生成失败")
             report["items"] = items
             report["ok"] = True
+            report["coverage"]["processed"] = len(names)
         except FocusError as exc:
+            report["coverage"]["failed"] = 1
             report["error_code"] = exc.code
             report["error"] = exc.message
             report["errors"].append({"stage": "extract", "code": exc.code,
                                      "message": exc.message})
             self.runtime.fail(task, "extract_failed")
-            return report
+            return self.model.report(report)
         context = ToolContext(project_root=self.project_root, dry_run=self.dry_run)
         approved = self.dry_run or (self._approval(items) if self._approval else False)
         if not approved:
             report["ok"] = False
             report["errors"].append({"stage": "approval", "code": "not_approved"})
             self.runtime.cancel(task)
-            return report
+            return self.model.report(report)
         saved = self.runtime.run_tool(
             task, self.registry, "save_focus",
             {"items": items, "sources": names}, context=context,
@@ -237,4 +231,4 @@ class FocusAgent:
             report["ok"] = False
             report["errors"].append({"stage": "save", "code": saved.get("error_code")})
             self.runtime.fail(task, "save_failed")
-        return report
+        return self.model.report(report)

@@ -28,6 +28,7 @@ class GraphIngestTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name) / "星河项目"
         self.project.mkdir()
+        (self.project / "meetingvar" / "minutes" / "s1").mkdir(parents=True)
         self.data = Path(self.tmp.name) / "data"
         pool = self.data / "pool" / "s1"
         pool.mkdir(parents=True)
@@ -74,6 +75,18 @@ class GraphIngestTests(unittest.TestCase):
                             and edge["dst_id"] == person["id"] for edge in edges))
         self.assertTrue(any(edge["relation"] == "due_on" for edge in edges))
         self.assertTrue(any(edge["extractor"] == "llm" for edge in edges))
+
+    def test_unassigned_session_is_rejected_without_model_call(self):
+        (self.project / "meetingvar" / "minutes" / "s1").rmdir()
+
+        def forbidden_llm(*args, **kwargs):
+            self.fail("unassigned session must not reach the model")
+
+        report = GraphIngestor(self.project, self.data, llm=forbidden_llm).ingest_session("s1")
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["errors"][0]["code"], "session_not_in_project")
+        self.assertEqual(report["entities"], 0)
+        self.assertEqual(report["relations"], 0)
 
     def test_reingest_skips_same_episode(self):
         ingestor = GraphIngestor(self.project, self.data, llm=fake_llm(self.payload))

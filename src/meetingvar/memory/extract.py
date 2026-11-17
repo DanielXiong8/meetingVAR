@@ -35,7 +35,8 @@ _CN_WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,12}")
 
 # nr 标注的常见误报（品牌/机构/地名在会议语境通常不是"要监听的人名"）
 _NAME_BLOCKLIST = {"华为", "腾讯", "阿里", "百度", "微信", "讯飞", "谷歌", "苹果", "北京", "上海", "深圳", "中国"}
-_LATIN_BLOCKLIST = {"data", "readme", "true", "false", "none", "wav", "mp4", "jpg", "md", "txt", "api", "ok", "todo"}
+_LATIN_BLOCKLIST = {"data", "readme", "true", "false", "none", "wav", "mp4", "jpg", "md", "txt", "api", "ok", "todo",
+                    "http", "https", "www", "com", "cn", "org", "net", "mp", "qq", "weixin", "wechat"}
 
 
 def _add(terms: dict[str, set], word: str, source: str) -> None:
@@ -85,10 +86,30 @@ def _persons(docs: list[str], terms: dict[str, set]) -> None:
         _add(terms, m, "人名")
 
 
+def _chinese_keywords(docs: list[str], terms: dict[str, set]) -> None:
+    """Cheap local topic layer: jieba TF-IDF nouns/phrases, no model needed."""
+    try:
+        _ensure_jieba()
+        import jieba.analyse as analyse
+    except ImportError:
+        return
+    for doc in docs:
+        try:
+            ranked = analyse.extract_tags(doc, topK=24, withWeight=False)
+        except Exception:  # noqa: BLE001 - optional jieba component
+            continue
+        for word in ranked:
+            if 2 <= len(word) <= 16 and re.fullmatch(r"[一-鿿]+", word):
+                _add(terms, word, "关键词")
+
+
 def _latin(docs: list[str], terms: dict[str, set]) -> None:
     counts: Counter = Counter()
     for doc in docs:
-        for w in _LATIN_RE.findall(doc):
+        # URLs are provenance, not project vocabulary: do not turn
+        # https/mp/qq/weixin into hot terms.
+        clean = re.sub(r"https?://\S+", " ", doc)
+        for w in _LATIN_RE.findall(clean):
             counts[w] += 1
     for w, c in counts.items():
         if c >= 2:
@@ -99,6 +120,7 @@ def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None,
                   suffixes: set[str] | None = None, max_files: int | None = None) -> dict[str, list[str]]:
     """返回 {词: [来源, …]}。docs = memory_dir 下全部 md/txt/docx（二进制伪装文件跳过）。"""
     _HEADING_STOP = {"决定", "我的进度", "其他", "总结", "背景", "待办", "痛点", "参考", "结果", "说明", "现状", "纪要", "实验记录", "术语表"}
+    _TOPIC_STOP = {"人数", "参与", "担任", "表现", "战绩", "情况", "同学"}
     # 健壮读取：曾把伪装成 .txt 的 zip 当文本硬读，抽出 CQ/Dc/Fk 一筐二进制垃圾词
     docs = []
     files = list(project_files(memory_dir, suffixes or set(SUPPORTED_TEXT_SUFFIXES)))
@@ -112,6 +134,7 @@ def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None,
     for doc in docs:
         _structured(doc, terms)
     _persons(docs, terms)
+    _chinese_keywords(docs, terms)
     _latin(docs, terms)
     for t in extra_terms or []:
         _add(terms, t, "手动")
@@ -120,12 +143,23 @@ def extract_terms(memory_dir: Path, extra_terms: list[str] | None = None,
     out = {
         w: sorted(s)
         for w, s in terms.items()
-        if not re.fullmatch(r"[\d\s\-./:]+", w) and w not in _HEADING_STOP
+        if not re.fullmatch(r"[\d\s\-./:]+", w)
+        and w not in _HEADING_STOP and w not in _TOPIC_STOP
     }
     # 拉丁单词若是已抽取短语的一部分（index ⊂ index hopping），去重
     phrases = {w.lower().replace(" ", "") for w in out if " " in w}
     out = {w: s for w, s in out.items() if not (re.fullmatch(r"[A-Za-z\-]+", w) and any(w.lower() in ph for ph in phrases))}
-    return dict(sorted(out.items(), key=lambda kv: (0 if "手动" in kv[1] else 1, -len(kv[1]), kv[0])))
+    source_priority = {"手动": 0, "关键词": 1, "结构化": 2, "拉丁": 3, "人名": 4}
+    def term_rank(item: tuple[str, list[str]]) -> tuple:
+        _, sources = item
+        if "手动" in sources:
+            rank = 0
+        elif "人名" in sources:
+            rank = 4
+        else:
+            rank = min(source_priority.get(source, 9) for source in sources)
+        return (rank, -len(sources), item[0])
+    return dict(sorted(out.items(), key=term_rank))
 
 
 def write_terms_file(terms: dict[str, list[str]], out_path: Path) -> int:

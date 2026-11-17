@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import gzip
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,25 @@ class SafeReadTests(unittest.TestCase):
         with zipfile.ZipFile(p, "w") as z:
             z.writestr("a.txt", "hello")
         self.assertIsNone(read_text_safely(p), "普通 zip 不是文本，不解析避免误读")
+
+    def test_gzip_json_with_plain_suffix_is_read(self) -> None:
+        """HTTP probes may store gzip bodies under a .json name."""
+        p = self.tmp / "probe_api_models.json"
+        p.write_bytes(gzip.compress(b'{"message":"Unauthorized","success":false}'))
+        self.assertEqual(read_text_safely(p), '{"message":"Unauthorized","success":false}')
+
+    def test_corrupt_or_binary_gzip_is_not_text(self) -> None:
+        corrupt = self.tmp / "broken.json"
+        corrupt.write_bytes(bytes([0x1f, 0x8b, 0x08]) + b"not-a-real-stream")
+        self.assertIsNone(read_text_safely(corrupt))
+        binary = self.tmp / "binary.json"
+        binary.write_bytes(gzip.compress(b"abc" + bytes([0]) + b"def"))
+        self.assertIsNone(read_text_safely(binary))
+
+    def test_gzip_expansion_over_budget_is_rejected(self) -> None:
+        p = self.tmp / "large.json"
+        p.write_bytes(gzip.compress(b"x" * 100))
+        self.assertIsNone(read_text_safely(p, max_bytes=10))
 
     def test_nul_binary_returns_none(self) -> None:
         p = self.tmp / "bin.txt"

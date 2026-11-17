@@ -7,6 +7,7 @@ that the citation verifier can check.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .memory import FactStore
 from .policy import injection_signals
@@ -18,6 +19,11 @@ def _catalog(context: ToolContext) -> SessionCatalog:
     catalog = (context.extra or {}).get("catalog")
     if not isinstance(catalog, SessionCatalog):
         raise ToolError("tool_context_invalid", "session catalog is unavailable")
+    if context.project_root is not None:
+        root = Path(context.project_root).resolve()
+        if catalog.project_root != root:
+            catalog = SessionCatalog(catalog.pool.parent, cache_limit=catalog.cache_limit,
+                                     project_root=root)
     return catalog
 
 
@@ -25,6 +31,8 @@ def _facts(context: ToolContext) -> FactStore:
     store = context.fact_store or (context.extra or {}).get("fact_store")
     if not isinstance(store, FactStore):
         raise ToolError("tool_context_invalid", "fact store is unavailable")
+    if context.project_root is not None and store.project_root.resolve() != Path(context.project_root).resolve():
+        raise ToolError("tool_context_invalid", "fact store belongs to another project")
     return store
 
 
@@ -33,12 +41,18 @@ _DEFINITION = re.compile(r"记作|看成|看作|对应|等于|编码|规则|定�
 
 def _read_search_sessions(args: dict, context: ToolContext) -> dict:
     catalog = _catalog(context)
-    rows = catalog.search(args["query"], limit=args.get("limit", 5),
-                          session_id=args.get("session_id"),
-                          per_session=max(6, int(args.get("per_session", 8))))
+    page = catalog.search_page(args["query"], limit=args.get("limit", 5),
+                               session_id=args.get("session_id"),
+                               per_session=args.get("per_session", 8),
+                               offset=args.get("offset", 0), cursor=args.get("cursor"))
+    rows = page["results"]
     warnings, definition_turns = [], []
     for row in rows:
         for match in row["matches"]:
+            match["excerpt_truncated"] = len(str(match["text"])) > 500
+            if match["excerpt_truncated"]:
+                page["coverage"]["complete"] = False
+                page["status"] = "partial"
             match["text"] = str(match["text"])[:500]
             match["definition_like"] = bool(_DEFINITION.search(match["text"]))
             if match["definition_like"]:
@@ -49,7 +63,7 @@ def _read_search_sessions(args: dict, context: ToolContext) -> dict:
             if signals:
                 match["injection_signals"] = len(signals)
                 warnings.append(f"{row['session_id']}/{match['id']}: possible injection")
-    return {"query": args["query"], "results": rows, "warnings": warnings[:8],
+    return {**page, "query": args["query"], "results": rows, "warnings": warnings[:8],
             "definition_turns": definition_turns[:8],
             "hint": ("优先读取 definition_turns 中的原句；规则/编码/定义类问题不能只引用主题相关片段。"
                      if definition_turns else
@@ -61,16 +75,22 @@ def _read_search_sessions(args: dict, context: ToolContext) -> dict:
 
 def _read_list_sessions(args: dict, context: ToolContext) -> dict:
     catalog = _catalog(context)
-    rows = catalog.list_sessions(limit=args.get("limit", 10))
+    page = catalog.list_sessions_page(limit=args.get("limit", 10),
+                                      offset=args.get("offset", 0), cursor=args.get("cursor"))
+    rows = page["sessions"]
     for row in rows:
         try:
             session = catalog.load(row["session_id"])
             row["turns"] = len(session["turns"])
             row["clips"] = session["clips"]
-        except (OSError, ValueError):
-            row["turns"] = 0
-            row["clips"] = 0
-    return {"sessions": rows, "trust": "untrusted"}
+        except (OSError, ValueError) as exc:
+            row["turns"] = None
+            row["clips"] = None
+            page["errors"].append({"session_id": row["session_id"], "code": type(exc).__name__})
+            page["coverage"]["failed"] += 1
+            page["coverage"]["complete"] = False
+            page["status"] = "partial"
+    return {**page, "sessions": rows, "trust": "untrusted"}
 
 
 def _read_window(args: dict, context: ToolContext) -> dict:
@@ -80,6 +100,7 @@ def _read_window(args: dict, context: ToolContext) -> dict:
     if not turns:
         raise ToolError("evidence_not_found", "no requested transcript turns exist")
     warnings = []
+    truncated = len(turns) < len(args["turn_ids"]) or any(len(str(turn["text"])) > 1600 for turn in turns)
     for turn in turns:
         turn["text"] = str(turn["text"])[:1600]
         signals = injection_signals(turn["text"])
@@ -87,7 +108,11 @@ def _read_window(args: dict, context: ToolContext) -> dict:
             turn["injection_signals"] = len(signals)
             warnings.append(f"{turn['id']}: possible injection")
     return {"session_id": args["session_id"], "turns": turns,
-            "warnings": warnings[:8], "trust": "untrusted"}
+            "warnings": warnings[:8], "trust": "untrusted",
+            "truncated": truncated, "status": "partial" if truncated else "ok",
+            "coverage": {"scope": "requested_transcript_turns", "total": len(args["turn_ids"]),
+                         "processed": len(turns), "failed": 0, "truncated": truncated,
+                         "complete": len(turns) == len(args["turn_ids"]) and not truncated}}
 
 
 def _read_search_memory(args: dict, context: ToolContext) -> dict:
@@ -123,7 +148,13 @@ def _read_fact(args: dict, context: ToolContext) -> dict:
             "version": fact.get("metadata", {}).get("version", 1),
             "origin_meeting": fact.get("metadata", {}).get("origin_meeting", ""),
             "updated_at": fact.get("metadata", {}).get("updated_at", ""),
-            "body": str(fact.get("body", ""))[:4000], "trust": "project-memory"}
+            "body": str(fact.get("body", ""))[:4000], "trust": "project-memory",
+            "truncated": len(str(fact.get("body", ""))) > 4000,
+            "coverage": {"scope": "fact_body_characters",
+                         "total": len(str(fact.get("body", ""))),
+                         "processed": min(4000, len(str(fact.get("body", "")))),
+                         "failed": 0, "truncated": len(str(fact.get("body", ""))) > 4000,
+                         "complete": len(str(fact.get("body", ""))) <= 4000}}
 
 
 def _read_search_conversations(args: dict, context: ToolContext) -> dict:
@@ -158,15 +189,26 @@ def _rag(context: ToolContext):
 
 
 def _read_search_knowledge(args: dict, context: ToolContext) -> dict:
+    from ..rag import RagUnavailable
+
     index = _rag(context)
-    chunks = index.search(
-        args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
-        source_type=args.get("source_type") or None, rerank=True)
+    try:
+        chunks = index.search(
+            args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
+            source_type=args.get("source_type") or None, rerank=False, strict=True)
+    except RagUnavailable as exc:
+        # A broken index is an execution failure, never evidence of absence.
+        raise ToolError("rag_unavailable", str(exc)) from None
     return {"query": args["query"], "chunks": chunks, "trust": "project-rag"}
 
 
 def _read_project_chunk(args: dict, context: ToolContext) -> dict:
-    chunk = _rag(context).read_chunk(args["chunk_id"])
+    from ..rag import RagUnavailable
+
+    try:
+        chunk = _rag(context).read_chunk(args["chunk_id"], strict=True)
+    except RagUnavailable as exc:
+        raise ToolError("rag_unavailable", str(exc)) from None
     if not chunk:
         raise ToolError("chunk_not_found", "no such RAG chunk")
     return {"chunk": chunk, "trust": "project-rag"}
@@ -258,7 +300,7 @@ def _read_graph_search(args: dict, context: ToolContext) -> dict:
     result = GraphRAG(context.project_root, data_dir).search(
         args["query"], limit=max(1, min(20, int(args.get("limit", 8)))),
         hops=max(1, min(3, int(args.get("hops", 2)))),
-        as_of=str(args.get("as_of") or ""))
+        as_of=str(args.get("as_of") or ""), rerank=False)
     return {**result, "trust": "project-kg-rag"}
 
 
@@ -304,12 +346,21 @@ def _read_project_status(args: dict, context: ToolContext) -> dict:
     except (OSError, ValueError):
         pass
     overview = ""
+    map_snapshot = {}
     try:
-        import json
-        payload = json.loads((context.project_root / "meetingvar" / "interest_context.json").read_text(encoding="utf-8"))
-        overview = str(payload.get("overview", ""))[:500]
-    except (OSError, ValueError):
-        pass
+        from ..memory.repository_map import read_map
+        map_snapshot = read_map(context.project_root, limit=1, include_claims=True)
+    except Exception:
+        map_snapshot = {}
+    if map_snapshot.get("map_status") not in {None, "not_built"}:
+        overview = str(map_snapshot.get("overview") or "")[:500]
+    else:
+        try:
+            import json
+            payload = json.loads((context.project_root / "meetingvar" / "interest_context.json").read_text(encoding="utf-8"))
+            overview = str(payload.get("overview", ""))[:500]
+        except (OSError, ValueError):
+            pass
     catalog = _catalog(context)
     sessions = catalog.list_sessions(limit=6)
     pending = [fact for fact in all_facts if fact.get("status") == "pending-conflict"]
@@ -323,7 +374,69 @@ def _read_project_status(args: dict, context: ToolContext) -> dict:
                               "origin_meeting": f.get("metadata", {}).get("origin_meeting", "")}
                              for f in facts[:10]],
             "focus": focus, "project_overview": overview,
-            "recent_sessions": sessions, "trust": "project-memory"}
+            "map_status": map_snapshot.get("map_status", "not_built"),
+            "map_revision": map_snapshot.get("map_revision", ""),
+            "map_totals": map_snapshot.get("totals") or {},
+            "map_claims": (map_snapshot.get("claims") or [])[:8],
+            "open_questions": (map_snapshot.get("open_questions") or [])[:8],
+            "entrypoints": [row.get("path") for row in (map_snapshot.get("entrypoints") or [])[:8]],
+            "recent_sessions": sessions, "trust": "project-memory",
+            "facts_count_limited": len(all_facts) >= 1000,
+            "recent_facts_limit": 10, "recent_sessions_limit": 6,
+            "coverage": {"scope": "project_status_snapshot_not_all_sources",
+                         "total": None, "processed": len(all_facts), "failed": 0,
+                         "truncated": len(all_facts) >= 1000, "complete": False}}
+
+
+def _read_project_map(args: dict, context: ToolContext) -> dict:
+    """Read the revision-aware map. Read-only; never builds or invents a map."""
+    from ..memory.repository_map import read_map
+
+    snapshot = read_map(context.project_root,
+                        limit=max(1, min(200, int(args.get("limit", 20)))),
+                        offset=max(0, int(args.get("offset", 0))),
+                        query=str(args.get("query") or ""), include_claims=True)
+    items, refs = [], []
+    for claim in snapshot.get("claims") or []:
+        ref = (claim.get("refs") or [{}])[0]
+        items.append({"type": "claim", "text": claim.get("text", ""),
+                      "kind": claim.get("kind", ""), "source_ref_id": ref.get("id", "")})
+        refs.extend(ref for ref in claim.get("refs") or [] if isinstance(ref, dict))
+    for unit in snapshot.get("units") or []:
+        items.append({"type": "unit", "unit_id": unit.get("unit_id"),
+                      "path": unit.get("path"), "kind": unit.get("kind"),
+                      "label": unit.get("label"), "role": unit.get("role")})
+        if isinstance(unit.get("source_ref"), dict):
+            refs.append(unit["source_ref"])
+    return {**snapshot, "items": items, "source_refs": refs,
+            "coverage": {**(snapshot.get("coverage") or {}), "exhaustive": False,
+                         "semantic_exhaustive": False},
+            "trust": "project-map"}
+
+
+def _explore_project(args: dict, context: ToolContext) -> dict:
+    """Bounded model-led exploration using the host's client and task ledger."""
+    from ..memory.repository_explorer import explore
+    from .model_calls import model_kwargs
+
+    result = explore(context.project_root,
+                     query=str(args.get("query") or ""),
+                     scope=str(args.get("scope") or "question"),
+                     limit=max(1, min(20, int(args.get("limit", 8)))),
+                     **model_kwargs(context))
+    items = []
+    for claim in result.get("claims") or []:
+        items.append({"type": "claim", "text": claim.get("text", ""),
+                      "kind": claim.get("kind", ""),
+                      "source_ref_id": (claim.get("source_refs") or [{}])[0].get("id", "")})
+    for observation in result.get("observations") or []:
+        items.append({"type": "observation", "unit_id": observation.get("unit_id"),
+                      "path": observation.get("path"), "status": observation.get("status")})
+    status = "ok" if result.get("claims") else ("partial" if result.get("source_refs") else "empty")
+    return {**result, "status": status, "items": items,
+            "coverage": {**(result.get("coverage") or {}), "exhaustive": False,
+                         "semantic_exhaustive": False},
+            "trust": "targeted-exploration"}
 
 
 def _read_project_plan(args: dict, context: ToolContext) -> dict:
@@ -340,22 +453,24 @@ def _read_project_plan(args: dict, context: ToolContext) -> dict:
 
 def _propose_focus(args: dict, context: ToolContext) -> dict:
     from .focus import FocusAgent
+    from .model_calls import model_kwargs, proposal_diagnostics
 
     agent = FocusAgent(project_root=context.project_root, dry_run=True,
-                       approval=lambda items: True)
+                       approval=lambda items: True, **model_kwargs(context))
     report = agent.run()
     if not report.get("ok") or not report.get("items"):
         return {"ok": False, "error": report.get("error") or "没有生成关注点",
-                "error_code": report.get("error_code") or "focus_failed"}
+                "error_code": report.get("error_code") or "focus_failed", **proposal_diagnostics(report)}
     return {"ui_action": "save_focus", "label": f"保存 {len(report['items'])} 条会前关注",
             "payload": {"items": report["items"], "sources": report.get("sources", [])},
-            "summary": "会前关注清单已生成，确认后写入项目记忆。"}
+            "summary": "会前关注清单已生成，确认后写入项目记忆。", **proposal_diagnostics(report)}
 
 
 def _propose_facts(args: dict, context: ToolContext) -> dict:
     import json
     from .. import config
     from .postmeeting import PostMeetingAgent, load_transcript
+    from .model_calls import model_kwargs, proposal_diagnostics
 
     session_id = str(args.get("session_id") or "")
     catalog = _catalog(context)
@@ -369,6 +484,7 @@ def _propose_facts(args: dict, context: ToolContext) -> dict:
                 continue
     if not session_id:
         return {"ok": False, "error": "没有可提取事实的会议", "error_code": "no_session"}
+    catalog.load(session_id)  # Enforce project membership before direct transcript access.
     path = Path(catalog.pool) / session_id / "transcript.json"
     try:
         transcript = load_transcript(path)
@@ -376,17 +492,17 @@ def _propose_facts(args: dict, context: ToolContext) -> dict:
         return {"ok": False, "error": "该会话没有可读转写", "error_code": "no_transcript"}
     agent = PostMeetingAgent(session_id=session_id, transcript=transcript,
                              project_root=context.project_root, dry_run=True,
-                             approval=lambda item, evidence: True)
+                             approval=lambda item, evidence: True, **model_kwargs(context))
     report = agent.preview()
     if not report.get("ok"):
         return {"ok": False, "error": report.get("error") or "事实提取失败",
-                "error_code": report.get("error_code") or "facts_failed"}
+                "error_code": report.get("error_code") or "facts_failed", **proposal_diagnostics(report)}
     if not report.get("items"):
-        return {"ok": False, "error": "这次会议没有可写入的明确事实", "error_code": "no_facts"}
+        return {"ok": False, "error": "这次会议没有可写入的明确事实", "error_code": "no_facts", **proposal_diagnostics(report)}
     return {"ui_action": "save_meeting_facts",
             "label": f"写入 {len(report['items'])} 条会议事实",
             "payload": {"session_id": session_id, "items": report["items"]},
-            "summary": f"{session_id} 已提取 {len(report['items'])} 条候选事实。"}
+            "summary": f"{session_id} 已提取 {len(report['items'])} 条候选事实。", **proposal_diagnostics(report)}
 
 
 def _propose_meeting(args: dict, context: ToolContext) -> dict:
@@ -444,6 +560,142 @@ def _propose_terms(args: dict, context: ToolContext) -> dict:
             "payload": {"terms": clean},
             "summary": "确认后把词合并写入项目 #!keep 词表。"}
 
+def _read_file(args: dict, context: ToolContext) -> dict:
+    from .file_ops import read_text_file
+    try:
+        options = {key: args[key] for key in ("line_start", "line_end", "offset", "limit",
+                                              "cursor", "page_start", "page_end") if key in args}
+        result = read_text_file(context.project_root, str(args.get("path") or ""), **options)
+    except (OSError, ValueError) as exc:
+        code = "cursor_invalid" if str(exc).startswith("cursor_invalid") else "file_unreadable"
+        raise ToolError(code, str(exc) if isinstance(exc, ValueError) else "文件读取失败") from None
+    result["trust"] = "untrusted"
+    return result
+
+
+def _propose_write_file(args: dict, context: ToolContext) -> dict:
+    path = str(args.get("path") or "")
+    content = str(args.get("content") or "")
+    try:
+        if path.lower().endswith((".docx", ".pptx", ".pdf")):
+            from .document_ops import validate_document_write
+            _, rel, text = validate_document_write(context.project_root, path, content)
+            return {"ui_action": "write_document", "label": f"生成文档 {rel}",
+                    "payload": {"path": rel, "content": text},
+                    "summary": f"确认后生成 {rel}（{len(text)} 字符）。"}
+        from .file_ops import validate_write
+        _, rel, text = validate_write(context.project_root, path, content)
+    except ValueError as exc:
+        raise ToolError("file_write_invalid", str(exc)) from None
+    return {"ui_action": "write_file", "label": f"写入文件 {rel}",
+            "payload": {"path": rel, "content": text},
+            "summary": f"确认后写入 {rel}（{len(text)} 字符）。"}
+
+
+def _list_files(args: dict, context: ToolContext) -> dict:
+    from .file_ops import list_directory
+    try:
+        result = list_directory(context.project_root, str(args.get("path") or ""),
+                                args.get("limit", 300), offset=args.get("offset", 0),
+                                cursor=args.get("cursor"))
+    except (OSError, ValueError) as exc:
+        code = "cursor_invalid" if str(exc).startswith("cursor_invalid") else "directory_unreadable"
+        raise ToolError(code, str(exc) if isinstance(exc, ValueError) else "目录读取失败") from None
+    result["trust"] = "untrusted"
+    return result
+
+
+def _search_files(args: dict, context: ToolContext) -> dict:
+    from .file_ops import search_text
+    try:
+        result = search_text(context.project_root, str(args.get("query") or ""),
+                             str(args.get("path") or ""), args.get("limit", 30),
+                             args.get("max_files", 200), offset=args.get("offset", 0),
+                             cursor=args.get("cursor"))
+    except (OSError, ValueError) as exc:
+        code = "cursor_invalid" if str(exc).startswith("cursor_invalid") else "search_failed"
+        raise ToolError(code, str(exc) if isinstance(exc, ValueError) else "文件搜索失败") from None
+    result["trust"] = "untrusted"
+    return result
+
+
+def _propose_run_command(args: dict, context: ToolContext) -> dict:
+    from .file_ops import validate_command
+    try:
+        command = validate_command(str(args.get("command") or ""))
+    except ValueError as exc:
+        raise ToolError("command_invalid", str(exc)) from None
+    return {"ui_action": "run_command", "label": f"执行命令：{command[:80]}",
+            "payload": {"command": command, "cwd": str(context.project_root)},
+            "summary": "确认后在当前项目目录执行该命令，并返回输出。"}
+
+
+def _operations(context: ToolContext):
+    from .operations import OperationStore
+    return context.operation_store or OperationStore(context.project_root)
+
+
+def _query_operations(args: dict, context: ToolContext) -> dict:
+    store = _operations(context)
+    thread = None if args.get("project_scope") else context.metadata.get("thread_id", "")
+    if args.get("operation_id"):
+        row = store.get(args["operation_id"])
+        rows = [row] if row and (thread is None or row["thread_id"] == thread) else []
+    else:
+        rows = store.query(args.get("query", ""), thread_id=thread, limit=args.get("limit", 20))
+    own = context.metadata.get("operation_id")
+    return {"ok": True, "operations": [row for row in rows if row["id"] != own],
+            "project_root": str(context.project_root),
+            "note": "执行器记录的状态，不是助手历史回复推测；文件当前状态请用query_artifacts。"}
+
+
+def _query_artifacts(args: dict, context: ToolContext) -> dict:
+    store = _operations(context)
+    rows = store.artifacts(args.get("operation_id"), verify=True)
+    if not args.get("project_scope"):
+        thread = context.metadata.get("thread_id", "")
+        rows = [r for r in rows if (store.get(r["operation_id"]) or {}).get("thread_id") == thread]
+    return {"ok": True, "artifacts": rows, "project_root": str(context.project_root),
+            "note": "current_state是本次核验；历史生成成功不保证文件仍存在。"}
+
+
+def _propose_memory(args: dict, context: ToolContext) -> dict:
+    from .chat import ChatStore
+    from .memory import FACT_TYPES
+    thread = str(context.metadata.get("thread_id") or "")
+    conversation = ChatStore(context.project_root).load(thread)
+    sources = [m for m in conversation["messages"]
+               if m.get("seq") == args["user_message_seq"] and m.get("role") == "user"]
+    if not sources or args["source_quote"] not in str(sources[0].get("content", "")):
+        raise ToolError("invalid_memory_source", "记忆提案必须引用当前会话真实用户消息，不能以助手回复代替授权")
+    fact_type = args.get("fact_type", "project-fact")
+    if fact_type not in FACT_TYPES:
+        raise ToolError("invalid_arguments", "不支持的记忆类型")
+    item = {"title": args["title"], "description": args["title"], "body": args["body"],
+            "fact_type": fact_type, "confidence": 0.9,
+            "origin_meeting": "chat:" + thread,
+            "source_refs": ["message_" + str(args["user_message_seq"])],
+            "source_quote": args["source_quote"]}
+    return {"ui_action": "save_memory", "label": "保存记忆：" + args["title"],
+            "payload": {"items": [item]}, "summary": "已准备记忆候选，确认后才会保存。"}
+
+
+def _propose_evidence(args: dict, context: ToolContext) -> dict:
+    from .evidence_skills import EvidencePackSkill
+    catalog = _catalog(context)
+    plan = EvidencePackSkill(context.project_root, catalog.pool.parent).propose(query=args["query"])
+    if plan.get("session_id"):
+        catalog.load(plan["session_id"])
+    return {"ui_action": "save_evidence_pack", "label": "生成证据包：" + str(plan.get("title", "")),
+            "payload": plan, "summary": "已定位证据片段，确认后才会创建证据包。"}
+
+
+def _propose_index(args: dict, context: ToolContext) -> dict:
+    return {"ui_action": "index_project", "label": "更新项目知识索引",
+            "payload": {"include_meetings": args.get("include_meetings", True), "force": args.get("force", False)},
+            "summary": "已准备索引更新，确认后刷新当前项目资料。"}
+
+
 def build_meeting_registry(*, trace=None) -> ToolRegistry:
     """Register the read-only tool surface. Write tools stay in the controlled workflow."""
     registry = ToolRegistry(trace=trace)
@@ -456,7 +708,7 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
             "type": "object", "additionalProperties": False,
             "properties": {
                 "query": {"type": "string", "minLength": 1, "maxLength": 300},
-                "limit": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0}, "cursor": {"type": "string", "maxLength": 16384},
                 "per_session": {"type": "integer"},
                 "session_id": {"type": "string", "maxLength": 120},
             }, "required": ["query"],
@@ -468,7 +720,7 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
         description="列出最近保存的会议会话及转写句数、片段数",
         read_only=True, side_effect_scope="none", timeout_s=20, max_output_chars=5000,
         input_schema={"type": "object", "additionalProperties": False,
-                      "properties": {"limit": {"type": "integer"}}},
+                      "properties": {"limit": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0}, "cursor": {"type": "string", "maxLength": 16384}}},
     ), _read_list_sessions)
 
     registry.register(ToolSpec(
@@ -693,6 +945,31 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
     ), _read_project_status)
 
     registry.register(ToolSpec(
+        name="read_project_map",
+        description="读取项目确定性地图：来源、入口、模块符号、已核验认知和未决问题；只读，不构建地图",
+        read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=16000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "maxLength": 300},
+                           "limit": {"type": "integer"},
+                           "offset": {"type": "integer", "minimum": 0}},
+        },
+    ), _read_project_map)
+
+    registry.register(ToolSpec(
+        name="explore_project",
+        description="按问题对项目地图做有界、可恢复的模型探索：读取关键单元并返回带来源的认知与未决问题；不是全库穷尽",
+        read_only=True, side_effect_scope="none", timeout_s=300, max_output_chars=16000,
+        input_schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500},
+                           "scope": {"type": "string", "enum": ["onboarding", "question"]},
+                           "limit": {"type": "integer"}},
+            "required": ["query"],
+        },
+    ), _explore_project)
+
+    registry.register(ToolSpec(
         name="plan_project_reading",
         description="离线计算当前项目全库阅读的字数、块数和预计耗时，不调用模型",
         read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=8000,
@@ -756,4 +1033,85 @@ def build_meeting_registry(*, trace=None) -> ToolRegistry:
                       "required": ["terms"]},
     ), _propose_terms)
 
+    registry.register(ToolSpec(
+        name="list_files",
+        description="列出一个项目目录中的文件和子目录；需要了解项目结构、找文件时先用它。path 为空表示项目根目录",
+        read_only=True, side_effect_scope="none", timeout_s=20, max_output_chars=20000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"path": {"type": "string", "maxLength": 1000},
+                                     "limit": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0}, "cursor": {"type": "string", "maxLength": 16384}}},
+    ), _list_files)
+
+    registry.register(ToolSpec(
+        name="search_files",
+        description="在项目文本/代码文件中搜索关键词，返回文件、行号和上下文；找某个函数、字段、配置或文档内容时用它",
+        read_only=True, side_effect_scope="none", timeout_s=30, max_output_chars=20000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 300},
+                                     "path": {"type": "string", "maxLength": 1000},
+                                     "limit": {"type": "integer", "minimum": 1, "maximum": 200}, "max_files": {"type": "integer", "minimum": 1, "maximum": 1000}, "offset": {"type": "integer", "minimum": 0}, "cursor": {"type": "string", "maxLength": 16384}},
+                      "required": ["query"]},
+    ), _search_files)
+
+    registry.register(ToolSpec(
+        name="run_command",
+        description="需要在项目目录运行命令（如测试、构建、git status、列目录）时提交一个待确认命令；不会自动执行，用户点确认后宿主才运行",
+        read_only=True, side_effect_scope="project", timeout_s=10, max_output_chars=2000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"command": {"type": "string", "minLength": 1, "maxLength": 800}},
+                      "required": ["command"]},
+    ), _propose_run_command)
+
+    registry.register(ToolSpec(
+        name="read_file",
+        description="读取项目内的一个文本/代码/文档文件；回答文件内容问题时先用它核对原文，不要把文件名当内容。行/页码从1开始且包含末尾；offset/limit为字符。继续读取时保持参数不变并传next_cursor，coverage仅覆盖请求范围",
+        read_only=True, side_effect_scope="none", timeout_s=20, max_output_chars=80000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1000}, "line_start": {"type": "integer", "minimum": 1}, "line_end": {"type": "integer", "minimum": 1}, "page_start": {"type": "integer", "minimum": 1}, "page_end": {"type": "integer", "minimum": 1}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 120000}, "cursor": {"type": "string", "maxLength": 16384}},
+                      "required": ["path"]},
+    ), _read_file)
+
+    registry.register(ToolSpec(
+        name="write_file",
+        description="用户明确要求创建/修改项目文件或生成 PPT/DOCX/PDF 时，提交一个待确认写入；不会直接落盘，用户点确认后宿主才写。文档内容用 Markdown 标题/列表/--- 分页。不要声称已经写入",
+        read_only=True, side_effect_scope="project", timeout_s=10, max_output_chars=2000,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                                     "content": {"type": "string", "maxLength": 100000}},
+                      "required": ["path", "content"]},
+    ), _propose_write_file)
+
+    registry.register(ToolSpec(
+        name="query_operations",
+        description="查询本会话执行器记录：请求、审批、执行结果、错误与产物引用。可按operation_id读取较早完整结果；project_scope显式扩展为当前项目全部会话。",
+        timeout_s=15, max_output_chars=18000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {
+            "operation_id": {"type": "string"}, "query": {"type": "string"},
+            "project_scope": {"type": "boolean"}, "limit": {"type": "integer"}}}), _query_operations)
+    registry.register(ToolSpec(
+        name="query_artifacts",
+        description="核验已登记产物的绝对路径、生成操作、版本及当前存在/修改状态。默认当前会话，不从助手文字推断成功。",
+        timeout_s=30, max_output_chars=15000,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {
+            "operation_id": {"type": "string"}, "project_scope": {"type": "boolean"}}}), _query_artifacts)
+    registry.register(ToolSpec(
+        name="prepare_memory",
+        description="提出项目记忆候选，必须引用用户消息seq与原话；用户确认前不保存。助手总结不是用户指令。",
+        timeout_s=10, max_output_chars=2500,
+        input_schema={"type": "object", "additionalProperties": False, "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 200},
+            "body": {"type": "string", "minLength": 1, "maxLength": 12000},
+            "fact_type": {"type": "string"}, "user_message_seq": {"type": "integer"},
+            "source_quote": {"type": "string", "minLength": 1, "maxLength": 2000}},
+            "required": ["title", "body", "user_message_seq", "source_quote"]}), _propose_memory)
+    registry.register(ToolSpec(
+        name="prepare_evidence_pack", description="按需求定位当前项目证据并提出打包审批，不直接生成文件。",
+        timeout_s=30, max_output_chars=3500,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}},
+                      "required": ["query"]}), _propose_evidence)
+    registry.register(ToolSpec(
+        name="prepare_project_index", description="请求建立或刷新项目RAG索引，确认后执行；不是全库模型理解。",
+        timeout_s=10,max_output_chars=1500,input_schema={"type":"object","additionalProperties":False,
+        "properties":{"include_meetings":{"type":"boolean"},"force":{"type":"boolean"}}}),_propose_index)
     return registry

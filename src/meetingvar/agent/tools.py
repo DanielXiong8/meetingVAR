@@ -21,6 +21,10 @@ class ToolError(Exception):
     def __init__(self, code: str, message: str = ""):
         self.code = code
         self.message = message or code
+        self.tool_name = ""
+        self.operation_id = ""
+        self.tool_call_id = ""
+        self.evidence: dict = {}
         super().__init__(self.message)
 
 
@@ -69,6 +73,8 @@ class ToolContext:
     approval_broker: Any = None
     approval_token: str = ""
     extra: dict = field(default_factory=dict)
+    operation_store: Any = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +82,11 @@ class ToolResult:
     value: Any
     text: str
     truncated: bool = False
+    operation_id: str = ""
+    tool_call_id: str = ""
+    status: str = "succeeded"
+    evidence: dict = field(default_factory=dict)
+    tool_name: str = ""
 
 
 def _type_ok(value: Any, expected: str) -> bool:
@@ -129,6 +140,11 @@ def validate_arguments(value: Any, schema: dict, path: str = "$") -> None:
         if isinstance(item_schema, dict):
             for index, item in enumerate(value):
                 validate_arguments(item, item_schema, f"{path}[{index}]")
+    elif expected in {"integer", "number"}:
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ToolValidationError(f"{path}: below minimum")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ToolValidationError(f"{path}: above maximum")
     elif expected == "string":
         minimum = schema.get("minLength")
         maximum = schema.get("maxLength")
@@ -184,6 +200,69 @@ class ToolRegistry:
     def invoke(self, name: str, args: dict, *, context: ToolContext | None = None,
                approval: Callable[[dict], bool] | None = None,
                idempotency_key: str | None = None) -> ToolResult:
+        from .operations import OperationStore
+        from .contracts import normalize_tool_evidence
+        context = context or ToolContext()
+        store = None
+        metadata = context.metadata
+        operation = None
+        try:
+            store = context.operation_store
+            if context.project_root is not None:
+                from pathlib import Path
+                root = Path(context.project_root).resolve()
+                if store is not None and getattr(store, "root", root) != root:
+                    raise ToolError("tool_context_invalid", "operation store belongs to another project")
+                if store is None:
+                    store = OperationStore(root)
+                    context.operation_store = store
+            if store is not None:
+                operation = store.create("tool." + name, args,
+                    thread_id=metadata.get("thread_id", ""), turn_id=metadata.get("turn_id", ""),
+                    run_id=metadata.get("run_id", ""), parent_id=metadata.get("parent_id", ""),
+                    tool_call_id=metadata.get("tool_call_id", ""), origin="tool_registry")
+                store.claim(operation["id"])
+                metadata["operation_id"] = operation["id"]
+            result = self._invoke(name, args, context=context, approval=approval,
+                                  idempotency_key=idempotency_key)
+            result.tool_call_id = str(metadata.get("tool_call_id") or "")
+            result.tool_name = name
+            result.evidence = normalize_tool_evidence(name, args, result.value,
+                operation_id=operation["id"] if operation is not None else "")
+            if operation is not None:
+                result.operation_id = operation["id"]
+                value = result.value
+                # Querying the journal must not recursively duplicate the journal.
+                receipt = {"ok": result.evidence["status"] != "error" and not (isinstance(value, dict) and value.get("ok") is False),
+                           "value": value, "truncated": result.truncated,
+                           "evidence_status": result.evidence["status"], "tool": name}
+                if name in {"query_operations", "query_artifacts"}:
+                    receipt = {"ok": True, "query": args, "result_reference": name}
+                done = store.finish(operation["id"], receipt)
+                result.status = done["status"]
+            return result
+        except Exception as exc:
+            safe = exc if isinstance(exc, ToolError) else ToolError("tool_failed", type(exc).__name__)
+            safe.tool_name = name
+            safe.operation_id = operation["id"] if operation is not None else ""
+            safe.tool_call_id = str(metadata.get("tool_call_id") or "")
+            safe.evidence = normalize_tool_evidence(name, args, None,
+                operation_id=safe.operation_id, error=safe)
+            if operation is not None:
+                timeout = isinstance(exc, ToolError) and exc.code == "timeout"
+                try:
+                    store.finish(operation["id"], {"ok": False,
+                        "error_code": safe.code, "error": safe.message,
+                        "outcome_unknown": timeout, "tool": name, "evidence": safe.evidence},
+                        status="interrupted" if timeout else "failed")
+                except Exception:
+                    # Preserve the original classified failure even if journaling fails.
+                    safe.receipt_persisted = False
+            raise safe from None
+
+    def _invoke(self, name: str, args: dict, *, context: ToolContext | None = None,
+                approval: Callable[[dict], bool] | None = None,
+                idempotency_key: str | None = None) -> ToolResult:
         spec = self.spec(name)
         if not isinstance(args, dict):
             raise ToolValidationError("arguments must be an object")
@@ -212,8 +291,13 @@ class ToolRegistry:
                     raise ToolError("approval_denied", f"{name} was not approved")
 
         cache_key = None
-        if spec.idempotent and idempotency_key:
-            cache_key = f"{name}:{idempotency_key}"
+        mutable_reads = {"read_file", "search_files", "list_files", "get_transcript_window",
+                         "list_sessions", "search_sessions", "query_operations", "query_artifacts"}
+        if spec.idempotent and idempotency_key and name not in mutable_reads:
+            from pathlib import Path
+            scope = str(Path(context.project_root).resolve()) if context.project_root is not None else ""
+            cache_key = _canonical([name, idempotency_key, scope, args,
+                                    context.session_id, context.metadata.get("thread_id", "")])
             if cache_key in self._cache:
                 cached_value, cached_text, cached_truncated = self._cache[cache_key]
                 if self._trace:

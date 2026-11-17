@@ -173,7 +173,20 @@ def read_project_file(folder: str | Path, relative: str) -> dict:
         listing = zip_entries(path)
         result.update(entry_count=listing["count"], entries=listing["entries"])
         return result
-    if kind == "pdf" or kind in {"docx", "pptx", "doc", "ppt", "xls", "rtf"}:
+    if kind == "pdf":
+        # 直接内嵌原始 PDF，交给 WebView2 的原生阅读器分页渲染。
+        # 之前走 pdfminer 抽文本，7.9MB 讲义要 14s（还会喷一屏字体警告），
+        # 用户体感就是“点文件没反应”。大文件仍提供系统应用兜底。
+        if size <= 15 * 1024 * 1024:
+            try:
+                result["data_url"] = "data:application/pdf;base64," + base64.b64encode(
+                    path.read_bytes()).decode("ascii")
+            except OSError:
+                return {"ok": False, "error": "PDF 读取失败"}
+        else:
+            result["too_large"] = True
+        return result
+    if kind in {"docx", "pptx", "doc", "ppt", "xls", "rtf"}:
         text = read_text_safely(path)
         result.update(text=(text or "")[:200_000],
                       truncated=bool(text and len(text) > 200_000),

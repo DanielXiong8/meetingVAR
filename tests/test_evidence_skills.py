@@ -30,6 +30,7 @@ class EvidenceSkillTests(unittest.TestCase):
         self.project.mkdir()
         self.data = self.root / "data"
         self.session_id = "s1"
+        (self.project / "meetingvar" / "minutes" / "s1").mkdir(parents=True)
         self.clip_id = str(uuid.uuid4())
         pool = self.data / "pool" / self.session_id
         pool.mkdir(parents=True)
@@ -79,14 +80,49 @@ class EvidenceSkillTests(unittest.TestCase):
         store.write(name="action: 交付第一版", description="周五交付第一版",
                     body="负责人小林，周五交付。", fact_type="action-item",
                     metadata={"owner": "小林", "due": "周五"})
-        store.write(name="action: 交付第一版", description="周五交付第一版",
-                    body="负责人小林，周一交付。", fact_type="action-item",
-                    metadata={"owner": "小林", "due": "周一"})
+        proposal_path = store.write(
+            name="action: 交付第一版", description="周五交付第一版",
+            body="负责人小林，周一交付。", fact_type="action-item",
+            metadata={"owner": "小林", "due": "周一"})
+        proposal = store.read_path(proposal_path)
+        self.assertEqual(proposal["status"], "pending-conflict")
+        self.assertEqual(store.read("action: 交付第一版")["due"], "周五")
         report = CommitmentLedgerSkill(self.project).run()
         self.assertTrue(report["rows"])
+        active = [row for row in report["rows"] if row["status"] == "active"]
+        pending = [row for row in report["rows"] if row["status"] == "pending-conflict"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(active[0]["due"], "周五")
+        self.assertEqual(pending[0]["due"], "周一")
+        self.assertEqual(active[0]["changes"], [])
+        self.assertEqual(pending[0]["changes"], [])
+
+        store.resolve_conflict(proposal["name"], "keep_new")
+        self.assertEqual(store.read("action: 交付第一版")["status"], "superseded")
+        report = CommitmentLedgerSkill(self.project).run()
+        self.assertEqual(len(report["rows"]), 1)
+        self.assertEqual(report["rows"][0]["status"], "active")
+        self.assertEqual(report["rows"][0]["due"], "周一")
         changes = report["rows"][0]["changes"]
         self.assertTrue(any(change["field"] == "due" and change["to"] == "周一"
                             for change in changes))
+        self.assertEqual([change for change in changes if change["field"] == "due"],
+                         [{"field": "due", "from": "周五", "to": "周一"}])
+
+    def test_commitment_ledger_rejected_proposal_does_not_change_active_due(self):
+        store = FactStore(self.project)
+        common = dict(name="交付", description="交付第一版", fact_type="action-item")
+        store.write(**common, body="周五交付", metadata={"due": "周五"})
+        proposal = store.read_path(store.write(
+            **common, body="周一交付", metadata={"due": "周一"}))
+        store.resolve_conflict(proposal["name"], "keep_old")
+        rows = CommitmentLedgerSkill(self.project).run()["rows"]
+        active = [row for row in rows if row["status"] == "active"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["due"], "周五")
+        self.assertEqual(active[0]["changes"], [])
+        self.assertTrue(any(row["status"] == "rejected" for row in rows))
 
     def test_find_moment_uses_rag_chunks(self):
         (self.project / "需求.md").write_text(
@@ -99,8 +135,13 @@ class EvidenceSkillTests(unittest.TestCase):
 
     def test_chat_evidence_pack_action(self):
         with patch.object(EvidencePackSkill, "_html_to_pdf", return_value=False):
+            tool_call = {"id":"evidence-call","type":"function","function":{
+                "name":"prepare_evidence_pack","arguments":json.dumps({"query":"周五交付"})}}
+            replies = iter([{"ok":True,"content":'{"steps":[]}',"tool_calls":[]},
+                {"ok":True,"content":"","tool_calls":[tool_call],
+                 "message":{"role":"assistant","content":None,"tool_calls":[tool_call]}}])
             agent = ChatAgent(self.project, data_dir=self.data,
-                              llm=lambda *args, **kwargs: {"ok": True, "content": "x"})
+                              llm=lambda *args, **kwargs: next(replies))
             result = agent.ask("生成证据包")
             action = result["message"]["actions"][0]
             done = agent.execute_action(action["id"])

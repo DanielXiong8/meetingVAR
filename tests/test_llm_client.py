@@ -68,25 +68,14 @@ class LlmClientTests(unittest.TestCase):
         self.assertEqual(body["thinking"], {"type": "disabled"})
         self.assertEqual(body["max_tokens"], 4096)
 
-    def test_reasoning_truncation_retries_once_without_thinking(self):
-        class Response:
-            def __init__(self, payload): self.payload = payload
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def read(self): return json.dumps(self.payload).encode()
-        first = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
-                 "usage": {"completion_tokens": 2048,
-                           "completion_tokens_details": {"reasoning_tokens": 1500}}}
-        second = {"choices": [{"message": {"content": '{"ok":true}'}, "finish_reason": "stop"}],
-                  "usage": {"completion_tokens": 20}}
-        self.urlopen.side_effect = [Response(first), Response(second)]
+    def test_reasoning_truncation_preserves_configured_output_cap(self):
+        self.respond("", finish_reason="length", usage={"completion_tokens": 2048,
+            "completion_tokens_details": {"reasoning_tokens": 1500}})
         result = chat_result("synthetic input", max_tokens=2048)
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(result["retried_without_thinking"])
-        self.assertEqual(self.urlopen.call_count, 2)
-        retry = json.loads(self.urlopen.call_args_list[1].args[0].data)
-        self.assertEqual(retry["thinking"], {"type": "disabled"})
-        self.assertEqual(retry["max_tokens"], 8192)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "truncated")
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.assertEqual(json.loads(self.urlopen.call_args.args[0].data)["max_tokens"], 2048)
 
     def test_invalid_budget_and_thinking_never_make_requests(self):
         for key, values in (("LLM_MAX_TOKENS", ("", "NaN", "0", "-1", True)),
@@ -110,9 +99,10 @@ class LlmClientTests(unittest.TestCase):
     def test_context_reserves_input_output_template_and_margin(self):
         budget = token_budget()
         boundary = budget.input_limit - budget.chat_overhead_tokens
-        self.assertTrue(chat_result("a" * boundary)["ok"])
+        boundary_chars = boundary * 4  # ASCII ~4 chars/token in the estimator
+        self.assertTrue(chat_result("a" * boundary_chars)["ok"])
         self.urlopen.reset_mock()
-        self.assertEqual(chat_result("a" * (boundary + 1))["error_code"], "context_budget")
+        self.assertEqual(chat_result("a" * (boundary_chars + 4))["error_code"], "context_budget")
         with patch.object(config, "LLM_CONTEXT_TOKENS", "2048"):
             self.assertEqual(chat_result("x")["error_code"], "context_budget")
         self.urlopen.assert_not_called()

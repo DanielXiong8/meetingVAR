@@ -1,6 +1,6 @@
 # meetingVAR
 
-> **当前开发基线：`main` → `feat/agent-runtime` · 0.17.0**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断、轻量同步录屏、本地 GPU 推理、双源音频时间轴修复，以及桌面 Agent 页（会前关注、会后五类事实、记忆问答）与企业级 Agent Runtime v2：模型原生工具调用、有界 ReAct/Plan-Execute 循环、Principal/审批、LLM 级 Trace、引用校验和黄金问题集评测。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，Agent 设计与边界见 [Agent Runtime v2](docs/AGENT_RUNTIME_V2.md)。下方早期 CLI 架构保留作历史参考。
+> **当前开发基线：`main` → `feat/agent-runtime` · 0.19.4**。已合入讯飞 RTASR 连续字幕、API 兴趣事件判断、轻量同步录屏、本地 GPU 推理、双源音频时间轴修复，以及单一聊天 Agent（会前关注、会后五类事实、项目记忆、RAG、证据技能）与企业级 Agent Runtime v2：模型原生工具调用、有界 ReAct/Plan-Execute 循环、Principal/审批、LLM 级 Trace、引用校验和黄金问题集评测。资源与分支状态见 [开发资源状态](docs/DEVELOPMENT_STATUS.md)，Agent 设计与边界见 [Agent Runtime v2](docs/AGENT_RUNTIME_V2.md)。下方早期 CLI 架构保留作历史参考。
 
 > record your meeting like VAR referee —— 不是记下一切，是保住对你重要的每一刻。
 
@@ -140,6 +140,10 @@ L2 反馈校准（显式 opt-in）：会后评审时加 `--project <项目目录
 
 ## 文档
 
+- [docs/TEAM_ONBOARDING_2026SDG.md](docs/TEAM_ONBOARDING_2026SDG.md) —— **新同学 / 接手 AI 先读**：项目定位、架构、角色边界、运行命令、已知缺口
+- [docs/FINAL_SPRINT_5MIN.md](docs/FINAL_SPRINT_5MIN.md) —— 最后 5 分钟现场 Demo 逐秒脚本、PPT、P0/P1、验收
+- [docs/MAGIC_BAY_INTEGRATION.md](docs/MAGIC_BAY_INTEGRATION.md) —— Magic Bay 副屏 HUD 技术栈与向联想提问清单
+- [docs/UI_SPEC_FOR_V0.md](docs/UI_SPEC_FOR_V0.md) —— 给 Vercel/v0 的风格规范、全部功能清单、Mock API 和页面验收
 - [docs/USAGE_CHECKLIST.md](docs/USAGE_CHECKLIST.md) —— 环境准备、仿真、短音频、真实会议、反馈与故障清单
 - [docs/test_report_local_20261012.md](docs/test_report_local_20261012.md) —— 本轮修复前后证据、测试边界和日志位置
 - [docs/plan.md](docs/plan.md) —— 完整计划书：定位 / 功能规格 / 竞品差异 / 赛程里程碑 / 两人分工

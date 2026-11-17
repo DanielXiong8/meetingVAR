@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from .embeddings import get_embedding_provider
@@ -263,13 +264,35 @@ class FactStore:
                     old = self.read_path(target)
                 except (OSError, ValueError, TypeError):
                     old = None
+            if (old and old.get("status","active") == "active" and status == "active"
+                    and conflict_policy == "auto" and not supersedes
+                    and (conflict_with or self._conflict_signal(
+                        {"description":description,"body":body,"metadata":dict(metadata or {})},old))):
+                # Keep the active fact intact until an independent proposal is reviewed.
+                candidate_name = name + "-待审-" + uuid.uuid4().hex[:8]
+                return self.write(name=candidate_name,description=description,body=body,fact_type=fact_type,
+                    source_refs=source_refs,confidence=confidence,origin_meeting=origin_meeting,
+                    metadata={**(metadata or {}),"proposed_for":name},status="pending-conflict",
+                    valid_from=valid_from,valid_to=valid_to,pinned=pinned,tags=tags,
+                    canonical_key=canonical_key,conflict_policy="manual",
+                    conflict_with=list(dict.fromkeys([name]+list(conflict_with or []))))
             version = int(old.get("version", 1)) + 1 if old else 1
             created = str(old.get("created_at", now)) if old else now
             old_meta = old.get("metadata", {}) if old else {}
             old_refs = (old.get("source_refs") or []) if old else []
+            old_origin = str(old.get("origin_meeting") or old_meta.get("origin_meeting") or "") if old else ""
+            if not origin_meeting and old_origin:
+                origin_meeting = old_origin
             refs = list(dict.fromkeys(
-                [str(x) for x in old_refs]
+                ([str(x) for x in old_refs] if old_origin == origin_meeting else [])
                 + [str(x) for x in (source_refs or [])]))
+            evidence_refs = list(old_meta.get("evidence_refs") or [])
+            for source, ids in ((old_origin, old_refs), (origin_meeting, source_refs or [])):
+                for identifier in ids:
+                    evidence = {"source_id": source, "locator": str(identifier),
+                                "revision": "legacy_unversioned"}
+                    if evidence not in evidence_refs:
+                        evidence_refs.append(evidence)
             old_meetings = (old_meta.get("source_meetings") or []) if old else []
             meetings = list(dict.fromkeys(
                 [str(x) for x in old_meetings]
@@ -277,7 +300,7 @@ class FactStore:
             if not valid_from:
                 valid_from = str(old_meta.get("valid_from") or created)
             if not valid_to and status == "active":
-                valid_to = ""
+                valid_to = str(old_meta.get("valid_to") or "")
             if old:
                 self._snapshot(target, int(old.get("version", 1)))
             if not supersedes and old and status == "active" and \
@@ -308,6 +331,7 @@ class FactStore:
                 "scope": "project",
                 "origin_meeting": origin_meeting,
                 "source_refs": refs,
+                "evidence_refs": evidence_refs,
                 "source_meetings": meetings,
                 "source_count": max(1, len(meetings) or len(refs)),
                 "confidence": confidence,
@@ -453,6 +477,13 @@ class FactStore:
             fact_status = str(fact.get("status", "active"))
             if not include_inactive and status != "all" and fact_status != status:
                 continue
+            if not include_inactive and status == "active":
+                meta = fact.get("metadata") or {}
+                now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                start = str(fact.get("valid_from") or meta.get("valid_from") or "")
+                end = str(fact.get("valid_to") or meta.get("valid_to") or "")
+                if (start and start > now) or (end and end <= now):
+                    continue
             if types and str(fact.get("type", "")) not in types:
                 continue
             rows.append(fact)
@@ -566,7 +597,8 @@ class FactStore:
                 try:
                     old = self.read(conflicts[0])
                     body = f"{old.get('body', '')}\n\n---\n\n{body}"
-                    refs = list(dict.fromkeys(list(old.get("source_refs") or []) + refs))
+                    if old.get("origin_meeting") == fact.get("origin_meeting"):
+                        refs = list(dict.fromkeys(list(old.get("source_refs") or []) + refs))
                     meetings = list(dict.fromkeys(
                         list(old.get("source_meetings") or []) + meetings))
                 except (FileNotFoundError, ValueError):

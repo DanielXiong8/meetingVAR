@@ -9,14 +9,16 @@ UI 不 import 引擎核心、不碰保存链路。
 
 命令行（供构建/自检）：
     python app.py              正常启动
-    python app.py --selftest   开窗 8 秒自动关闭并打印 SELFTEST-OK（CI/打包冒烟）
+    python app.py --selftest   开窗 14 秒自动关闭并打印 SELFTEST-OK（CI/打包冒烟）
     python app.py --smoke-engine  不开窗口，直接演练"起会→手动VAR→停止"全链路
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -25,20 +27,46 @@ import tempfile
 import threading
 import time
 import traceback
+from uuid import UUID, uuid4
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
 
 # 注意：webview 延迟导入（仅 pick_folder/main 需要）——让本模块在无 pywebview 的
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.17.0"
+APP_VERSION = "0.28.4"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 WEB_DIR = _BASE / "web"
+WEB_NEXT = _BASE / "web-next"
+ASSETS_DIR = _BASE / "assets"
 BRIDGE_PY = _BASE / "engine_bridge.py"
+
+
+def bridge_path() -> Path:
+    """Run the bridge outside _MEIPASS when frozen.
+
+    Windows resolves extension DLLs from the script directory first. Running
+    engine_bridge.py directly from PyInstaller's _MEI directory makes conda
+    Python load the bundled sqlite3.dll, which then fails on _sqlite3 import
+    (and every agent command that touches memory dies). A plain copy in
+    %APPDATA%\meetingVAR has no bundled DLLs next to it.
+    """
+    if not getattr(sys, "frozen", False):
+        return BRIDGE_PY
+    try:
+        target = CONFIG_DIR / "engine_bridge.py"
+        data = BRIDGE_PY.read_bytes()
+        if not target.exists() or target.read_bytes() != data:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        return target
+    except OSError:
+        return BRIDGE_PY
 
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "ui_config.json"
@@ -79,15 +107,15 @@ CONFIG_DEFAULTS = {
     "llm_gpu_layers": -1,
     "llm_device": "",
     "llm_reading_max_tokens": 8192,
-    "llm_api_context_tokens": 32768,
+    "llm_api_context_tokens": 500000,
     "llm_thinking": "",
     "llm_reasoning_effort": "",
     "use_llm": False,        # 旧版配置兼容，实时兴趣由 interest_mode 控制
-    "interest_mode": "api",
+    "interest_mode": "manual",
     "interest_focus": "",
     "meeting_engine_version": "0.1.2",
     "audio_source": "both",
-    "asr_engine": "xfyun_rtasr",
+    "asr_engine": "local",
     "xfyun_dir": "",         # 讯飞控制台下载的文件夹（自动认领 .env：听写 / 录音文件转写）
     "llm_provider": "local", # 模型服务：local=内置 llama.cpp 服务 / custom=自定义 OpenAI 兼容 API
     "llm_base_url": "",      # custom: 形如 https://api.xxx.com/v1
@@ -152,12 +180,105 @@ def _first_existing(paths: list[str]) -> str:
     return ""
 
 
+class _NextWebHandler(SimpleHTTPRequestHandler):
+    """Local static server for the exported Next UI."""
+
+    def log_message(self, *args):  # noqa: A003
+        pass
+
+
+class _ProjectFileHandler(SimpleHTTPRequestHandler):
+    """Read-only project file server (PDF native viewer, large media).
+
+    Each token is permanently bound to one resolved project root. Old URLs
+    cannot be retargeted by switching projects; GET and HEAD share validation.
+    """
+
+    def log_message(self, *args):  # noqa: A003
+        pass
+
+    def _target(self, path):
+        parts = unquote(urlsplit(path).path).lstrip("/").split("/", 1)
+        if len(parts) != 2 or not parts[1] or "\x00" in parts[1]:
+            return None
+        root = self.server.project_roots.get(parts[0])
+        if root is None:
+            return None
+        rel = Path(parts[1].replace("\\", "/"))
+        if rel.is_absolute() or ".." in rel.parts:
+            return None
+        target = (root / rel).resolve()
+        if root not in target.parents or not target.is_file():
+            return None
+        return target
+
+    def translate_path(self, path):
+        target = self._target(path)
+        return str(target) if target is not None else ""
+
+    def send_head(self):
+        self._remaining = None
+        requested = self.headers.get("Range")
+        path = self._target(self.path)
+        if path is None:
+            self.send_error(404)
+            return None
+        if not requested or not path.is_file():
+            return super().send_head()
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested.strip())
+        size = path.stat().st_size
+        if not match or not any(match.groups()) or not size:
+            self.send_error(416, "Invalid byte range")
+            return None
+        first, last = match.groups()
+        start = int(first) if first else max(0, size - int(last))
+        end = min(size - 1, int(last)) if first and last else size - 1
+        if start >= size or start > end:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        try:
+            stream = path.open("rb")
+        except OSError:
+            self.send_error(404)
+            return None
+        stream.seek(start)
+        self._remaining = end - start + 1
+        self.send_response(206)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(self._remaining))
+        self.end_headers()
+        return stream
+
+    def copyfile(self, source, outputfile):
+        if self._remaining is None:
+            return super().copyfile(source, outputfile)
+        while self._remaining > 0:
+            block = source.read(min(65536, self._remaining))
+            if not block:
+                break
+            outputfile.write(block)
+            self._remaining -= len(block)
+
+
 def load_config() -> dict:
     cfg = dict(CONFIG_DEFAULTS)
     try:
         if CONFIG_FILE.exists():
             saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             cfg.update(saved)
+            try:
+                saved_context = int(cfg.get("llm_api_context_tokens") or 0)
+            except (TypeError, ValueError):
+                saved_context = 0
+            if (str(cfg.get("llm_provider") or "").lower() == "custom"
+                    and "agnes" in str(cfg.get("llm_model") or "").casefold()
+                    and saved_context < 500000):
+                cfg["llm_api_context_tokens"] = 500000
             if saved.get("meeting_engine_version") != "0.1.2":
                 cfg.update(asr_engine="xfyun_rtasr", interest_mode="api", llm_provider="custom",
                            meeting_engine_version="0.1.2")
@@ -178,7 +299,12 @@ class Backend:
             self._cfg["trial_started"] = time.strftime("%Y-%m-%d")
             save_config(self._cfg)
         self._window: webview.Window | None = None
+        self._tray_icon = None
+        self._tray_available = False
+        self._tray_quit = False
+        self._tray_notified = False
         self._proc: subprocess.Popen | None = None
+        self._control_path: Path | None = None
         self._reader_thread: threading.Thread | None = None
         self._events: list[dict] = []
         self._events_lock = threading.Lock()
@@ -189,9 +315,23 @@ class Backend:
         self._capture_phase = "idle"
         self._server: ThreadingHTTPServer | None = None
         self._server_port = 0
+        self._project_server: ThreadingHTTPServer | None = None
+        self._project_server_port = 0
+        self._project_token = ""
+        self._project_roots: dict[str, Path] = {}
+        self._project_tokens: dict[Path, str] = {}
+        self._project_server_lock = threading.Lock()
         self._page_ready = False
         self._current_project = ""
         self._last_log = ""
+        self._chat_proc: subprocess.Popen | None = None
+        self._chat_lock = threading.Lock()
+        self._chat_cancelled = False
+        self._chat_identity: dict | None = None
+        self._chat_seen_runs: set[str] = set()
+        self._action_lock = threading.Lock()
+        self._meeting_lock = threading.RLock()
+        self._und_lock = threading.RLock()
         self._llm_proc: subprocess.Popen | None = None
         self._llm_launch: dict = {}
         self._llm_error = ""
@@ -201,9 +341,12 @@ class Backend:
         self._llm_verified_at: dict[str, float] = {}
         try:
             validations = json.loads((CONFIG_DIR / "llm_validation.json").read_text(encoding="utf-8"))
+            # Verification is bound to the exact provider fingerprint. It stays valid
+            # until that configuration changes or a real call fails auth/config;
+            # a fixed 24h expiry only forced needless re-testing every day.
             self._llm_verified_at = {key: stamp for key, stamp in validations.items()
                                      if isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key)
-                                     and isinstance(stamp, (int, float)) and 0 <= time.time() - stamp < 86400}
+                                     and isinstance(stamp, (int, float)) and stamp >= 0}
             self._llm_verified.update(self._llm_verified_at)
         except (OSError, ValueError, AttributeError, TypeError):
             pass
@@ -333,9 +476,67 @@ class Backend:
         except (ValueError, OSError):
             return None
 
+    def _ensure_project_server(self) -> None:
+        if self._project_server is not None:
+            return
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _ProjectFileHandler)
+        server.project_roots = self._project_roots
+        self._project_server = server
+        self._project_server_port = server.server_address[1]
+        # Roots are immutable per token, not a mutable server-wide root.
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        log(f"[ui] 项目文件服务 http://127.0.0.1:{self._project_server_port}")
+
+    def project_file_url(self, folder: str, relative: str) -> str:
+        """Serve one project file over localhost (PDF viewer needs a URL)."""
+        if not folder or not Path(folder).is_dir():
+            return ""
+        rel = Path(str(relative).replace("\\", "/"))
+        if rel.is_absolute() or any(part == ".." for part in rel.parts):
+            return ""
+        root = Path(folder).resolve()
+        target = (root / rel).resolve()
+        if target != root and root not in target.parents:
+            return ""
+        if not target.is_file():
+            return ""
+        with self._project_server_lock:
+            self._ensure_project_server()
+            token = self._project_tokens.get(root)
+            if token is None:
+                token = secrets.token_urlsafe(24)
+                self._project_tokens[root] = token
+                self._project_roots[token] = root
+        return (f"http://127.0.0.1:{self._project_server_port}/"
+                f"{token}/{quote(rel.as_posix())}")
+
     # ---------------- 引擎子进程 ----------------
+    @staticmethod
+    def _operation_owner_env() -> dict:
+        # The long-lived desktop owns host/UI actions, not the short-lived bridge.
+        if os.name != "nt":
+            return {}
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+        if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), ctypes.byref(created),
+                                      ctypes.byref(exited), ctypes.byref(kernel_time),
+                                      ctypes.byref(user_time)):
+            raise OSError("无法核验桌面操作进程身份")
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return {"MEETINGVAR_OPERATION_OWNER_PID": str(os.getpid()),
+                "MEETINGVAR_OPERATION_OWNER_START": f"windows:{ticks}"}
+
     def _engine_env(self) -> dict:
         env = os.environ.copy()
+        for key in ("MEETINGVAR_OPERATION_OWNER_PID", "MEETINGVAR_OPERATION_OWNER_START"):
+            env.pop(key, None)
+        env.update(self._operation_owner_env())
         env.update({"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         models = _RUNTIME / "models"
         if models.is_dir():
@@ -361,7 +562,11 @@ class Backend:
             if not model:
                 raise ValueError("自定义 API 未配置模型名，请填写厂商实际提供的模型ID")
             key = (self._cfg.get("llm_api_key") or "").strip()
-            context = self._cfg.get("llm_api_context_tokens", 32768)
+            if key.startswith(("http://", "https://")):
+                raise ValueError("API Key 填成了网址；Base URL 与 API Key 可能填反了")
+            context = self._cfg.get("llm_api_context_tokens", 500000)
+            if "agnes" in model.casefold():
+                context = 500000
         elif provider == "local":
             st = self.llm_status()
             if not st.get("up"):
@@ -436,6 +641,8 @@ class Backend:
         if re.search(r"\[INFO\]|scope_map|trust_remote_code|decoding, utt:", line):
             return
         self._last_log = line  # 退出时随 exit 事件带回（异常时界面上能看到最后一句话）
+        if re.search(r"\[rec\]|\[done\]|Traceback|Error|失败|错误|零命中|本场", line):
+            log("[engine] " + line[:500])
         self._push("log", text=line)
         m = self._DONE_RE.search(line)
         if m and self._current_project:
@@ -451,6 +658,7 @@ class Backend:
             return
         m = self._LINE_RE.match(line)
         if m:
+            log(f"[engine-line] {m.group(2)}: {m.group(3)[:300]}")
             self._push("line", clock=m.group(1), spk=m.group(2), text=m.group(3))
             return
         if "[done]" in line or "本场点名" in line or "零命中" in line:
@@ -465,9 +673,18 @@ class Backend:
             self._push("log", text=f"[ui] 读流异常: {type(exc).__name__}")
         finally:
             code = proc.wait()
+            # 旧引擎的退出不能污染新会议的状态（连续开会时 reader 可能晚到）。
+            if self._proc is not proc:
+                return
             self._push("exit", code=code, last_log=self._last_log[-200:], summary=self._meeting_summary)
             self._capture_phase = "idle"
             self._meeting_started_at = None
+            path, self._control_path = self._control_path, None
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     # ---------------- JS API ----------------
     def bootstrap(self) -> dict:
@@ -480,6 +697,11 @@ class Backend:
             "media_base": f"http://127.0.0.1:{self._server_port}",
             "llm": self.llm_status(),
         }
+
+    def client_metrics(self, info: dict | None = None) -> dict:
+        """Diagnostic: record the WebView CSS viewport and DPI scale."""
+        log("[ui] client_metrics " + json.dumps(info or {}, ensure_ascii=False))
+        return {"ok": True}
 
     def page_ready(self, info: dict | None = None) -> dict:
         """前端引导完成回执（JS→Python 桥的活体证明；自检据此判定成败）。"""
@@ -530,14 +752,21 @@ class Backend:
         """Read the tree even without an engine; enrich with terms when available."""
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
+        local: dict | None = None
+        local = self._agent_bridge(["scan_project", folder], timeout=120)
+        # Large folders (e.g. the user's Documents root) can make token
+        # extraction take minutes. The file tree is what the switch needs, so
+        # return the fast local scan first and skip the expensive preview.
+        if local and local.get("ok") and int(local.get("doc_count") or 0) > 200:
+            return local
         py = self._cfg.get("engine_python") or ""
         repo = self._cfg.get("repo_dir") or ""
         if py and Path(py).exists():
             try:
                 r = subprocess.run(
-                    [py, str(BRIDGE_PY), "preview", folder],
+                    [py, str(bridge_path()), "preview", folder],
                     cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=180, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
+                    timeout=8, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
                 )
                 out = (r.stdout or "").strip().splitlines()
                 if out:
@@ -546,14 +775,84 @@ class Backend:
                     return data
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 pass
-        try:
-            from meetingvar.memory.preview import scan_project_folder
+        if local is not None:
+            return local
+        return {"ok": False, "error": "本地预览失败"}
 
-            return scan_project_folder(folder)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"本地预览失败：{type(exc).__name__}"}
+    def _host_operation_begin(self, folder: str, kind: str, arguments: dict) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "请选择项目以记录本次操作"}
+        identifier=str(uuid4())
+        payload=self._agent_payload_file(arguments)
+        try:
+            result=self._agent_bridge(["host_operation_begin",folder,kind,identifier,str(payload)],timeout=30)
+            return {**result,"operation_id":identifier,"folder":folder}
+        finally:
+            try: payload.unlink()
+            except OSError: pass
+
+    def _host_operation_finish(self, operation: dict, receipt: dict) -> dict:
+        payload=self._agent_payload_file(receipt)
+        try:
+            result=self._agent_bridge(["host_operation_finish",operation["folder"],operation["operation_id"],str(payload)],timeout=45)
+            if result.get("operation_status"):
+                return {**receipt,**result}
+            return {**receipt,"ok":False,"journal_pending":True,"operation_id":operation["operation_id"],
+                    "error":"操作结果已返回但回执未保存，请核对原操作，勿直接重试"}
+        finally:
+            try: payload.unlink()
+            except OSError: pass
+
+    def _meeting_start_error(self, folder: str, mode: str) -> str:
+        if self.is_running():
+            return "会议已在运行"
+        py = self._cfg.get("engine_python") or ""
+        if not py or not Path(py).is_file():
+            return "未配置引擎 Python（设置页指定）"
+        if mode not in {"go", "record"}:
+            return "会议模式无效"
+        if mode == "go" and (not folder or not Path(folder).is_dir()):
+            return "项目文件夹无效"
+        if self._und.get("running"):
+            return "项目理解仍在运行，请等待完成或取消后再开会"
+        interest = self._cfg.get("interest_mode", "manual")
+        if interest not in {"api", "manual"}:
+            return "请选择API兴趣判断或仅手动保存"
+        if interest == "api":
+            if not (self._cfg.get("llm_base_url") or "").strip() or not (self._cfg.get("llm_model") or "").strip():
+                return "API兴趣判断缺少自定义API地址或模型名。请在设置中填写，或明确选择仅手动保存；不会退回热词触发。"
+            try:
+                self._llm_env(provider="custom", purpose="interest")
+            except ValueError as exc:
+                return str(exc)
+        engine = self._cfg.get("asr_engine", "local")
+        if engine not in {"local", "xfyun", "xfyun_rtasr"}:
+            return "识别引擎设置无效"
+        if engine in {"xfyun", "xfyun_rtasr"}:
+            xdir = (self._cfg.get("xfyun_dir") or "").strip()
+            if not xdir or not Path(xdir).exists():
+                return "已选讯飞识别，但未配置讯飞文件夹（设置页 → 识别引擎）"
+        return ""
 
     def start_meeting(self, folder: str = "", mode: str = "go") -> dict:
+        with self._meeting_lock:
+            error = self._meeting_start_error(folder, mode)
+            if error:
+                return {"ok": False, "error": error}
+            project = folder or self._current_project or self._cfg.get("last_project", "")
+            operation=self._host_operation_begin(project,"host.start_meeting",{"mode":mode})
+            if not operation.get("ok"):
+                return operation
+            try:
+                receipt=self._start_meeting(project,mode)
+                receipt["confirmation"]="start_request_only_not_complete_recording"
+                if receipt.get("ok"):
+                    receipt["pid"]=self._proc.pid if self._proc else None
+            except Exception:
+                receipt={"ok":False,"error":"会议启动异常","outcome_unknown":True}
+            return self._host_operation_finish(operation,receipt)
+
+    def _start_meeting(self, folder: str = "", mode: str = "go") -> dict:
         if self.is_running():
             return {"ok": False, "error": "会议已在运行"}
         py = self._cfg.get("engine_python") or ""
@@ -574,7 +873,7 @@ class Backend:
             save_config(self._cfg)
         if self._und.get("running"):
             return {"ok": False, "error": "项目理解仍在运行，请等待完成或取消后再开会"}
-        interest = self._cfg.get("interest_mode", "api")
+        interest = self._cfg.get("interest_mode", "manual")
         if interest not in {"api", "manual"}:
             return {"ok": False, "error": "请选择API兴趣判断或仅手动保存"}
         base = (self._cfg.get("llm_base_url") or "").strip()
@@ -588,7 +887,7 @@ class Backend:
                 return {"ok": False, "error": "API地址须为http/https地址，不要将密钥写入URL"}
         cmd += ["--device", self._cfg.get("device", "auto"), "--no-ask-speakers", "--interest", interest]
         cmd += ["--source", self._cfg.get("audio_source", "both")]
-        engine = self._cfg.get("asr_engine", "xfyun_rtasr")
+        engine = self._cfg.get("asr_engine", "local")
         if engine not in {"local", "xfyun", "xfyun_rtasr"}:
             return {"ok": False, "error": "识别引擎设置无效"}
         cmd += ["--asr", engine]
@@ -601,11 +900,22 @@ class Backend:
         env.update({"MEETINGVAR_DESKTOP_EVENTS": "1", "MEETINGVAR_CHUNK": "8",
                     "MEETINGVAR_OVERLAP": "3", "MEETINGVAR_MIN_TEXT_CHARS": "1" if engine == "xfyun_rtasr" else "2",
                     "MEETINGVAR_INTEREST_FOCUS": (self._cfg.get("interest_focus") or "")[:6000]})
+        # 引擎不再在桌面模式读 stdin（Windows 管道上阻塞的读线程会饿死模型加载）。
+        # 停止/手动 VAR 走控制文件，引擎在主循环里增量读取。
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            self._control_path = CONFIG_DIR / f"control_{time.time_ns()}.txt"
+            self._control_path.write_text("", encoding="utf-8")
+            env["MEETINGVAR_CONTROL_FILE"] = str(self._control_path)
+        except OSError as exc:
+            self._control_path = None
+            return {"ok": False, "error": f"无法创建会议控制文件: {exc}"}
         if interest == "api":
             try:
                 env.update(self._llm_env(provider="custom", purpose="interest"))
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
+        self._current_project = folder
         self._screen_state = {}
         self._meeting_summary = {}
         self._capture_phase = "loading"
@@ -627,36 +937,112 @@ class Backend:
         log(f"[ui] 引擎已启动 pid={self._proc.pid}: {' '.join(cmd)}")
         return {"ok": True, "pid": self._proc.pid, "started_at": self._meeting_started_at}
 
+    def _send_control(self, command: str) -> bool:
+        path = self._control_path
+        if path is None:
+            return False
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(command.rstrip("\r\n") + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            return True
+        except OSError as exc:
+            log(f"[ui] 控制文件写入失败: {exc}")
+            return False
+
+    def _reap_engine(self, proc: subprocess.Popen, grace: float = 25.0) -> None:
+        """停止后兜底：模型加载/收尾卡住时也要在有限时间内清掉引擎进程。"""
+        try:
+            proc.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        log(f"[ui] 引擎 {grace:.0f}s 未退出，强制终止 pid={proc.pid}")
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            proc.kill()
+            log(f"[ui] 已强杀引擎 pid={proc.pid}")
+        except OSError:
+            pass
+
     def stop_meeting(self) -> dict:
+        with self._meeting_lock:
+            proc=self._proc
+            if proc is None or proc.poll() is not None:
+                return {"ok":False,"error":"没有正在运行的会议"}
+            operation=self._host_operation_begin(self._current_project,"host.stop_meeting",{"pid":proc.pid})
+            if not operation.get("ok"):
+                return operation
+            receipt=self._stop_meeting()
+            if not receipt.get("ok"):
+                return self._host_operation_finish(operation,receipt)
+            def completed_stop():
+                try:
+                    code=proc.wait()
+                    result={"ok":code == 0,"pid":proc.pid,"exit_code":code,
+                            "confirmation":"process_exit_not_archive_verification"}
+                except Exception:
+                    result={"ok":False,"error":"停止结果未核验","outcome_unknown":True}
+                self._host_operation_finish(operation,result)
+            threading.Thread(target=completed_stop,daemon=True).start()
+            return {**receipt,"operation_id":operation["operation_id"],"operation_status":"running"}
+
+    def _stop_meeting(self) -> dict:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return {"ok": False, "error": "没有正在运行的会议"}
-        # 优雅路径：stdin 发 ":stop"。实测 CTRL_BREAK 会被引擎进程内 MKL 的
-        # Fortran 运行库劫持成 forrtl abort（绕过全部收尾），信号只作兜底。
+        # 桌面模式：控制文件是主通道；stdin 只作兼容兜底（引擎已不读 stdin）。
+        sent = self._send_control(":stop")
         try:
             if proc.stdin:
                 proc.stdin.write(":stop\n")
                 proc.stdin.flush()
-                log(f"[ui] 已发送优雅停止指令（stdin :stop） pid={proc.pid}")
-                return {"ok": True, "mode": "stdin"}
-        except OSError as exc:
-            log(f"[ui] stdin 停止失败({exc})，回退信号")
+        except OSError:
+            pass
+        log(f"[ui] 已发送优雅停止指令（{'控制文件' if sent else 'stdin'}） pid={proc.pid}")
+        threading.Thread(target=self._reap_engine, args=(proc,), daemon=True).start()
+        return {"ok": True, "status": "running", "pid": proc.pid,
+                "mode": "control" if sent else "stdin"}
+
+    def _host_operation_run(self, folder: str, kind: str, arguments: dict, execute) -> dict:
+        operation = self._host_operation_begin(folder, kind, arguments)
+        if operation.get("ok") is not True:
+            return operation
         try:
-            os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
-            log(f"[ui] 已发送停止信号 pid={proc.pid}")
-            return {"ok": True, "mode": "signal"}
-        except (OSError, ValueError):
-            try:
-                proc.terminate()
-                return {"ok": True, "mode": "terminate"}
-            except OSError as exc2:
-                return {"ok": False, "error": str(exc2)}
+            receipt = execute()
+        except Exception:
+            receipt = {"ok": False, "error": "操作执行异常，请核对实际结果",
+                       "outcome_unknown": True}
+        return self._host_operation_finish(operation, receipt)
 
     def manual_var(self) -> dict:
-        return self._write_stdin(":var\n")
+        with self._meeting_lock:
+            if not self.is_running():
+                return {"ok": False, "error": "会议未在运行"}
+            def submit() -> dict:
+                receipt = ({"ok": True} if self._send_control(":var")
+                           else self._write_stdin(":var\n"))
+                return {**receipt, "confirmation": "command_sent_not_clip_verified"}
+            return self._host_operation_run(self._current_project, "host.manual_var", {}, submit)
 
     def answer_prompt(self, text: str) -> dict:
-        return self._write_stdin((text or "").strip() + "\n")  # 名字（空=跳过）
+        name = (text or "").strip() if isinstance(text, str) else ""
+        if not isinstance(text, str) or any(char in name for char in ("\r", "\n", "\x00")) or name.startswith(":"):
+            return {"ok": False, "error": "说话人名称必须为单行文本，不能是控制指令"}
+        with self._meeting_lock:
+            if not self.is_running():
+                return {"ok": False, "error": "会议未在运行"}
+            def submit() -> dict:
+                return {**self._write_stdin(name + "\n"),
+                        "confirmation": "name_sent_not_identity_verified"}
+            return self._host_operation_run(self._current_project, "host.answer_prompt",
+                                            {"name": name, "skipped": not name}, submit)
 
     def _write_stdin(self, line: str) -> dict:
         proc = self._proc
@@ -669,13 +1055,22 @@ class Backend:
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
 
-    def poll_events(self, since: int = 0) -> dict:
+    def poll_events(self, since: int = 0, with_preview: bool = True) -> dict:
         with self._events_lock:
             evs = [e for e in self._events if e["i"] > since]
             nxt = self._event_seq
+        screen = dict(self._screen_state)
+        if not with_preview:
+            # 预览是 base64 JPEG（~100KB/秒），新 UI 不显示它；轮询里去掉可显著减轻桥接负载。
+            screen.pop("preview", None)
         return {"events": evs, "next": nxt, "running": self.is_running(),
-                "started_at": self._meeting_started_at, "screen": self._screen_state,
+                "started_at": self._meeting_started_at, "screen": screen,
                 "phase": self._capture_phase}
+
+    def screen_state(self) -> dict:
+        """Live screen preview for the 录屏 page (separate from event polling)."""
+        return {"ok": True, "screen": dict(self._screen_state),
+                "phase": self._capture_phase, "running": self.is_running()}
 
     # ---- 会议库 ----
     def list_sessions(self) -> list[dict]:
@@ -842,6 +1237,18 @@ class Backend:
                 })
         return detail
 
+    def digest_session(self, session_id: str, folder: str = "") -> dict:
+        """Generate minutes at the engine mutation boundary, with a durable journal ID."""
+        if not self._agent_valid_session(session_id):
+            return {"ok": False, "error": "会话 ID 无效"}
+        project = folder or self._session_projects.get(session_id, "")
+        known = self._session_projects.get(session_id)
+        if not project or not Path(project).is_dir():
+            return {"ok": False, "error": "请先选择会议所属项目"}
+        if known and Path(known).resolve() != Path(project).resolve():
+            return {"ok": False, "error": "会议不属于所选项目"}
+        return self._agent_bridge(["digest_session", project, session_id], use_llm=True, timeout=300)
+
     # ---- 本地 LLM 服务管理（llama.cpp，127.0.0.1:LLM_PORT）----
     def _local_startup_error(self) -> str:
         from local_llm import safe_startup_error
@@ -955,7 +1362,7 @@ class Backend:
             return {"ok": False, "error": "未配置引擎 Python"}
         try:
             r = subprocess.run(
-                [py, str(BRIDGE_PY), "check_xfyun", xdir],
+                [py, str(bridge_path()), "check_xfyun", xdir],
                 cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=60,
                 env=self._engine_env(), creationflags=_SPAWN_FLAGS,
@@ -981,7 +1388,7 @@ class Backend:
         env = self._engine_env()
         env.update(effective)
         try:
-            process = subprocess.run([py, str(BRIDGE_PY), "test_llm"], cwd=self._cfg.get("repo_dir") or None,
+            process = subprocess.run([py, str(bridge_path()), "test_llm"], cwd=self._cfg.get("repo_dir") or None,
                 env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=150, creationflags=_SPAWN_FLAGS)
             lines = [line for line in process.stdout.splitlines() if line.startswith("{")]
@@ -1008,6 +1415,10 @@ class Backend:
 
     def test_llm(self) -> dict:
         return self._test_provider(self._cfg.get("llm_provider") or "local")
+
+    def model_status(self) -> dict:
+        """Expose readiness reasons without returning URL, key or other secrets."""
+        return self._provider_info()
 
     def pick_media(self):
         """选一个媒体文件（视频/音频）用于离线转写。"""
@@ -1039,21 +1450,25 @@ class Backend:
         py = self._cfg.get("engine_python") or ""
         if not py or not Path(py).exists():
             return {"ok": False, "error": "未配置引擎 Python"}
-        self._tf = {"running": True, "file": path, "progress": "启动…", "done": False,
+        operation=self._host_operation_begin(self._current_project,"host.transcribe_media",{"path":path})
+        if not operation.get("ok"):
+            return operation
+        self._tf = {"operation":operation,"running": True, "file": path, "progress": "启动…", "done": False,
                     "ok": False, "out": "", "error": ""}
         try:
             proc = subprocess.Popen(
-                [py, str(BRIDGE_PY), "transcribe_file", path, xdir],
+                [py, str(bridge_path()), "transcribe_file", path, xdir],
                 cwd=self._cfg.get("repo_dir") or None, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 bufsize=1, env=self._engine_env(), creationflags=_SPAWN_FLAGS,
             )
         except OSError as exc:
             self._tf.update({"running": False, "done": True, "error": f"启动失败: {exc}"})
-            return {"ok": False, "error": str(exc)}
+            return self._host_operation_finish(operation,{"ok":False,"error":type(exc).__name__})
         threading.Thread(target=self._tf_reader, args=(proc,), daemon=True).start()
         log(f"[ui] 文件转写任务启动: {path}")
-        return {"ok": True, "file": Path(path).name}
+        return {"ok": True, "file": Path(path).name, "operation_id":operation["operation_id"],
+                "operation_status":"running"}
 
     def _tf_reader(self, proc: subprocess.Popen) -> None:
         final: dict | None = None
@@ -1080,6 +1495,10 @@ class Backend:
                 self._tf.update({"error": "结果解析失败"})
         elif not self._tf.get("error"):
             self._tf.update({"error": f"引擎退出（rc={proc.returncode}）且无结果"})
+        operation=self._tf.get("operation")
+        if operation:
+            receipt=self._host_operation_finish(operation,{k:self._tf.get(k) for k in ("ok","out","error","file")})
+            self._tf.update({k:receipt[k] for k in ("ok","error","operation_id","operation_status","journal_pending") if k in receipt})
         self._tf["running"] = False
         self._tf["done"] = True
         log(f"[ui] 文件转写结束: ok={self._tf['ok']} out={self._tf['out'] or '-'} err={self._tf['error'] or '-'}")
@@ -1100,9 +1519,9 @@ class Backend:
             return {"ok": False, "error": str(exc), **self._provider_info()}
         try:
             r = subprocess.run(
-                [py, str(BRIDGE_PY), "understand_plan", folder],
+                [py, str(bridge_path()), "understand_plan", folder],
                 cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=120,
+                encoding="utf-8", errors="replace", timeout=1800,
                 env=env, creationflags=_SPAWN_FLAGS,
             )
         except subprocess.TimeoutExpired:
@@ -1118,6 +1537,11 @@ class Backend:
         return data
 
     def understand_start(self, folder: str, max_chunks: int = 0) -> dict:
+        with self._und_lock:
+            return self._understand_start(folder, max_chunks)
+
+    def _understand_start(self, folder: str, max_chunks: int = 0,
+                          action_context: tuple[str, str, str] | None = None) -> dict:
         """后台开跑全库理解；进度 [progress] 行；可随时取消（已完成块有缓存，续跑不重复）。"""
         if self._und.get("running"):
             return {"ok": False, "error": "已有全库理解任务在跑"}
@@ -1130,11 +1554,16 @@ class Backend:
         if not info["ready"]:
             return {"ok": False, "error": info["error"], "error_code": "not_verified"}
         self._und = {"running": True, "done": False, "ok": False, "folder": folder,
-                     "progress": "启动…", "result": {}, "error": "", "max_chunks": max_chunks}
-        cmd = [py, str(BRIDGE_PY), "understand", folder] + ([str(max_chunks)] if max_chunks else [])
+                     "progress": "启动…", "result": {}, "error": "", "max_chunks": max_chunks,
+                     "operation_id": action_context[2] if action_context else str(uuid4())}
+        cmd = [py, str(bridge_path()), "understand", folder] + ([str(max_chunks)] if max_chunks else [])
         try:
             env = self._engine_env()
             env.update(self._llm_env())  # 全库理解必须有模型：本地服务/自定义端点在此校验
+            if action_context:
+                env["MEETINGVAR_CHAT_ACTION_ID"] = action_context[2]
+            else:
+                env["MEETINGVAR_OPERATION_ID"] = self._und["operation_id"]
         except ValueError as exc:
             self._und.update({"running": False, "done": True, "error": str(exc)})
             return {"ok": False, "error": str(exc)}
@@ -1148,21 +1577,23 @@ class Backend:
             self._und.update({"running": False, "done": True, "error": f"启动失败: {exc}"})
             return {"ok": False, "error": str(exc)}
         self._und_proc = proc
-        threading.Thread(target=self._und_reader, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._und_reader, args=(proc, self._und, action_context), daemon=True).start()
         log(f"[ui] 全库理解任务启动: {folder} max_chunks={max_chunks or '全量'}")
-        return {"ok": True, "folder": folder}
+        return {"ok": True, "folder": folder, "operation_id": self._und["operation_id"]}
 
-    def _und_reader(self, proc: subprocess.Popen) -> None:
+    def _und_reader(self, proc: subprocess.Popen, task: dict | None = None,
+                    action_context: tuple[str, str, str] | None = None) -> None:
+        task = self._und if task is None else task
         final: str | None = None
         try:
             for line in proc.stdout or []:
                 line = line.rstrip("\r\n")
                 if line.startswith("[progress] "):
-                    self._und["progress"] = line[len("[progress] "):]
+                    task["progress"] = line[len("[progress] "):]
                 elif line.startswith("{"):
                     final = line
         except Exception as exc:  # noqa: BLE001
-            self._und["error"] = f"读取输出失败: {exc}"
+            task["error"] = f"读取输出失败: {exc}"
         try:
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
@@ -1171,27 +1602,38 @@ class Backend:
             try:
                 data = json.loads(final)
                 partial = bool(data.get("failed_chunks")) and int(data.get("chunks_read") or 0) > 0
-                self._und.update({"ok": bool(data.get("ok")), "result": data, "partial": partial,
+                task.update({"ok": data.get("ok") is True and proc.returncode == 0
+                              and not task.get("cancelled") and data.get("complete") is not False,
+                              "result": data, "partial": partial,
                                   "error": data.get("error") or "", "error_code": data.get("error_code"),
                                   "warnings": data.get("warnings") or [],
                                   "progress": "完成" if data.get("ok") else
                                               ("部分完成" if partial else "中断")})
             except ValueError:
-                self._und["error"] = "结果解析失败"
-        elif not self._und.get("error"):
+                task["error"] = "结果解析失败"
+        elif not task.get("error"):
             rc = proc.returncode
-            self._und["error"] = ("已取消（成功块缓存保留）" if self._und.get("cancelled")
+            task["error"] = ("已取消（成功块缓存保留）" if task.get("cancelled")
                                   else f"引擎异常退出（代码{rc}），未返回诊断结果")
-        self._und["running"] = False
-        self._und["done"] = True
-        self._und_proc = None
-        log(f"[ui] 全库理解结束: ok={self._und['ok']} err={self._und['error'] or '-'}")
-        result = self._und.get("result") or {}
-        self._push("understand_done", ok=self._und["ok"], error=self._und["error"],
-                   partial=bool(self._und.get("partial")), folder=self._und["folder"],
+        task["running"] = False
+        task["done"] = True
+        with self._und_lock:
+            if self._und_proc is proc:
+                self._und_proc = None
+        log(f"[ui] 全库理解结束: ok={task['ok']} err={task['error'] or '-'}")
+        result = task.get("result") or {}
+        self._push("understand_done", ok=task["ok"], error=task["error"],
+                   partial=bool(task.get("partial")), folder=task["folder"],
                    chunks_read=result.get("chunks_read", 0),
                    chunks_total=result.get("chunks_total", 0),
                    coverage_pct=result.get("coverage_pct", 0.0))
+
+        if action_context:
+            receipt = {"ok": task.get("ok") is True and not task.get("cancelled"),
+                       "result": task.get("result") or {},
+                       "error": task.get("error") or ""}
+            finalized = self._finalize_chat_action(*action_context, receipt)
+            task["action_finalized"] = finalized.get("status") in {"done", "succeeded", "failed"}
 
     def understand_status(self) -> dict:
         return dict(self._und)
@@ -1208,32 +1650,24 @@ class Backend:
             return {"ok": False, "error": str(exc)}
 
     def terms_write(self, folder: str, terms: list[str]) -> dict:
-        """把勾选的确认词写入 <folder>/meetingvar/terms.txt（#!keep，下次开会自动采用）。"""
-        py = self._cfg.get("engine_python") or ""
-        if not py or not Path(py).exists():
-            return {"ok": False, "error": "未配置引擎 Python"}
-        words = [str(t).strip() for t in (terms or []) if str(t).strip()]
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        words = [str(term).strip() for term in (terms or []) if str(term).strip()]
         if not words:
             return {"ok": False, "error": "没有勾选任何词"}
+        payload = self._agent_payload_file(words)
         try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = CONFIG_DIR / "_terms_confirm.json"
-            tmp.write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
-            r = subprocess.run(
-                [py, str(BRIDGE_PY), "write_terms", folder, str(tmp)],
-                cwd=self._cfg.get("repo_dir") or None, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=60,
-                env=self._engine_env(), creationflags=_SPAWN_FLAGS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        out = (r.stdout or "").strip().splitlines()
-        if not out:
-            return {"ok": False, "error": f"引擎无输出（rc={r.returncode}）"}
-        try:
-            return json.loads(out[-1])
-        except ValueError:
-            return {"ok": False, "error": f"输出解析失败: {out[-1][:120]}"}
+            return self._agent_bridge(["write_terms", folder, str(payload)], timeout=60)
+        finally:
+            try:
+                payload.unlink()
+            except OSError:
+                pass
+
+    def operation_get(self, folder: str, operation_id: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not self._agent_valid_session(operation_id):
+            return {"ok": False, "error": "项目或操作 ID 无效"}
+        return self._agent_bridge(["operation_get", folder, operation_id], timeout=30)
 
     def transcribe_media_status(self) -> dict:
         return dict(self._tf)
@@ -1302,15 +1736,21 @@ class Backend:
         proc = self._proc
         if proc is not None and proc.poll() is None:
             try:
-                if proc.stdin:
+                if self._send_control(":stop"):
+                    log("[ui] 退出：已发送优雅停止（控制文件）")
+                elif proc.stdin:
                     proc.stdin.write(":stop\n")
                     proc.stdin.flush()
                     log("[ui] 退出：已发送优雅停止（:stop）")
+                try:
+                    proc.wait(timeout=30)  # 收尾含 digest+归档，给足时间
+                except subprocess.TimeoutExpired:
+                    log("[ui] 退出：引擎 30s 未退出，终止")
+                    proc.terminate()
                     try:
-                        proc.wait(timeout=30)  # 收尾含 digest+归档，给足时间
+                        proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        log("[ui] 退出：引擎 30s 未退出，终止")
-                        proc.terminate()
+                        proc.kill()
             except Exception:  # noqa: BLE001 — 退出路径不许抛
                 try:
                     proc.terminate()
@@ -1323,8 +1763,100 @@ class Backend:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _tray_show(self, icon=None, item=None) -> None:
+        window = self._window
+        if window is None:
+            return
+        try:
+            window.show()
+            try:
+                window.restore()
+            except Exception:  # noqa: BLE001 - older pywebview builds
+                pass
+        except Exception as exc:  # noqa: BLE001
+            log(f"[tray] 显示窗口失败：{exc}")
+
+    def _tray_hide(self, icon=None, item=None) -> None:
+        window = self._window
+        if window is None:
+            return
+        try:
+            window.hide()
+        except Exception as exc:  # noqa: BLE001
+            log(f"[tray] 隐藏窗口失败：{exc}")
+
+    def _hide_to_tray(self) -> None:
+        self._tray_hide()
+        icon = self._tray_icon
+        if icon is not None and not self._tray_notified:
+            self._tray_notified = True
+            try:
+                icon.notify("meetingVAR 仍在后台运行。双击托盘图标打开，右键可退出。",
+                            "meetingVAR")
+            except Exception:  # noqa: BLE001 - notifications are best effort
+                pass
+        log("[ui] 窗口已隐藏到托盘")
+
+    def _quit_from_tray(self, icon=None, item=None) -> None:
+        """Tray quit must not call window.destroy() from a worker thread (WinForms
+        deadlocks); stop the engine/LLM, remove the icon, then exit the process."""
+        self._tray_quit = True
+
+        def _finish() -> None:
+            try:
+                if icon is not None:
+                    icon.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+            os._exit(0)
+
+        threading.Thread(target=_finish, daemon=True).start()
+
+    def _start_tray(self) -> None:
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except Exception as exc:  # noqa: BLE001 - app still works without tray
+            log(f"[tray] 不可用：{type(exc).__name__}: {exc}")
+            return
+        image = None
+        for candidate in (ASSETS_DIR / "icon.ico", ASSETS_DIR / "icon.png"):
+            try:
+                if candidate.is_file():
+                    image = Image.open(candidate).convert("RGBA")
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if image is None:
+            image = Image.new("RGBA", (64, 64), (201, 255, 105, 255))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((8, 8, 56, 56), fill=(18, 20, 17, 255))
+        menu = pystray.Menu(
+            pystray.MenuItem("打开 meetingVAR", self._tray_show, default=True),
+            pystray.MenuItem("隐藏到托盘", self._tray_hide),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出 meetingVAR", self._quit_from_tray),
+        )
+        try:
+            icon = pystray.Icon("meetingVAR", image, f"meetingVAR {APP_VERSION}", menu)
+            icon.run_detached()
+            self._tray_icon = icon
+            self._tray_available = True
+            log("[ui] 系统托盘图标已启动")
+        except Exception as exc:  # noqa: BLE001
+            log(f"[tray] 启动失败：{type(exc).__name__}: {exc}")
+
     def _allow_close(self) -> bool:
+        if self._tray_quit:
+            return True
         if not self.is_running():
+            if self._tray_available:
+                self._hide_to_tray()
+                return False
             return True
         if self._capture_phase != "stopping":
             self.stop_meeting()
@@ -1422,15 +1954,51 @@ class Backend:
             return {"ok": False, "error": "导出目录无效"}
         stamp = time.strftime("%Y%m%d_%H%M%S")
         target = Path(out_dir) / f"meetingvar-export-{stamp}.zip"
-        return export_project(folder, target)
+        source = (Path(folder) / "meetingvar").resolve()
+        if source == target.resolve().parent or source in target.resolve().parents:
+            return {"ok": False, "error": "导出目录不能位于待导出的 meetingvar 数据目录内"}
+        return self._host_operation_run(folder, "host.export_project_data",
+                                        {"target": str(target)},
+                                        lambda: export_project(folder, target))
 
     def delete_project_data(self, folder: str, categories: list, confirm: str) -> dict:
-        from meetingvar.commercial.data import delete_categories
+        from meetingvar.commercial.data import CATEGORIES, delete_categories
 
-        if not isinstance(categories, list):
+        if not isinstance(categories, list) or any(not isinstance(key, str) for key in categories):
             return {"ok": False, "error": "删除类别无效"}
+        if str(confirm or "").strip() != "DELETE":
+            return {"ok": False, "error": "请输入 DELETE 以确认删除"}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目目录无效"}
         data_dir = Path(self._cfg.get("repo_dir") or _APP_HOME) / "data"
-        return delete_categories(folder, data_dir, categories, confirm)
+        selected = list(dict.fromkeys(key for key in categories
+                                      if key in CATEGORIES or key in {"clips", "pool", "reports"}))
+        if not selected:
+            return {"ok": True, "removed": [], "count": 0}
+        operation = self._host_operation_begin(folder, "host.delete_project_data",
+                                                {"categories": selected})
+        if operation.get("ok") is not True:
+            return operation
+        targets = [Path(folder) / rel for key in selected if key in CATEGORIES
+                   for rel in CATEGORIES[key][1]]
+        targets.extend(data_dir / key for key in selected if key in {"clips", "pool", "reports"})
+        try:
+            receipt = delete_categories(folder, data_dir, selected, confirm)
+            remaining = [str(path) for path in targets if path.exists()]
+            if remaining:
+                receipt = {**receipt, "ok": False, "remaining": remaining,
+                           "error": "部分所选数据未删除，请核对权限和占用"}
+        except Exception:
+            receipt = {"ok": False, "error": "删除结果未能确认", "outcome_unknown": True}
+        journal = Path(folder) / "meetingvar" / "agent_memory" / "operations.sqlite3"
+        if "agent" in selected and not journal.is_file():
+            # Full deletion includes operation history. Never resurrect it or keep a hidden copy.
+            return {**receipt, "operation_id": operation["operation_id"],
+                    "operation_status": "succeeded" if receipt.get("ok") is True else "interrupted",
+                    "erased_own_journal": True, "durable_receipt": False,
+                    "outcome_unknown": receipt.get("ok") is not True,
+                    "warning": "所选 Agent 数据包含操作历史，已一并删除；本回执不持久保存"}
+        return self._host_operation_finish(operation, receipt)
 
     def get_config(self) -> dict:
         return self._cfg
@@ -1459,7 +2027,7 @@ class Backend:
         if not py or not Path(py).exists():
             return {"ok": False, "error": "引擎 Python 路径不存在"}
         try:
-            r = subprocess.run([py, str(BRIDGE_PY), "check"], cwd=repo,
+            r = subprocess.run([py, str(bridge_path()), "check"], cwd=repo,
                                capture_output=True, text=True, encoding="utf-8",
                                errors="replace", timeout=90, env=self._engine_env(),
                                creationflags=_SPAWN_FLAGS)
@@ -1467,7 +2035,7 @@ class Backend:
             if out:
                 data = json.loads(out[-1])
                 if data.get("ok"):
-                    data["bridge"] = str(BRIDGE_PY)
+                    data["bridge"] = str(bridge_path())
                 return data
             return {"ok": False, "error": f"无输出 rc={r.returncode}: {(r.stderr or '')[-200:]}"}
         except (subprocess.TimeoutExpired, ValueError, OSError) as exc:
@@ -1481,29 +2049,153 @@ class Backend:
         if not py or not Path(py).is_file():
             return {"ok": False, "error": "未配置引擎 Python"}
         env = self._engine_env()
-        if use_llm:
+        mutations = {"understand", "write_terms", "agent_focus_save", "agent_facts_save",
+                     "agent_memory_update", "agent_memory_delete", "agent_memory_pin", "agent_memory_resolve",
+                     "rag_index", "kg_add_node", "kg_add_edge", "kg_delete_node", "kg_delete_edge",
+                     "kg_build", "kg_extract_project", "kg_ingest", "kg_merge", "kg_review_edge", "digest_session",
+                     "architecture_generate", "architecture_save"}
+        operation_id = str(uuid4()) if args and args[0] in mutations else ""
+        identity = {"operation_id": operation_id, "run_id": operation_id} if operation_id else {}
+        if operation_id:
+            env["MEETINGVAR_OPERATION_ID"] = operation_id
+            # These mutations run wholly in this bridge. A killed bridge must
+            # become recoverable even while the desktop stays alive.
+            env.pop("MEETINGVAR_OPERATION_OWNER_PID", None)
+            env.pop("MEETINGVAR_OPERATION_OWNER_START", None)
+        if args and args[0] == 'workspace_start':
+            env['MEETINGVAR_WORKSPACE_MODEL_READY'] = '0'
+            # Indexing must remain available without a model. Never switch providers.
+            info = self._provider_info()
+            log(f"[workspace] model provider={info.get('provider')} configured={info.get('configured')} "
+                f"ready={info.get('ready')} error={str(info.get('error') or '')[:160]}")
+            if info.get('ready'):
+                try:
+                    env.update(self._llm_env(purpose='reading'))
+                    env['MEETINGVAR_WORKSPACE_MODEL_READY'] = '1'
+                except ValueError:
+                    pass  # The durable job explicitly reports awaiting_model.
+        elif use_llm:
             try:
                 env.update(self._llm_env(purpose="reading"))
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
+                return {"ok": False, "error": str(exc), **identity}
         try:
             process = subprocess.run(
-                [py, str(BRIDGE_PY), *args], cwd=repo, env=env, capture_output=True,
+                [py, str(bridge_path()), *args], cwd=repo, env=env, capture_output=True,
                 text=True, encoding="utf-8", errors="replace", timeout=timeout,
                 creationflags=_SPAWN_FLAGS,
             )
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "Agent 任务超时；可在 CLI 查看/重试"}
+            return {"ok": False, "error": "Agent 任务超时；请查询原操作并核对副作用，不要直接重复写入",
+                    "recovery_required": bool(operation_id), **identity}
         except OSError:
-            return {"ok": False, "error": "Agent 子进程启动失败"}
+            return {"ok": False, "error": "Agent 子进程启动失败", **identity}
         lines = [line for line in (process.stdout or "").splitlines() if line.startswith("{")]
         if not lines:
-            return {"ok": False, "error": "Agent 没有返回结构化结果"}
+            return {"ok": False, "error": "Agent 没有返回结构化结果", "recovery_required": bool(operation_id), **identity}
         try:
             data = json.loads(lines[-1])
         except ValueError:
-            return {"ok": False, "error": "Agent 结果无法解析"}
-        return data if isinstance(data, dict) else {"ok": False, "error": "Agent 结果格式无效"}
+            return {"ok": False, "error": "Agent 结果无法解析", **identity}
+        return {**data, **identity} if isinstance(data, dict) else {"ok": False, "error": "Agent 结果格式无效", **identity}
+
+    def _agent_bridge_stream(self, args: list[str], *, use_llm: bool = False,
+                             timeout: int = 300, identity: dict | None = None) -> dict:
+        """Own one explicit run until its reader and process have both ended."""
+        identity = dict(identity or {})
+        if not all(identity.get(key) for key in ("folder", "conversation_id", "run_id")):
+            return {"ok": False, "error": "缺少聊天运行身份"}
+        py = self._cfg.get("engine_python") or ""
+        repo = self._cfg.get("repo_dir") or ""
+        if not py or not Path(py).is_file():
+            return {"ok": False, "error": "未配置引擎 Python", **identity}
+        env = self._engine_env()
+        env["MEETINGVAR_DESKTOP_EVENTS"] = "1"
+        if use_llm:
+            try:
+                env.update(self._llm_env(purpose="reading"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc), **identity}
+        with self._chat_lock:
+            if self._chat_identity is not None:
+                return {"ok": False, "error_code": "chat_busy",
+                        "error": "已有回答正在生成，请先停止该运行", **identity}
+            if identity["run_id"] in self._chat_seen_runs:
+                return {"ok": False, "error_code": "duplicate_run",
+                        "error": "运行 ID 已使用，请使用新的 UUID", **identity}
+            try:
+                process = subprocess.Popen(
+                    [py, str(bridge_path()), *args], cwd=repo, env=env,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1,
+                    creationflags=_SPAWN_FLAGS,
+                )
+            except OSError:
+                return {"ok": False, "error": "Agent 子进程启动失败", **identity}
+            self._chat_proc = process
+            self._chat_identity = identity
+            self._chat_seen_runs.add(identity["run_id"])
+            self._chat_cancelled = False
+        final_line: list[str] = []
+
+        def reader() -> None:
+            for line in process.stdout or []:
+                if line.startswith("@@MEETINGVAR_EVENT "):
+                    try:
+                        event = json.loads(line[len("@@MEETINGVAR_EVENT "):])
+                        if isinstance(event, dict) and event.get("type") == "agent_progress":
+                            event.pop("type", None)
+                            self._push("agent_progress", **{**event, **identity})
+                    except (ValueError, TypeError):
+                        pass
+                elif line.startswith("{"):
+                    final_line[:] = [line]
+
+        thread = threading.Thread(target=reader, daemon=True)
+        timed_out = False
+        try:
+            thread.start()
+            thread.join(timeout)
+            timed_out = thread.is_alive()
+            if timed_out:
+                process.kill()
+            exit_code = process.wait(timeout=10)
+            if timed_out:
+                thread.join(2)
+            with self._chat_lock:
+                cancelled = self._chat_cancelled
+            if cancelled or timed_out:
+                reason = "cancelled" if cancelled else "timeout"
+                journal = self._agent_bridge(["chat_interrupt", identity["folder"],
+                                              identity["run_id"], reason], timeout=30)
+                return {"ok": False, "error_code": reason,
+                        "error": "已停止生成" if cancelled else "Agent 任务超时",
+                        "journal_updated": journal.get("ok") is True, **identity}
+            if exit_code != 0 or not final_line:
+                reason = "process_exit_error" if exit_code != 0 else "process_exited_without_result"
+                journal = self._agent_bridge(["chat_interrupt", identity["folder"],
+                                              identity["run_id"], reason], timeout=30)
+                return {"ok": False, "error_code": reason,
+                        "error": "Agent 异常退出" if exit_code != 0 else "Agent 没有返回结构化结果",
+                        "journal_updated": journal.get("ok") is True, **identity}
+            try:
+                data = json.loads(final_line[-1])
+                if not isinstance(data, dict):
+                    raise ValueError("invalid result")
+            except ValueError:
+                journal = self._agent_bridge(["chat_interrupt", identity["folder"],
+                                              identity["run_id"], "invalid_result"], timeout=30)
+                return {"ok": False, "error_code": "invalid_result", "error": "Agent 结果无法解析",
+                        "journal_updated": journal.get("ok") is True, **identity}
+            return {**data, **identity}
+        except (OSError, subprocess.TimeoutExpired):
+            return {"ok": False, "error": "Agent 运行尚未确认退出，保留运行身份", **identity}
+        finally:
+            with self._chat_lock:
+                # Never permit a second process to overwrite a still-live one.
+                if self._chat_proc is process and process.poll() is not None:
+                    self._chat_proc = None
+                    self._chat_identity = None
 
     @staticmethod
     def _agent_valid_session(session: str) -> bool:
@@ -1606,17 +2298,13 @@ class Backend:
             return {"ok": False, "error": "项目文件夹无效"}
         if not isinstance(relative, str) or not relative.strip() or len(relative) > 1000:
             return {"ok": False, "error": "文件路径无效"}
-        try:
-            from meetingvar.memory.preview import read_project_file
-
-            return read_project_file(folder, relative)
-        except ImportError:
-            # Older/custom builds may not include the preview package; the
-            # engine bridge remains a compatible fallback.
-            return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
-        except Exception as exc:  # noqa: BLE001
-            log(f"[file] 本地预览失败：{type(exc).__name__}")
-            return self._agent_bridge(["read_project_file", folder, relative], timeout=120)
+        result = self._agent_bridge(["read_project_file", folder, relative], timeout=120)
+        if result.get("ok") and result.get("kind") == "pdf":
+            url = self.project_file_url(folder, relative)
+            if url:
+                result.pop("data_url", None)
+                result["url"] = url
+        return result
 
     def open_project_file(self, folder: str, relative: str) -> dict:
         if not folder or not Path(folder).is_dir():
@@ -1661,23 +2349,142 @@ class Backend:
         return self._agent_bridge(["agent_chat_postmeeting_offer", folder, cid],
                                   timeout=120)
 
+    def _finalize_chat_action(self, folder: str, conversation_id: str, action_id: str,
+                              receipt: dict) -> dict:
+        """Private: receipts come only from trusted desktop handlers, not JS/model input."""
+        payload = self._agent_payload_file(receipt)
+        try:
+            result = self._agent_bridge(["chat_action_finalize", folder, conversation_id,
+                                         action_id, str(payload)], timeout=120)
+        finally:
+            try:
+                payload.unlink()
+            except OSError:
+                pass
+        if not result.get("status"):
+            result.update(ok=False, status="unverified", journal_pending=True,
+                          error="执行结果尚未持久确认，请查询原操作，勿直接重试")
+        result.update(folder=folder, project=folder, conversation_id=conversation_id,
+                      action_id=action_id)
+        return result
+
     def chat_action(self, folder: str, conversation_id: str, action_id: str) -> dict:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
         if not self._agent_valid_session(conversation_id) or not self._agent_valid_session(action_id):
             return {"ok": False, "error": "对话或操作 ID 无效"}
-        return self._agent_bridge(["agent_chat_action", folder, conversation_id, action_id],
-                                  timeout=180)
+        with self._action_lock:
+            result = self._agent_bridge(["agent_chat_action", folder, conversation_id, action_id],
+                                        timeout=180)
+            if result.get("ok") is not True or result.get("ui_only") is not True:
+                return result
+            kind = result.get("action")
+            try:
+                if kind == "start_meeting":
+                    with self._meeting_lock:
+                        receipt = self._start_meeting(folder)
+                        proc = self._proc
+                        if receipt.get("ok") is True:
+                            alive = proc is not None and proc.poll() is None
+                            receipt = {**receipt, "ok": alive, "confirmation": "process_started",
+                                       "error": "" if alive else "会议进程已退出"}
+                elif kind == "stop_meeting":
+                    with self._meeting_lock:
+                        proc = self._proc
+                        if Path(self._current_project or ".").resolve() != Path(folder).resolve():
+                            receipt = {"ok": False, "error": "运行中的会议不属于此项目"}
+                        else:
+                            receipt = self._stop_meeting()
+                    if receipt.get("ok") is True and proc is not None:
+                        try:
+                            code = proc.wait(timeout=40)
+                            receipt = {"ok": code == 0, "pid": proc.pid, "exit_code": code,
+                                       "error": "" if code == 0 else "会议非正常退出，请核对归档"}
+                        except subprocess.TimeoutExpired:
+                            # Continue observing the same process, never the replacement global.
+                            def finish_stop() -> None:
+                                code = proc.wait()
+                                self._finalize_chat_action(folder, conversation_id, action_id,
+                                    {"ok": code == 0, "pid": proc.pid, "exit_code": code,
+                                     "error": "" if code == 0 else "会议非正常退出，请核对归档"})
+                            threading.Thread(target=finish_stop, daemon=True).start()
+                            return {**result, "status": "running", "pending": True,
+                                    "error": "会议尚未确认退出，操作保持运行中"}
+                elif kind == "start_project_reading":
+                    with self._und_lock:
+                        receipt = self._understand_start(folder, 0,
+                            action_context=(folder, conversation_id, action_id))
+                    if receipt.get("ok") is True:
+                        return {**result, "status": "running", "pending": True}
+                else:
+                    receipt = {"ok": False, "error": "不支持的桌面操作"}
+            except Exception:
+                receipt = {"ok": False, "error": "桌面操作未能完成"}
+            return self._finalize_chat_action(folder, conversation_id, action_id, receipt)
 
-    def chat_send(self, folder: str, conversation_id: str, message: str) -> dict:
+    def chat_action_status(self, folder: str, conversation_id: str, action_id: str) -> dict:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
+        if not self._agent_valid_session(conversation_id) or not self._agent_valid_session(action_id):
+            return {"ok": False, "error": "对话或操作 ID 无效"}
+        return self._agent_bridge(["chat_action_status", folder, conversation_id, action_id], timeout=30)
+
+    def chat_cancel(self, folder: str = "", conversation_id: str = "", run_id: str = "") -> dict:
+        with self._chat_lock:
+            identity = self._chat_identity
+            if not identity or not all((folder, conversation_id, run_id)):
+                return {"ok": False, "error": "请指定要取消的项目、对话和运行"}
+            if (Path(folder).resolve() != Path(identity["folder"]).resolve()
+                    or conversation_id != identity["conversation_id"]
+                    or run_id != identity["run_id"]):
+                return {"ok": False, "error_code": "run_mismatch", "error": "运行身份不匹配"}
+            process = self._chat_proc
+            if process is None or process.poll() is not None:
+                return {"ok": False, "error": "该运行已经结束", **identity}
+            try:
+                process.kill()
+                self._chat_cancelled = True
+                return {"ok": True, "status": "cancel_requested", **identity}
+            except OSError:
+                return {"ok": False, "error": "停止运行失败", **identity}
+
+    def chat_send(self, folder: str, conversation_id: str, message: str,
+                  mode: str = "agent", run_id: str = "") -> dict:
+        try:
+            run_id = str(UUID(run_id)) if run_id else str(uuid4())
+        except (ValueError, TypeError, AttributeError):
+            return {"ok": False, "error": "运行 ID 必须是 UUID"}
+        identity = {"folder": folder, "project": folder, "conversation_id": conversation_id,
+                    "thread_id": conversation_id, "run_id": run_id}
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效", **identity}
         if not self._agent_valid_session(conversation_id):
-            return {"ok": False, "error": "对话 ID 无效"}
+            return {"ok": False, "error": "对话 ID 无效", **identity}
         if not isinstance(message, str) or not message.strip():
-            return {"ok": False, "error": "请输入消息"}
-        return self._agent_bridge(["agent_chat_send", folder, conversation_id,
-                                   message.strip()[:2000]], use_llm=True, timeout=300)
+            return {"ok": False, "error": "请输入消息", **identity}
+        mode = "chat" if str(mode).lower() == "chat" else "agent"
+        return self._agent_bridge_stream(["agent_chat_send", folder, conversation_id,
+                                          message.strip()[:2000], mode, run_id],
+                                         use_llm=True, timeout=300, identity=identity)
+
+    def architecture(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["architecture", str(Path(folder).resolve())], timeout=60)
+
+    def architecture_generate(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["architecture_generate", str(Path(folder).resolve())],
+                                  use_llm=True, timeout=900)
+
+    def architecture_save(self, folder: str, payload: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not isinstance(payload, str) or len(payload) > 500_000:
+            return {"ok": False, "error": "架构保存内容过大或无效"}
+        return self._agent_bridge(["architecture_save", str(Path(folder).resolve()), payload],
+                                  timeout=60)
 
     def kg_status(self, folder: str) -> dict:
         if not folder or not Path(folder).is_dir():
@@ -1688,6 +2495,46 @@ class Backend:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
         return self._agent_bridge(["kg_build", folder], timeout=300)
+
+    def kg_extract_project(self, folder: str, max_chunks: int = 8) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["kg_extract_project", folder,
+                                   str(max(1, min(20, int(max_chunks or 8))))],
+                                  use_llm=True, timeout=600)
+
+    def kg_list(self, folder: str, limit: int = 800) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["kg_list", folder,
+                                   str(max(1, min(2000, int(limit or 800))))], timeout=60)
+
+    def kg_add_node(self, folder: str, kind: str, name: str, description: str = "") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not str(name or "").strip():
+            return {"ok": False, "error": "实体名不能为空"}
+        return self._agent_bridge(["kg_add_node", folder, str(kind)[:40],
+                                   str(name)[:160], str(description)[:1000]], timeout=60)
+
+    def kg_add_edge(self, folder: str, src: str, dst: str, relation: str,
+                    valid_from: str = "") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        if not src or not dst or not relation:
+            return {"ok": False, "error": "关系端点或类型不能为空"}
+        return self._agent_bridge(["kg_add_edge", folder, str(src)[:200], str(dst)[:200],
+                                   str(relation)[:40], str(valid_from)[:40]], timeout=60)
+
+    def kg_delete_node(self, folder: str, identifier: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not identifier:
+            return {"ok": False, "error": "实体无效"}
+        return self._agent_bridge(["kg_delete_node", folder, str(identifier)[:200]], timeout=60)
+
+    def kg_delete_edge(self, folder: str, identifier: str) -> dict:
+        if not folder or not Path(folder).is_dir() or not identifier:
+            return {"ok": False, "error": "关系无效"}
+        return self._agent_bridge(["kg_delete_edge", folder, str(identifier)[:200]], timeout=60)
 
     def kg_ingest(self, folder: str, session: str = "", all_sessions: bool = False) -> dict:
         if not folder or not Path(folder).is_dir():
@@ -1737,11 +2584,122 @@ class Backend:
             return {"ok": False, "error": "项目或查询无效"}
         return self._agent_bridge(["kg_search", folder, str(query)[:500]], timeout=120)
 
-    def rag_index(self, folder: str, include_meetings: bool = True) -> dict:
+    def evidence_packs(self, folder: str) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效", "packs": []}
+        root = Path(folder) / "meetingvar" / "evidence_packs"
+        if not root.is_dir():
+            return {"ok": True, "packs": []}
+        packs = []
+        for directory in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not directory.is_dir():
+                continue
+            manifest_path = directory / "manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            archive = directory.with_suffix(".zip")
+            packs.append({
+                "name": directory.name,
+                "directory": str(directory),
+                "zip": str(archive) if archive.is_file() else "",
+                "created_at": manifest.get("generated_at", ""),
+                "session_id": manifest.get("session_id", ""),
+                "clip_id": manifest.get("clip_id", ""),
+                "window": manifest.get("window", {}),
+                "files": len(manifest.get("files", []) or []),
+                "manifest": manifest,
+            })
+        return {"ok": True, "packs": packs[:100]}
+
+    def evidence_verify(self, folder: str, name: str) -> dict:
+        """Re-hash every file recorded in manifest.json; never trust stored hashes."""
+        if not folder or not Path(folder).is_dir() or not name:
+            return {"ok": False, "error": "项目或证据包无效"}
+        root = (Path(folder) / "meetingvar" / "evidence_packs").resolve()
+        target = (root / name).resolve()
+        if root not in target.parents or not target.is_dir():
+            return {"ok": False, "error": "证据包路径无效"}
+        try:
+            manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"ok": False, "error": "manifest 不可读"}
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if not isinstance(files, list) or not files:
+            return {"ok": False, "error": "manifest 没有可校验文件",
+                    "checked": [], "failed": [], "files": 0}
+        checked, failed = [], []
+        for item in files:
+            if not isinstance(item, dict):
+                failed.append({"path": "", "error": "文件记录格式无效"})
+                continue
+            rel = str(item.get("path") or "")
+            expected = str(item.get("sha256") or "").lower()
+            if not rel or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                failed.append({"path": rel, "actual": "", "expected": expected})
+                continue
+            path = (target / rel).resolve()
+            if target not in path.parents or not path.is_file():
+                failed.append({"path": rel, "actual": "", "expected": expected})
+                continue
+            digest = hashlib.sha256()
+            try:
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                actual = digest.hexdigest()
+                row = {"path": rel, "actual": actual, "expected": expected,
+                       "ok": bool(expected) and actual == expected}
+                checked.append(row)
+                if not row["ok"]:
+                    failed.append(row)
+            except OSError:
+                failed.append({"path": rel, "actual": "", "expected": expected})
+        return {"ok": not failed, "checked": checked, "failed": failed,
+                "files": len(checked), "zip": str(target.with_suffix(".zip"))
+                if target.with_suffix(".zip").is_file() else ""}
+
+    def commitment_ledger(self, folder: str, query: str = "") -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["commitment_ledger", folder, str(query or "")], timeout=120)
+
+    def find_moment(self, folder: str, query: str, session_id: str = "", limit: int = 5) -> dict:
+        if not folder or not Path(folder).is_dir() or not str(query or "").strip():
+            return {"ok": False, "error": "项目或查询无效"}
+        if session_id and not self._agent_valid_session(session_id):
+            return {"ok": False, "error": "会话 ID 无效"}
+        return self._agent_bridge(["find_moment", folder, str(query), session_id,
+                                   str(max(1, min(20, int(limit))))], timeout=120)
+
+    def workspace_start(self, folder: str, force: bool = False) -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {'ok': False, 'error': '项目文件夹无效'}
+        return self._agent_bridge(['workspace_start', str(Path(folder).resolve()), '1' if force else '0'], timeout=60)
+
+    def workspace_status(self, folder: str, job_id: str = '') -> dict:
+        if not folder or not Path(folder).is_dir():
+            return {'ok': False, 'error': '项目文件夹无效'}
+        return self._agent_bridge(['workspace_status', str(Path(folder).resolve()), job_id], timeout=30)
+
+    def workspace_subscribe(self, folder: str, job_id: str = '') -> dict:
+        # Stateless polling subscription: reopening the UI attaches to persisted identity.
+        return self.workspace_status(folder, job_id)
+
+    def workspace_sync(self, folder: str) -> dict:
+        """Agent-maintained workspace memory; no model call."""
+        if not folder or not Path(folder).is_dir():
+            return {"ok": False, "error": "项目文件夹无效"}
+        return self._agent_bridge(["workspace_sync", folder], timeout=180)
+
+    def rag_index(self, folder: str, include_meetings: bool = True,
+                  force: bool = False) -> dict:
         if not folder or not Path(folder).is_dir():
             return {"ok": False, "error": "项目文件夹无效"}
         return self._agent_bridge(["rag_index", folder,
-                                   "true" if include_meetings else "false"], timeout=600)
+                                   "true" if include_meetings else "false",
+                                   "true" if force else "false"], timeout=1800)
 
     def rag_status(self, folder: str) -> dict:
         if not folder or not Path(folder).is_dir():
@@ -1829,6 +2787,30 @@ def _install_crash_handler(backend: "Backend") -> None:
 
 
 def main() -> None:
+    # Keep the 1360px window in CSS pixels on 125%/150% Windows scaling;
+    # otherwise WebView2 reports a ~900px viewport and the inspector is clipped.
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:  # noqa: BLE001
+            try:
+                import ctypes
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 会议录制时窗口常被其他应用遮住。WebView2 默认会节流后台窗口的定时器/
+        # 渲染，导致 pywebview 注入延迟、前端 6s 内拿不到桥（页面一直用 mock，
+        # 录音按钮像“点不动”）。显式关闭后台节流，轮询和字幕才能在后台继续。
+        flags = ("--disable-background-timer-throttling "
+                 "--disable-backgrounding-occluded-windows "
+                 "--disable-renderer-backgrounding "
+                 "--disable-features=CalculateNativeWinOcclusion")
+        existing = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "").strip()
+        if flags not in existing:
+            os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (existing + " " + flags).strip()
+
     import webview
 
     if not _webview2_available():
@@ -1855,24 +2837,42 @@ def main() -> None:
         _smoke_engine(backend)
         return
 
+    web_server = None
+    page_url = str(WEB_DIR / "index.html")
+    if (WEB_NEXT / "index.html").is_file():
+        web_server = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            partial(_NextWebHandler, directory=str(WEB_NEXT)),
+        )
+        threading.Thread(target=web_server.serve_forever, daemon=True).start()
+        page_url = f"http://127.0.0.1:{web_server.server_port}/index.html"
+        log(f"[ui] Next UI {page_url}")
+
     window = webview.create_window(
         f"{APP_NAME} {APP_VERSION}",
-        url=str(WEB_DIR / "index.html"),
+        url=page_url,
         js_api=backend,
-        width=1050, height=680, x=0, y=0, min_size=(900, 600),
+        width=1360, height=860, x=0, y=0, min_size=(1100, 700),
     )
     backend._window = window
     window.events.closing += backend._allow_close
+    if not selftest:
+        backend._start_tray()
     if selftest:
         # 计时线程放 main()（早于 webview.start）：实测放在 _on_start 回调里的线程
         # 不会被执行到；放这里与官方 auto-close 示例一致。
-        _selftest_close(window, backend, 10.0)
+        _selftest_close(window, backend, 14.0)
 
     def _on_start() -> None:
         backend._ensure_server()
         log("[ui] 窗口就绪")
 
-    webview.start(_on_start, debug=selftest)  # 自检开 debug：JS 控制台错误可见
+    try:
+        webview.start(_on_start, debug=selftest)  # 自检开 debug：JS 控制台错误可见
+    finally:
+        if web_server is not None:
+            web_server.shutdown()
+            web_server.server_close()
     backend.shutdown()  # 关窗即收尾：停会议 + 停本应用起的 LLM 服务（防孤儿进程）
     if selftest:
         # 正常路径：start 返回 = 窗口已关闭

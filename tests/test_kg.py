@@ -22,6 +22,7 @@ class KnowledgeGraphTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.project = Path(self.tmp.name) / "星河项目"
         self.project.mkdir()
+        (self.project / "meetingvar" / "minutes" / "s1").mkdir(parents=True)
         self.data = Path(self.tmp.name) / "data"
         pool = self.data / "pool" / "s1"
         pool.mkdir(parents=True)
@@ -77,11 +78,30 @@ class KnowledgeGraphTests(unittest.TestCase):
         timeline = self.graph.timeline(action["id"])
         relations = {edge["relation"] for edge in timeline["edges"]}
         self.assertTrue({"assigned_to", "due_on", "derived_from", "part_of"} <= relations)
+        # Current projections exclude expired facts; their source remains auditable.
         old = self.graph.resolve("旧版本兼容")
-        self.assertIsNotNone(old)
-        # The expired fact's part_of/derived_from edges have valid_to in the past.
-        active_neighbors = self.graph.neighbors(old["id"], depth=1)
+        self.assertIsNone(old)
+        self.assertEqual(FactStore(self.project).read("action: 旧版本兼容")["status"],
+                         "expired")
+        historical = [node for node in self.graph.nodes(status="all")
+                      if node["name"] == "旧版本兼容"]
+        self.assertEqual(len(historical), 1)
+        self.assertEqual(historical[0]["status"], "inactive")
+        history = self.graph.timeline(historical[0]["id"])["edges"]
+        self.assertTrue(history)
+        self.assertTrue(all(edge["status"] == "retracted" for edge in history))
+        self.assertEqual(self.graph.neighbors(historical[0]["id"])["edges"], [])
+        self.assertFalse(any(edge["source_id"] == "action: 旧版本兼容"
+                             and edge["status"] == "asserted"
+                             for edge in self.graph.edges()))
+
+        FactStore(self.project).expire("action: 周五交付第一版")
+        self.builder.build()
+        self.assertIsNone(self.graph.resolve("周五交付第一版"))
+        active_neighbors = self.graph.neighbors(action["id"], depth=1)
         self.assertEqual(active_neighbors["edges"], [])
+        self.assertTrue(all(edge["status"] == "retracted"
+                            for edge in self.graph.timeline(action["id"])["edges"]))
 
     def test_agent_tools_are_registered(self):
         names = {spec.name for spec in build_meeting_registry().specs()}

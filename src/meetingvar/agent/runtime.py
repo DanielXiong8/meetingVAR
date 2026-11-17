@@ -166,7 +166,9 @@ class AgentRuntime:
             if fail_fast:
                 self.fail(task, exc.code)
                 raise
-            return {"ok": False, "error_code": exc.code, "error": exc.message}
+            return {"ok": False, "error_code": exc.code, "error": exc.message,
+                    "operation_id": getattr(exc, "operation_id", ""),
+                    "tool_call_id": getattr(exc, "tool_call_id", "")}
         task.step += 1
         task.last_tool = name
         task.last_error = ""
@@ -175,6 +177,13 @@ class AgentRuntime:
         if self.trace:
             self.trace.record("task_tool_ok", task_id=task.task_id, tool=name, step=task.step)
         return {"ok": True, "result": result}
+
+    def wait_for_approval(self, task: TaskState, actions: list[dict]) -> None:
+        task.status = TaskStatus.WAITING_APPROVAL.value
+        task.metadata["pending_actions"] = actions
+        self._save(task)
+        if self.trace:
+            self.trace.record("task_waiting_approval", task_id=task.task_id)
 
     def complete(self, task: TaskState, summary: dict | None = None) -> None:
         task.status = TaskStatus.COMPLETED.value

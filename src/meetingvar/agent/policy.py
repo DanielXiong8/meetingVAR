@@ -120,7 +120,7 @@ def enforce_tool_policy(spec: ToolSpec, *, principal: Principal | None,
 class AgentBudget:
     max_steps: int = 8
     max_tool_calls: int = 12
-    max_input_tokens: int = 60000
+    max_input_tokens: int = 450000
     max_output_tokens: int = 16000
     max_seconds: float = 180.0
     steps: int = 0
@@ -129,14 +129,15 @@ class AgentBudget:
     output_tokens: int = 0
     started_at: float = field(default_factory=time.monotonic)
 
-    def can_step(self) -> tuple[bool, str]:
-        # max_steps/max_tool_calls <= 0 means "no fixed cap"; semantic stops
-        # (no progress, repeated calls, user cancel, approval wait) still apply.
-        if self.max_steps > 0 and self.steps >= self.max_steps:
-            return False, "step_budget_exhausted"
-        if self.max_tool_calls > 0 and self.tool_calls >= self.max_tool_calls:
-            return False, "tool_budget_exhausted"
-        if time.monotonic() - self.started_at > self.max_seconds:
+    # Steps/tools may renew by segment; token/time costs never do.
+    segment_start_steps: int = 0
+    segment_start_tools: int = 0
+    elapsed_before_resume: float = 0.0
+    model_calls: int = 0
+    estimated_usage_calls: int = 0
+
+    def _cost_room(self) -> tuple[bool, str]:
+        if self.elapsed_before_resume + time.monotonic() - self.started_at > self.max_seconds:
             return False, "time_budget_exhausted"
         if self.input_tokens >= self.max_input_tokens:
             return False, "input_budget_exhausted"
@@ -144,12 +145,51 @@ class AgentBudget:
             return False, "output_budget_exhausted"
         return True, ""
 
-    def consume(self, usage: dict | None = None, *, tool: bool = False) -> None:
+    def can_step(self) -> tuple[bool, str]:
+        can, reason = self._cost_room()
+        if not can:
+            return can, reason
+        if self.max_steps > 0 and self.steps - self.segment_start_steps >= self.max_steps:
+            return False, "step_budget_exhausted"
+        if self.max_tool_calls > 0 and self.tool_calls - self.segment_start_tools >= self.max_tool_calls:
+            return False, "tool_budget_exhausted"
+        return True, ""
+
+    def admit(self, input_tokens: int, output_tokens: int) -> tuple[bool, str]:
+        can, reason = self._cost_room()
+        if not can:
+            return can, reason
+        if self.input_tokens + max(0, input_tokens) > self.max_input_tokens:
+            return False, "input_budget_exhausted"
+        if self.output_tokens + max(0, output_tokens) > self.max_output_tokens:
+            return False, "output_budget_exhausted"
+        return True, ""
+
+    def next_segment(self) -> None:
+        self.segment_start_steps = self.steps
+        self.segment_start_tools = self.tool_calls
+
+    def consume(self, usage: dict | None = None, *, tool: bool = False,
+                estimated_input: int = 0, estimated_output: int = 0,
+                model_call: bool = False) -> None:
         if tool:
             self.tool_calls += 1
-        usage = usage or {}
-        self.input_tokens += int(usage.get("prompt_tokens") or 0)
-        self.output_tokens += int(usage.get("completion_tokens") or 0)
+        usage = usage if isinstance(usage, dict) else {}
+        incoming, outgoing = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        missing = type(incoming) is not int or incoming < 0 or type(outgoing) is not int or outgoing < 0
+        self.input_tokens += incoming if type(incoming) is int and incoming >= 0 else max(0, estimated_input)
+        self.output_tokens += outgoing if type(outgoing) is int and outgoing >= 0 else max(0, estimated_output)
+        if model_call:
+            self.model_calls += 1
+            self.estimated_usage_calls += int(missing)
+
+    def restore(self, state: dict) -> None:
+        for key in ("steps", "tool_calls", "input_tokens", "output_tokens",
+                    "segment_start_steps", "segment_start_tools", "model_calls", "estimated_usage_calls"):
+            if type(state.get(key)) is int and state[key] >= 0:
+                setattr(self, key, state[key])
+        self.elapsed_before_resume = max(0.0, float(state.get("elapsed_seconds", 0)))
+        self.started_at = time.monotonic()
 
     def as_dict(self) -> dict:
         return {"max_steps": self.max_steps, "max_tool_calls": self.max_tool_calls,
@@ -157,7 +197,11 @@ class AgentBudget:
                 "max_output_tokens": self.max_output_tokens,
                 "max_seconds": self.max_seconds, "steps": self.steps,
                 "tool_calls": self.tool_calls, "input_tokens": self.input_tokens,
-                "output_tokens": self.output_tokens}
+                "output_tokens": self.output_tokens,
+                "segment_start_steps": self.segment_start_steps,
+                "segment_start_tools": self.segment_start_tools,
+                "model_calls": self.model_calls, "estimated_usage_calls": self.estimated_usage_calls,
+                "elapsed_seconds": self.elapsed_before_resume + time.monotonic() - self.started_at}
 
 
 _INJECTION_PATTERNS = (

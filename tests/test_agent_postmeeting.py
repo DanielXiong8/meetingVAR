@@ -117,7 +117,7 @@ class PostMeetingTests(unittest.TestCase):
         types = sorted(fact["metadata"]["type"] for fact in facts)
         self.assertEqual(types, ["action-item", "commitment", "decision", "open-question", "risk"])
 
-    def test_extract_retries_shorter_chunks_on_context_budget(self):
+    def test_extract_context_budget_preserves_error_without_replaying_chunks(self):
         turns = [{"id": f"turn_{i}", "ts": i, "speaker": "A",
                   "text": "讨论项目方案与交付。" * 20} for i in range(1, 80)]
         calls = []
@@ -132,9 +132,18 @@ class PostMeetingTests(unittest.TestCase):
                                  dry_run=True, approval=lambda item, evidence: True,
                                  llm=llm, max_chars=12000)
         report = agent.preview()
-        self.assertTrue(report["ok"], report)
-        self.assertGreaterEqual(len(calls), 2)
+        self.assertFalse(report["ok"], report)
+        self.assertEqual(report["error_code"], "context_budget")
+        self.assertEqual(len(calls), 1)
         self.assertGreater(calls[0], 7000)
+        self.assertEqual(report["budget"]["model_calls"], 1)
+        self.assertGreater(report["usage"]["prompt_tokens"], 0)
+        self.assertGreater(report["usage"]["completion_tokens"], 0)
+        self.assertFalse(agent.fact_store.facts_dir.exists())
+        self.assertFalse(report["coverage"]["complete"])
+        self.assertEqual(report["coverage"]["processed"], 0)
+        self.assertEqual(report["coverage"]["failed"], 1)
+        self.assertGreater(report["coverage"]["total"], 1)
 
     def test_invalid_output_reports_error_code(self):
         agent = self.agent(llm=lambda prompt: {"ok": True, "content": "not json"})
@@ -187,9 +196,20 @@ class PostMeetingTests(unittest.TestCase):
         from types import SimpleNamespace
         from meetingvar import cli, config
         self.project.mkdir(parents=True, exist_ok=True)
-        with patch.object(config, "POOL_DIR", self.root / "pool"), \
-             patch("meetingvar.llm.chat_result", return_value={
-                 "ok": True, "content": json.dumps({"actions": [self.action]}, ensure_ascii=False)}):
+        from contextlib import ExitStack, redirect_stdout
+        import io
+        from meetingvar.llm import TokenBudget
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(config, "POOL_DIR", self.root / "pool"))
+            stack.enter_context(patch("meetingvar.model_client.ProviderModelClient.budget",
+                                      return_value=TokenBudget(32000, 4096)))
+            complete = stack.enter_context(patch("meetingvar.model_client.ProviderModelClient.complete",
+                return_value={"ok": True, "content": json.dumps({"actions": [self.action]}, ensure_ascii=False),
+                              "usage": {"prompt_tokens": 100, "completion_tokens": 60}}))
+            stack.enter_context(patch("meetingvar.llm.chat_result", side_effect=AssertionError("legacy bypass")))
+            stack.enter_context(patch("socket.create_connection", side_effect=AssertionError("network disabled")))
+            stack.enter_context(patch("socket.socket.connect", side_effect=AssertionError("network disabled")))
+            output = stack.enter_context(redirect_stdout(io.StringIO()))
             (self.root / "pool" / "go_cli2").mkdir(parents=True)
             (self.root / "pool" / "go_cli2" / "transcript.json").write_text(
                 json.dumps({"transcript": [
@@ -200,6 +220,12 @@ class PostMeetingTests(unittest.TestCase):
             args = SimpleNamespace(session="go_cli2", project=str(self.project), dry_run=False,
                                    yes=True, json=True, max_chars=5000)
             cli.cmd_agent_actions(args)
+            complete.assert_called_once()
+            report = json.loads(output.getvalue())
+            self.assertTrue(report["ok"], report)
+            self.assertEqual(report["written"], 1)
+            self.assertEqual(report["budget"]["model_calls"], 1)
+            self.assertEqual(report["budget"]["input_tokens"], 100)
         fact = self.project / "meetingvar" / "agent_memory" / "facts"
         self.assertEqual(len(list(fact.glob("*.md"))), 1)
 

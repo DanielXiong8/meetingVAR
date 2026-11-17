@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ class ChatTests(unittest.TestCase):
             ],
         }, ensure_ascii=False), encoding="utf-8")
         (self.root / "meetingvar" / "agent_memory").mkdir(parents=True)
+        (self.root / "meetingvar" / "minutes" / "s1").mkdir(parents=True)
 
     def test_store_create_append_list_and_load(self):
         store = ChatStore(self.root)
@@ -70,11 +72,11 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(len(loaded["messages"]), 2)
         self.assertEqual(loaded["messages"][1]["content"], "目前有两条事实。")
 
-    def test_greeting_is_local_and_persisted(self):
-        agent = ChatAgent(project_root=self.root, data_dir=self.data)
-        result = agent.ask("你好")
+    def test_greeting_uses_selected_chat_mode_and_is_persisted(self):
+        agent = ChatAgent(project_root=self.root, data_dir=self.data, llm=lambda prompt: "你好")
+        result = agent.ask("你好", mode="chat")
         self.assertTrue(result["ok"])
-        self.assertEqual(result["message"]["mode"], "greeting")
+        self.assertEqual(result["message"]["mode"], "chat")
         loaded = ChatStore(self.root).load(result["conversation_id"])
         self.assertEqual([m["role"] for m in loaded["messages"]], ["user", "assistant"])
 
@@ -99,27 +101,23 @@ class ChatTests(unittest.TestCase):
         result = agent.ask("周五的交付怎么安排？")
         self.assertTrue(result["ok"])
         self.assertEqual(result["message"]["mode"], "agent")
-        self.assertTrue(result["message"]["grounded"])
+        self.assertTrue(result["message"]["source_validated"])
+        self.assertFalse(result["message"]["semantic_verified"])
         self.assertEqual(result["message"]["citations"][0]["turn_ids"], ["turn_1"])
         # The new loop request contains the prior assistant turn in its user context.
         self.assertIn("上一轮：项目已启动", json.dumps(script.calls[0][0], ensure_ascii=False))
+        self.assertIn("上一轮：项目已启动", json.dumps(script.calls[1][0], ensure_ascii=False))
         loaded = ChatStore(self.root).load(result["conversation_id"])
         self.assertEqual(loaded["messages"][-1]["role"], "assistant")
 
-    def test_recent_meeting_summary_uses_digest_skill(self):
-        script = ScriptLLM([
-            _content(json.dumps({
-                "summary": "讨论了交付安排。",
-                "decisions": [{"title": "周五交付初版", "evidence_turns": ["turn_1"]}],
-                "actions": [], "open_questions": [],
-            }, ensure_ascii=False))
-        ])
-        agent = ChatAgent(project_root=self.root, data_dir=self.data, llm=script)
-        result = agent.ask("总结最近会议的主要决定")
-        self.assertEqual(result["message"]["mode"], "skill")
-        self.assertIn("周五交付初版", result["message"]["content"])
+    def test_recent_meeting_summary_uses_same_tool_loop(self):
+        script = ScriptLLM([_content('{"steps":[]}'),
+            _tool("get_transcript_window", {"session_id":"s1","turn_ids":["turn_1"]}),
+            _content(json.dumps({"answer":"周五交付初版。","citations":[{"kind":"turn","session_id":"s1","turn_ids":["turn_1"],"quote":"周五给初版"}]}))])
+        result = ChatAgent(self.root,data_dir=self.data,llm=script).ask("总结最近会议的主要决定")
+        self.assertEqual(result["message"]["mode"],"agent")
+        self.assertIn("周五交付初版",result["message"]["content"])
         self.assertTrue(result["message"]["citations"])
-        self.assertEqual(result["message"]["citations"][0]["turn_ids"], ["turn_1"])
 
     def test_chat_action_start_meeting_is_ui_only(self):
         agent = ChatAgent(project_root=self.root, data_dir=self.data)
@@ -164,6 +162,45 @@ class ChatTests(unittest.TestCase):
     def test_general_chat_has_no_tools(self):
         script = ScriptLLM(["这是一段普通回答。"])
         agent = ChatAgent(project_root=self.root, data_dir=self.data, llm=script)
-        result = agent.ask("解释一下什么是向量数据库")
+        result = agent.ask("解释一下什么是向量数据库", mode="chat")
         self.assertEqual(result["message"]["mode"], "chat")
         self.assertEqual(result["message"]["content"], "这是一段普通回答。")
+
+    def test_focus_request_is_a_tool_approval_not_a_page(self):
+        proposal = {"ui_action":"save_focus","label":"保存关注",
+                    "payload":{"items":[{"title":"交付方案是否确认","why":"用户关注"}],"sources":[]},
+                    "summary":"确认后保存关注点"}
+        script = ScriptLLM([_content('{"steps":[]}'),_tool("prepare_focus",{})])
+        with patch("meetingvar.agent.meeting_tools._propose_focus",return_value=proposal):
+            agent=ChatAgent(self.root,data_dir=self.data,llm=script)
+            result=agent.ask("生成会前关注清单")
+        self.assertEqual(result["message"]["actions"][0]["type"],"save_focus")
+        self.assertTrue(agent.execute_action(result["message"]["actions"][0]["id"])["ok"])
+
+    def test_facts_request_is_a_tool_approval_not_a_page(self):
+        proposal={"ui_action":"save_meeting_facts","label":"写入事实",
+                  "payload":{"session_id":"s1","items":[{"title":"周五初版"}]},
+                  "summary":"候选已准备，确认后写入"}
+        script=ScriptLLM([_content('{"steps":[]}'),_tool("prepare_meeting_facts",{"session_id":"s1"})])
+        with patch("meetingvar.agent.meeting_tools._propose_facts",return_value=proposal):
+            result=ChatAgent(self.root,data_dir=self.data,llm=script).ask("从最近一场会议提取会后事实")
+        self.assertEqual(result["message"]["actions"][0]["type"],"save_meeting_facts")
+        self.assertEqual(result["message"]["stop_reason"],"action_pending")
+
+    def test_project_memory_request_uses_registered_memory_tool(self):
+        from meetingvar.agent.memory import FactStore
+        FactStore(self.root).write(name="周五交付",description="周五交付第一版",
+            body="小林负责周五交付第一版。",fact_type="commitment",source_refs=[],confidence=.9,origin_meeting="s1")
+        script=ScriptLLM([_content('{"steps":[]}'),_tool("read_fact",{"name":"周五交付"}),
+            _content(json.dumps({"answer":"周五交付第一版。","citations":[{"kind":"fact","name":"周五交付"}]}))])
+        result=ChatAgent(self.root,data_dir=self.data,llm=script).ask("查看项目记忆")
+        self.assertEqual(result["message"]["mode"],"agent")
+        self.assertIn("周五交付第一版",result["message"]["content"])
+
+    def test_rag_index_request_is_an_approved_operation(self):
+        script=ScriptLLM([_content('{"steps":[]}'),_tool("prepare_project_index",{})])
+        agent=ChatAgent(self.root,data_dir=self.data,llm=script)
+        result=agent.ask("建立项目知识库索引")
+        action=result["message"]["actions"][0]
+        self.assertEqual(action["type"],"index_project")
+        self.assertEqual(agent.operations.get(action["id"])["status"],"awaiting_approval")

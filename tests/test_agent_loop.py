@@ -66,6 +66,7 @@ class AgentLoopTests(unittest.TestCase):
             ],
         }, ensure_ascii=False), encoding="utf-8")
         (self.root / "meetingvar" / "agent_memory").mkdir(parents=True)
+        (self.root / "meetingvar" / "minutes" / "s1").mkdir(parents=True)
 
     def _loop(self, responses, **kwargs):
         llm = ScriptLLM(responses)
@@ -107,7 +108,9 @@ class AgentLoopTests(unittest.TestCase):
         loop, llm = self._loop(script, mode="native", max_steps=6)
         report = loop.run()
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"], report)
+        self.assertTrue(report["source_validated"], report)
+        self.assertFalse(report["semantic_verified"])
+        self.assertFalse(report["grounded"])
         self.assertEqual(len(report["citations"]), 2)
         self.assertEqual(report["tool_calls"], 2)
         self.assertEqual(report["stop_reason"], "completed")
@@ -138,7 +141,9 @@ class AgentLoopTests(unittest.TestCase):
                              question="之前我们聊过第二方案吗？")
         report = loop.run()
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"], report)
+        self.assertTrue(report["source_validated"], report)
+        self.assertFalse(report["semantic_verified"])
+        self.assertFalse(report["grounded"])
         self.assertEqual(report["citations"][0]["kind"], "conversation")
         self.assertEqual(report["citations"][0]["conversation_id"], conversation["id"])
 
@@ -163,7 +168,9 @@ class AgentLoopTests(unittest.TestCase):
                              question="客户要求什么？")
         report = loop.run()
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"], report)
+        self.assertTrue(report["source_validated"], report)
+        self.assertFalse(report["semantic_verified"])
+        self.assertFalse(report["grounded"])
         self.assertEqual(report["citations"][0]["kind"], "document")
         self.assertEqual(report["citations"][0]["chunk_id"], chunk_id)
 
@@ -194,7 +201,9 @@ class AgentLoopTests(unittest.TestCase):
                              question="谁负责周五交付第一版？")
         report = loop.run()
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"], report)
+        self.assertTrue(report["source_validated"], report)
+        self.assertFalse(report["semantic_verified"])
+        self.assertFalse(report["grounded"])
         self.assertEqual(report["citations"][0]["kind"], "edge")
 
     def test_json_action_fallback_is_a_real_react_loop(self):
@@ -212,7 +221,9 @@ class AgentLoopTests(unittest.TestCase):
         loop, _ = self._loop(script, mode="json", max_steps=4)
         report = loop.run()
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"], report)
+        self.assertTrue(report["source_validated"], report)
+        self.assertFalse(report["semantic_verified"])
+        self.assertFalse(report["grounded"])
         self.assertEqual(report["mode"], "json")
         self.assertEqual(report["tool_calls"], 1)
         self.assertTrue(any("观察结果" in m["content"] for m in loop.messages
@@ -234,7 +245,13 @@ class AgentLoopTests(unittest.TestCase):
         ]
         loop, _ = self._loop(script, mode="native", max_steps=6)
         report = loop.run()
-        self.assertEqual(report["stop_reason"], "completed_no_evidence")
+        self.assertEqual(report["stop_reason"], "completed_partial")
+        self.assertEqual(report["answer_status"], "partial")
+        self.assertGreater(report["coverage"]["processed"], 0)
+        self.assertFalse(report["coverage"]["confirmed_absence"])
+        self.assertTrue(report["observations"])
+        self.assertFalse(report["source_validated"])
+        self.assertFalse(report["semantic_verified"])
         self.assertFalse(report["grounded"])
         self.assertFalse(report["answered"])
 
@@ -256,6 +273,8 @@ class AgentLoopTests(unittest.TestCase):
         report = loop.run()
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["stop_reason"], "action_pending")
+        self.assertEqual(report["status"], "waiting_approval")
+        self.assertEqual(loop.runtime.load(loop.task.task_id).status, "waiting_approval")
         self.assertEqual(report["tool_calls"], 1)
         self.assertEqual(len(report["ui_actions"]), 1)
         self.assertIn("确认", report["answer"])
@@ -283,7 +302,8 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(report["tool_calls"], 1)
         self.assertFalse(report["ok"])
         self.assertNotIn("预算", report["answer"])
-        self.assertIn("周五", report["answer"])
+        self.assertEqual(report["answer_status"], "partial")
+        self.assertIn("周五", json.dumps(report["observations"], ensure_ascii=False))
 
     def test_unlimited_steps_do_not_hit_step_budget(self):
         loop, _ = self._loop([], mode="native", max_steps=0)
@@ -302,9 +322,16 @@ class AgentLoopTests(unittest.TestCase):
         report = loop.run()
         self.assertTrue(report["ok"], report)
         self.assertEqual(loop._continuations, 1)
-        self.assertTrue(any("自动续跑" in str(m.get("content", "")) for m in loop.messages))
-        self.assertTrue(any("早期观察摘要" in str(m.get("content", "")) for m in loop.messages))
-        self.assertIn("search_sessions", loop._observation_summary)
+        self.assertTrue(any("coverage" in str(m.get("content", "")) for m in loop.messages))
+        self.assertGreater(report["budget"]["steps"], 1)
+        projection = [json.loads(m["content"]) for m in loop.messages
+                      if m.get("_context_source") and str(m.get("content", "")).startswith("{")]
+        self.assertTrue(projection)
+        self.assertEqual(projection[-1]["coverage"]["observations"], 1)
+        self.assertTrue(any(item.get("tool") == "search_sessions" and item.get("source_refs")
+                            for item in projection[-1]["items"]))
+        self.assertEqual(report["budget"]["input_tokens"], 30)
+        self.assertEqual(report["budget"]["output_tokens"], 15)
         self.assertEqual(report["stop_reason"], "completed")
 
     def test_resume_continues_from_persisted_tool_observation(self):
@@ -321,7 +348,8 @@ class AgentLoopTests(unittest.TestCase):
         resumed, _ = self._loop(resumed_script, mode="native", max_steps=4)
         report = resumed.run(resume_task_id=task_id)
         self.assertTrue(report["ok"], report)
-        self.assertTrue(report["grounded"])
+        self.assertTrue(report["source_validated"])
+        self.assertFalse(report["semantic_verified"])
         self.assertEqual(report["task_id"], task_id)
         self.assertGreaterEqual(report["steps"], 1)
 

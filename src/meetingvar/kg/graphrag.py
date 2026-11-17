@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from ..agent.memory import FactStore
@@ -18,7 +19,7 @@ class GraphRAG:
         self.project_root = Path(project_root)
         self.data_dir = Path(data_dir) if data_dir else None
         self.store = GraphStore(self.project_root)
-        self.catalog = SessionCatalog(self.data_dir) if self.data_dir else None
+        self.catalog = SessionCatalog(self.data_dir, project_root=self.project_root) if self.data_dir else None
         self.facts = FactStore(self.project_root)
         self.rag = RagIndex(self.project_root, self.data_dir)
 
@@ -36,7 +37,32 @@ class GraphRAG:
         return rows[:max(1, limit)]
 
     def _edge_source(self, edge: dict) -> dict:
+        if edge.get("status") not in {"asserted", "superseded"}:
+            return {"text": "", "source_status": "inactive"}
+        if edge.get("source_type") == "fact" and edge.get("source_id"):
+            try:
+                fact = self.facts.read(str(edge["source_id"]))
+                meta = fact.get("metadata") or {}
+                now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                start = str(fact.get("valid_from") or meta.get("valid_from") or "")
+                end = str(fact.get("valid_to") or meta.get("valid_to") or "")
+                if fact.get("status","active") != "active" or (start and start > now) or (end and end <= now):
+                    return {"text": "", "source_status": "inactive"}
+                return {"chunk_id": "fact:"+edge["id"],
+                        "text": str(fact.get("description",""))+chr(10)+str(fact.get("body","")),
+                        "source_type": "fact", "source_id": str(edge["source_id"]),
+                        "title": str(edge["source_id"])}
+            except (OSError, ValueError):
+                return {"text": "", "source_status": "missing"}
         text = str(edge.get("quote") or "")
+        refs = (edge.get("metadata") or {}).get("source_refs") or []
+        if edge.get("source_type") == "document" and refs:
+            from ..memory.document_read import read_source_ref
+            for ref in refs:
+                source = read_source_ref(self.project_root, ref)
+                if source.get("source_status") == "current":
+                    return source
+            return {"text": "", "source_status": "unverifiable"}
         if edge.get("chunk_id"):
             chunk = self.rag.read_chunk(edge["chunk_id"])
             if chunk:
@@ -64,12 +90,14 @@ class GraphRAG:
                         "title": str(edge["source_id"])}
             except (OSError, ValueError):
                 pass
+        if edge.get("chunk_id") or edge.get("session_id") or edge.get("source_type") == "document":
+            return {"text": "", "source_status": "unverifiable"}
         return {"chunk_id": f"edge:{edge['id']}", "text": text,
                 "source_type": edge.get("source_type", "graph"),
                 "source_id": edge.get("source_id", ""), "title": "图关系证据"}
 
     def search(self, query: str, *, limit: int = 8, hops: int = 2,
-               as_of: str = "") -> dict:
+               as_of: str = "", rerank: bool = True) -> dict:
         seeds = self.seed_nodes(query, limit=5)
         nodes: dict[str, dict] = {node["id"]: node for node in seeds}
         edges: dict[str, dict] = {}
@@ -94,6 +122,8 @@ class GraphRAG:
         graph_evidence = []
         for edge in edge_rows:
             source = self._edge_source(edge)
+            if source.get("source_status") in {"inactive", "missing", "unverifiable"}:
+                continue
             src = nodes.get(edge["src_id"]) or self.store.get_node(edge["src_id"]) or {}
             dst = nodes.get(edge["dst_id"]) or self.store.get_node(edge["dst_id"]) or {}
             graph_evidence.append({
@@ -102,7 +132,7 @@ class GraphRAG:
                         f"--{edge['relation']}--> "
                         f"({dst.get('kind', '')}:{dst.get('name', '')})",
             })
-        chunks = self.rag.search(query, limit=max(3, min(8, limit)), rerank=True)
+        chunks = self.rag.search(query, limit=max(3, min(8, limit)), rerank=rerank)
         # Merge graph-attached evidence with RAG chunks; keep source identity.
         seen = set()
         context = []
@@ -123,20 +153,31 @@ class GraphRAG:
         graph_slots = max(1, int(limit) - min(2, len(rag_items)))
         context = context[:graph_slots] + rag_items[:max(1, int(limit) - graph_slots)]
         return {"ok": True, "query": query, "seeds": seeds, "nodes": list(nodes.values()),
-                "edges": edge_rows, "graph_evidence": graph_evidence,
+                "edges": [item["edge"] for item in graph_evidence], "graph_evidence": graph_evidence,
                 "chunks": chunks, "context": context,
                 "temporal": temporal, "trust": "project-kg-rag"}
 
     def answer(self, query: str, *, limit: int = 8, hops: int = 2,
-               as_of: str = "") -> dict:
-        from ..llm import chat_result
+               as_of: str = "", model_client=None, model_budget=None) -> dict:
+        from ..agent.model_calls import ToolModelCalls
 
-        search = self.search(query, limit=limit, hops=hops, as_of=as_of)
+        calls = ToolModelCalls(model_client=model_client, model_budget=model_budget)
+        try:
+            search = self.search(query, limit=limit, hops=hops, as_of=as_of, rerank=False)
+        except Exception as exc:
+            return calls.report({"ok": False, "answered": False, "grounded": False,
+                    "answer_status": "failed", "answer": "", "sources": {}, "citations": [],
+                    "error_code": "kg_unavailable", "error": str(exc),
+                    "errors": [{"stage": "search", "code": "kg_unavailable",
+                                "message": str(exc), "retryable": True}]})
         context = search["context"]
         if not context:
-            return {"ok": True, "answered": False, "grounded": False,
-                    "answer": "知识图谱和项目资料中没有找到足够依据。",
-                    "sources": [], "citations": [], "search": search}
+            return calls.report({"ok": True, "answered": False, "grounded": False,
+                    "answer_status": "partial",
+                    "answer": "在本次图谱与检索范围内没有找到相关依据；这只表示局部检索为空，不代表全部资料都没有。",
+                    "sources": [], "citations": [], "search": search,
+                    "coverage": {"scope": "graph_search", "hops": hops,
+                                 "exhaustive": False, "complete": False}})
         graph_lines, chunk_lines = [], []
         edge_map, chunk_map = {}, {}
         for item in context:
@@ -177,18 +218,25 @@ class GraphRAG:
 
 问题：{query}
 """
-        result = chat_result(prompt, temperature=0.1, timeout=180, max_tokens=1200)
+        result = calls.complete(prompt, temperature=0.1, timeout=180)
         if not result.get("ok"):
-            return {"ok": False, "answered": False, "grounded": False,
-                    "answer": "", "sources": search, "citations": [],
-                    "errors": [{"stage": "answer", "code": result.get("error_code")}]}
+            return calls.report({"ok": False, "answered": False, "grounded": False,
+                    "answer_status": "failed", "answer": "", "sources": search,
+                    "citations": [], "errors": [{"stage": "answer",
+                    "code": result.get("error_code"), "message": result.get("error") or "",
+                    "retryable": bool(result.get("retryable"))}]})
         answer = str(result.get("content", "")).strip()
         citations = []
         for label in re.findall(r"\[([GK]\d+)\]", answer):
             source = edge_map.get(label) or chunk_map.get(label)
             if source and source not in citations:
                 citations.append(source)
-        return {"ok": True, "answered": True, "grounded": bool(citations),
+        return calls.report({"ok": True, "answered": True,
+                "answer_status": "answered" if citations else "partial",
+                "source_validated": bool(citations), "semantic_verified": False,
+                "grounded": False,
                 "answer": answer, "sources": search, "citations": citations,
-                "usage": result.get("usage", {}),
-                "errors": [] if citations else [{"stage": "citation", "code": "no_citation"}]}
+                "errors": [] if citations else [{"stage": "citation", "code": "no_citation"}],
+                "coverage": {"scope": "graph_search", "hops": hops,
+                             "context_items": len(context), "cited": len(citations),
+                             "exhaustive": False, "complete": False}})

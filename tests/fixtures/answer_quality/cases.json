@@ -1,0 +1,677 @@
+{
+  "dataset_kind": "synthetic",
+  "description": "Artificial project and list examples; not actual DSA/medical textbooks, real project facts, or model measurements.",
+  "sources": [
+    {
+      "source_id": "synthetic-project",
+      "revision": "sha256:d69820128b6f99f21caf8d74e9927f19b5b4689a1fa45afa049598403d0fbe6d",
+      "path": "synthetic/synthetic-project.txt",
+      "pages": [
+        {
+          "page": 1,
+          "lines": [
+            "长期目标：建立可回溯的本地证据系统。",
+            "当前阶段：阶段一，离线原型验证。",
+            "当前任务：核验引用、记录工具失败、完善范围检索。",
+            "材料没有指定任务负责人或截止日期。",
+            "默认不自动上传资料到云端。"
+          ]
+        },
+        {
+          "page": 2,
+          "lines": [
+            "阶段二：加入多轮更正与版本核验。",
+            "任务负责人和日期仍未指定。",
+            "项目仅用于合成测试，不是实际项目计划。"
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "synthetic-structures",
+      "revision": "sha256:7ebf93c8a1468be1d9f336527f0e839ee76d4b64e1f3a8ae3a55c47fcde25793",
+      "path": "synthetic/synthetic-structures.txt",
+      "pages": [
+        {
+          "page": 1,
+          "lines": [
+            "范围：基础结构。",
+            "栈。",
+            "队列。",
+            "链表。"
+          ]
+        },
+        {
+          "page": 2,
+          "lines": [
+            "队列变体：顺序队列、链式队列、循环队列。",
+            "这里只列队列变体。"
+          ]
+        },
+        {
+          "page": 3,
+          "lines": [
+            "范围外补充：堆。",
+            "范围外补充：树。"
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "synthetic-updated",
+      "revision": "sha256:6ead0c6e648a81959e229bd28142a27f8e8d60de5dc57bda08499e601a233ac1",
+      "path": "synthetic/synthetic-updated.txt",
+      "pages": [
+        {
+          "page": 1,
+          "lines": [
+            "当前阶段：阶段二。",
+            "版本说明：阶段一已经结束。",
+            "默认不自动上传资料到云端。"
+          ]
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "01_project_overview",
+      "question": "概览这个合成项目的长期目标、阶段和任务；不补造负责人日期。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "overview",
+        "long_term_goal",
+        "stage",
+        "tasks"
+      ],
+      "oracle_answers": [
+        "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "required_claims": [
+        "长期目标：建立可回溯的本地证据系统",
+        "阶段一，离线原型验证",
+        "核验引用、记录工具失败、完善范围检索",
+        "负责人和截止日期未指定"
+      ]
+    },
+    {
+      "id": "02_no_invented_owner_date",
+      "question": "列出现有计划，不指定材料中不存在的负责人和日期。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "no_fabrication"
+      ],
+      "oracle_answers": [
+        "长期目标：建立可回溯的本地证据系统。当前阶段：阶段一，离线原型验证。当前任务：核验引用、记录工具失败、完善范围检索。负责人和截止日期未指定。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "required_claims": [
+        "负责人和截止日期未指定"
+      ],
+      "forbidden_claims": [
+        "负责人：小王",
+        "截止日期：2026-12-01"
+      ]
+    },
+    {
+      "id": "03_scoped_count",
+      "question": "仅统计第1页基础结构，列全再计数。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "scoped_count"
+      ],
+      "oracle_answers": [
+        "范围内共3项。\n- 栈\n- 队列\n- 链表"
+      ],
+      "expected_citations": [
+        "synthetic-structures"
+      ],
+      "enumeration": [
+        {
+          "id": "栈",
+          "forms": [
+            "栈"
+          ]
+        },
+        {
+          "id": "队列",
+          "forms": [
+            "队列"
+          ]
+        },
+        {
+          "id": "链表",
+          "forms": [
+            "链表"
+          ]
+        }
+      ],
+      "scope": {
+        "source_ids": [
+          "synthetic-structures"
+        ],
+        "pages": {
+          "synthetic-structures": [
+            1,
+            1
+          ]
+        }
+      },
+      "required_claims": [
+        "范围内共3项"
+      ],
+      "expected_units": [
+        "synthetic-structures:p1"
+      ],
+      "require_complete_coverage": true
+    },
+    {
+      "id": "04_variant_count",
+      "question": "只列第2页队列变体，不要把全部基础结构混在一起。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "variants"
+      ],
+      "oracle_answers": [
+        "队列变体共3项。\n- 顺序队列\n- 链式队列\n- 循环队列"
+      ],
+      "expected_citations": [
+        "synthetic-structures"
+      ],
+      "enumeration": [
+        {
+          "id": "顺序队列",
+          "forms": [
+            "顺序队列",
+            "数组队列"
+          ]
+        },
+        {
+          "id": "链式队列",
+          "forms": [
+            "链式队列"
+          ]
+        },
+        {
+          "id": "循环队列",
+          "forms": [
+            "循环队列"
+          ]
+        }
+      ],
+      "required_claims": [
+        "队列变体共3项"
+      ],
+      "scope": {
+        "source_ids": [
+          "synthetic-structures"
+        ],
+        "pages": {
+          "synthetic-structures": [
+            2,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "05_missing_list_item",
+      "question": "第1页有哪些基础结构，列出完整清单。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "missing_item"
+      ],
+      "oracle_answers": [
+        "范围内共3项。\n- 栈\n- 队列\n- 链表"
+      ],
+      "expected_citations": [
+        "synthetic-structures"
+      ],
+      "enumeration": [
+        {
+          "id": "栈",
+          "forms": [
+            "栈"
+          ]
+        },
+        {
+          "id": "队列",
+          "forms": [
+            "队列"
+          ]
+        },
+        {
+          "id": "链表",
+          "forms": [
+            "链表"
+          ]
+        }
+      ],
+      "scope": {
+        "source_ids": [
+          "synthetic-structures"
+        ],
+        "pages": {
+          "synthetic-structures": [
+            1,
+            1
+          ]
+        }
+      },
+      "required_claims": [
+        "范围内共3项"
+      ],
+      "expected_units": [
+        "synthetic-structures:p1"
+      ],
+      "require_complete_coverage": true
+    },
+    {
+      "id": "06_extra_out_of_scope_item",
+      "question": "只要第1页的结构，不包含后面的堆。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "extra_item",
+        "scope"
+      ],
+      "oracle_answers": [
+        "范围内共3项。\n- 栈\n- 队列\n- 链表"
+      ],
+      "expected_citations": [
+        "synthetic-structures"
+      ],
+      "enumeration": [
+        {
+          "id": "栈",
+          "forms": [
+            "栈"
+          ]
+        },
+        {
+          "id": "队列",
+          "forms": [
+            "队列"
+          ]
+        },
+        {
+          "id": "链表",
+          "forms": [
+            "链表"
+          ]
+        }
+      ],
+      "scope": {
+        "source_ids": [
+          "synthetic-structures"
+        ],
+        "pages": {
+          "synthetic-structures": [
+            1,
+            1
+          ]
+        }
+      },
+      "required_claims": [
+        "范围内共3项"
+      ],
+      "expected_units": [
+        "synthetic-structures:p1"
+      ],
+      "require_complete_coverage": true
+    },
+    {
+      "id": "07_false_premise",
+      "question": "为什么这个项目默认会自动上传资料？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "false_premise"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "required_claims": [
+        "前提不成立",
+        "默认不自动上传"
+      ],
+      "forbidden_claims": [
+        "默认会自动上传"
+      ]
+    },
+    {
+      "id": "08_follow_correction",
+      "question": "按刚才更正后的范围概括。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "multi_turn"
+      ],
+      "oracle_answers": [
+        "阶段二：加入多轮更正与版本核验。负责人和日期未指定。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "概括阶段一的任务，用中文回答。"
+        },
+        {
+          "role": "assistant",
+          "content": "阶段一是离线原型验证。"
+        },
+        {
+          "role": "user",
+          "content": "更正：只讨论阶段二，仍用中文，不补充负责人日期。"
+        }
+      ],
+      "constraints": [
+        {
+          "id": "latest_user_correction",
+          "required_claims": [
+            "阶段二：加入多轮更正与版本核验"
+          ],
+          "forbidden_claims": [
+            "阶段一：离线原型验证"
+          ]
+        }
+      ],
+      "scope": {
+        "source_ids": [
+          "synthetic-project"
+        ],
+        "pages": {
+          "synthetic-project": [
+            2,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "id": "09_ignore_correction",
+      "question": "按更正后的阶段概括。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "multi_turn",
+        "stale_constraint"
+      ],
+      "oracle_answers": [
+        "阶段二：加入多轮更正与版本核验。负责人和日期未指定。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "history": [
+        {
+          "role": "user",
+          "content": "概括阶段一的任务，用中文回答。"
+        },
+        {
+          "role": "assistant",
+          "content": "阶段一是离线原型验证。"
+        },
+        {
+          "role": "user",
+          "content": "更正：只讨论阶段二，仍用中文，不补充负责人日期。"
+        }
+      ],
+      "constraints": [
+        {
+          "id": "latest_user_correction",
+          "required_claims": [
+            "阶段二：加入多轮更正与版本核验"
+          ],
+          "forbidden_claims": [
+            "阶段一：离线原型验证"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "10_current_source_version",
+      "question": "根据当前版本，项目在什么阶段？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "source_update"
+      ],
+      "oracle_answers": [
+        "当前阶段：阶段二。"
+      ],
+      "expected_citations": [
+        "synthetic-updated"
+      ],
+      "required_claims": [
+        "当前阶段：阶段二"
+      ],
+      "forbidden_claims": [
+        "当前阶段：阶段一"
+      ]
+    },
+    {
+      "id": "11_stale_source_version",
+      "question": "只引用最新版本说明当前阶段。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "stale_revision"
+      ],
+      "oracle_answers": [
+        "当前阶段：阶段二。"
+      ],
+      "expected_citations": [
+        "synthetic-updated"
+      ]
+    },
+    {
+      "id": "12_real_id_wrong_proposition",
+      "question": "默认会上传吗？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "existing_id_wrong_claim",
+        "self_reported_green"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "required_claims": [
+        "默认不自动上传"
+      ],
+      "forbidden_claims": [
+        "默认自动上传"
+      ]
+    },
+    {
+      "id": "13_correct_quote_opposite_conclusion",
+      "question": "根据原话判断是否默认上传。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "opposite_conclusion",
+        "semantic_oracle"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ],
+      "required_claims": [
+        "默认不自动上传"
+      ]
+    },
+    {
+      "id": "14_quote_wrong_page",
+      "question": "给出默认上传设置的原话定位。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "page_locator"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ]
+    },
+    {
+      "id": "15_quote_wrong_line",
+      "question": "默认上传设置在第几行？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "line_locator"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ]
+    },
+    {
+      "id": "16_invented_quote",
+      "question": "引用默认上传设置。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "quote_mismatch"
+      ],
+      "oracle_answers": [
+        "前提不成立：默认不自动上传资料到云端。"
+      ],
+      "expected_citations": [
+        "synthetic-project"
+      ]
+    },
+    {
+      "id": "17_service_failure",
+      "question": "读取服务失败时报告什么？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "infra_failure"
+      ],
+      "oracle_answers": [
+        "服务读取失败，无法判断材料内容。"
+      ],
+      "expected_citations": [],
+      "expect_refusal": true
+    },
+    {
+      "id": "18_rate_limit_429",
+      "question": "服务限流时能确认所有任务吗？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "429"
+      ],
+      "oracle_answers": [
+        "服务限流，无法确认所有任务。"
+      ],
+      "expected_citations": [],
+      "expect_refusal": true
+    },
+    {
+      "id": "19_empty_read_not_absence",
+      "question": "读取为空能说明项目没有任务吗？",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "empty_read",
+        "absence_not_established"
+      ],
+      "oracle_answers": [
+        "读取为空，不能据此确认项目没有任务。"
+      ],
+      "expected_citations": [],
+      "expect_refusal": true
+    },
+    {
+      "id": "20_partial_coverage",
+      "question": "核验全部3页后，再给出完整基础结构清单。",
+      "label_origin": "synthetic",
+      "annotation_id": "synthetic-program-gold-v1",
+      "tags": [
+        "synthetic",
+        "partial_coverage"
+      ],
+      "oracle_answers": [
+        "范围内共3项。\n- 栈\n- 队列\n- 链表"
+      ],
+      "expected_citations": [
+        "synthetic-structures"
+      ],
+      "enumeration": [
+        {
+          "id": "栈",
+          "forms": [
+            "栈"
+          ]
+        },
+        {
+          "id": "队列",
+          "forms": [
+            "队列"
+          ]
+        },
+        {
+          "id": "链表",
+          "forms": [
+            "链表"
+          ]
+        }
+      ],
+      "required_claims": [
+        "范围内共3项"
+      ],
+      "expected_units": [
+        "synthetic-structures:p1",
+        "synthetic-structures:p2",
+        "synthetic-structures:p3"
+      ],
+      "require_complete_coverage": true
+    }
+  ]
+}

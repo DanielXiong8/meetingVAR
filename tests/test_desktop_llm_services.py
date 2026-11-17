@@ -44,7 +44,9 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(reading[key], interest[key])
         self.assertEqual(reading["MEETINGVAR_LLM_MAX_TOKENS"], "8192")
         self.assertEqual(interest["MEETINGVAR_LLM_MAX_TOKENS"], "1600")
-        self.assertEqual(reading["MEETINGVAR_LLM_CONTEXT_TOKENS"], "32768")
+        # The configured API reading window is 500K; a constant alone still does not
+        # prove the provider accepts it (that needs a real request).
+        self.assertEqual(reading["MEETINGVAR_LLM_CONTEXT_TOKENS"], "500000")
 
     def test_local_model_keeps_full_id_and_actual_budget(self):
         with patch.object(self.backend, "llm_status", return_value={"up": True, "model": "C:/models/model.gguf", "context_tokens": 8192}):
@@ -69,6 +71,19 @@ class ServiceTests(unittest.TestCase):
         with patch.object(app.Backend, "_autodetect"), patch.object(app, "load_config", return_value=dict(self.backend._cfg)):
             reopened = app.Backend()
         self.assertTrue(reopened._provider_info()["ready"])
+
+    def test_persisted_verification_does_not_expire_while_config_is_unchanged(self):
+        import time
+        fingerprint = self.backend._llm_fingerprint(self.backend._llm_env())
+        (self.root / "llm_validation.json").write_text(
+            json.dumps({fingerprint: time.time() - 10 * 86400}), encoding="utf-8")
+        with patch.object(app.Backend, "_autodetect"), patch.object(app, "load_config", return_value=dict(self.backend._cfg)):
+            reopened = app.Backend()
+        info = reopened.model_status()
+        self.assertTrue(info["ready"], info)
+        self.assertEqual(info["label"], "自定义 API")
+        self.assertNotIn("fake-secret", json.dumps(info))
+        self.assertNotIn("example.invalid", json.dumps(info))
 
     def test_validation_follows_the_selected_provider(self):
         self.backend._cfg["llm_provider"] = "local"

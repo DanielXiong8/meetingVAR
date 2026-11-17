@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>meetingVAR</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="agent-ui.css">
 </head>
 <body>
 <div class="shell" id="appShell">
@@ -18,6 +19,14 @@
         </div>
       </div>
       <button class="icon-btn" id="btnSidebarCollapse" title="收起侧栏">‹</button>
+    </div>
+
+    <div class="profile-card">
+      <div class="profile-avatar">M</div>
+      <div>
+        <div class="profile-name">本机工作区</div>
+        <div class="profile-sub">本地优先 · 数据不出机</div>
+      </div>
     </div>
 
     <nav class="side-primary">
@@ -236,99 +245,36 @@
         <div id="sessionDetail" class="detail card" hidden></div>
       </section>
 
-      <!-- Agent -->
-      <section id="page-agent" class="page">
-        <div class="page-head">
-          <div><h1>Agent</h1><p>先让 Agent 在全部会议证据里找答案，再把结果沉淀为项目记忆。</p></div>
-          <div class="agent-head-status"><span id="agentProject">（未选择项目）</span><span id="agentStatusLine" class="muted">打开页面后加载项目记忆</span></div>
-        </div>
-
-        <div class="card agent-search-card">
-          <div class="agent-search-head">
-            <div><b>Agent 深度检索</b><div class="muted">有界 ReAct · 只读工具 · 引用校验 · 最多 8 步</div></div>
-            <span class="mode-pill">跨会议</span>
-          </div>
-          <div class="agent-composer">
-            <textarea id="agentRunQuestion" rows="2" placeholder="例如：上次说周五交付，这次谁改了口？把两次原话找出来"></textarea>
-            <button id="btnAgentRun" class="send-btn">↑</button>
-          </div>
-          <div id="agentRunPlan" class="agent-plan muted"></div>
-          <div id="agentRunSteps" class="agent-list muted"></div>
-          <div id="agentRunAnswer" class="agent-answer" hidden></div>
-        </div>
-
-        <div class="agent-grid">
-          <div class="card">
-            <div class="card-head">
-              <div><b>会前关注清单</b><div class="muted">让 Agent 从项目材料提出可判断的关注点。</div></div>
-              <div class="row compact"><button id="btnFocusGen" class="btn btn-primary">生成</button><button id="btnFocusSave" class="btn" disabled>保存勾选</button></div>
-            </div>
-            <div id="focusList" class="agent-list muted">暂无关注清单</div>
-          </div>
-
-          <div class="card">
-            <div class="card-head">
-              <div><b>会后会议事实</b><div class="muted">Agent 只提出候选；原句由本地工具核对，勾选后才写入。</div></div>
-              <div class="row compact">
-                <select id="agentSession" class="input agent-session"><option value="">选择有转写的会话</option></select>
-                <button id="btnFactsPreview" class="btn btn-primary">预览</button>
-                <button id="btnFactsSave" class="btn" disabled>写入勾选</button>
-              </div>
-            </div>
-            <div id="factsList" class="agent-list muted">选择会话后预览行动项、决策、承诺、风险、未决问题</div>
-          </div>
-        </div>
-
-        <div class="agent-grid">
-          <div class="card">
-            <div class="card-head"><div><b>项目记忆问答</b><div class="muted">只依据已经写入项目记忆的事实回答，并列出引用。</div></div></div>
-            <div class="row"><input id="agentQuestion" class="input" placeholder="例如：第二方案定了吗？谁负责周五交付？"><button id="btnAsk" class="btn btn-primary">提问</button></div>
-            <div id="agentAnswer" class="agent-answer" hidden></div>
-          </div>
-
-          <div class="card">
-            <div class="card-head"><div><b>项目记忆</b><div class="muted">FTS5 排序、来源/版本、冲突与生命周期治理。</div></div></div>
-            <div class="row">
-              <input id="agentMemoryQuery" class="input" placeholder="按关键词检索（留空显示最近）">
-              <select id="memoryFilter" class="input memory-filter">
-                <option value="active">生效中</option>
-                <option value="pending-conflict">待确认冲突</option>
-                <option value="superseded">已被替代</option>
-                <option value="expired">已过期</option>
-                <option value="all">全部状态</option>
-              </select>
-              <button id="btnMemory" class="btn">检索</button>
-            </div>
-            <div id="memoryStats" class="muted"></div>
-            <div id="agentMemory" class="agent-list muted">暂无记忆</div>
-            <div id="memoryEditor" class="memory-editor" hidden>
-              <div class="row"><b id="memEditTitle">编辑记忆</b><button id="btnMemEditClose" class="btn">关闭</button></div>
-              <label class="field"><span>描述</span><input id="memEditDesc" class="input"></label>
-              <label class="field"><span>内容</span><textarea id="memEditBody" class="input" rows="5"></textarea></label>
-              <div class="row"><select id="memEditStatus" class="input memory-filter">
-                <option value="active">生效中</option><option value="expired">已过期</option>
-              </select><button id="btnMemEditSave" class="btn btn-primary">保存</button></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card agent-search-card">
-          <div class="agent-search-head">
-            <div><b>项目知识库 RAG</b><div class="muted">项目文档 + 已保存会议转写 · FTS5 + BGE 向量 · 重排 · 来源引用</div></div>
-            <span id="ragStatus" class="mode-pill">未建立索引</span>
+      <!-- Project memory artifact: opened from a chat memory card. -->
+      <div id="memoryModal" class="modal" hidden>
+        <div class="modal-card memory-modal">
+          <div class="row memory-modal-head">
+            <div><div class="modal-title">项目记忆</div><div class="modal-sub">FTS5 排序、来源/版本、冲突与生命周期治理。</div></div>
+            <button id="btnMemoryClose" class="btn">关闭</button>
           </div>
           <div class="row">
-            <button id="btnRagIndex" class="btn btn-primary">建立/刷新索引</button>
-            <button id="btnRagForce" class="btn">强制重建</button>
-            <span id="ragHint" class="muted">索引只写本机项目目录</span>
+            <input id="agentMemoryQuery" class="input" placeholder="按关键词检索（留空显示最近）">
+            <select id="memoryFilter" class="input memory-filter">
+              <option value="active">生效中</option>
+              <option value="pending-conflict">待确认冲突</option>
+              <option value="superseded">已被替代</option>
+              <option value="expired">已过期</option>
+              <option value="all">全部状态</option>
+            </select>
+            <button id="btnMemory" class="btn">检索</button>
           </div>
-          <div class="row" style="margin-top:8px">
-            <input id="ragQuestion" class="input" placeholder="问项目资料或会议记录：客户要求了什么？谁负责交付？">
-            <button id="btnRagAsk" class="btn">提问</button>
+          <div id="memoryStats" class="muted"></div>
+          <div id="agentMemory" class="agent-list muted">暂无记忆</div>
+          <div id="memoryEditor" class="memory-editor" hidden>
+            <div class="row"><b id="memEditTitle">编辑记忆</b><button id="btnMemEditClose" class="btn">关闭</button></div>
+            <label class="field"><span>描述</span><input id="memEditDesc" class="input"></label>
+            <label class="field"><span>内容</span><textarea id="memEditBody" class="input" rows="5"></textarea></label>
+            <div class="row"><select id="memEditStatus" class="input memory-filter">
+              <option value="active">生效中</option><option value="expired">已过期</option>
+            </select><button id="btnMemEditSave" class="btn btn-primary">保存</button></div>
           </div>
-          <div id="ragAnswer" class="agent-answer" hidden></div>
         </div>
-      </section>
+      </div>
 
       <!-- 知识图谱 -->
       <section id="page-kg" class="page panel">
@@ -340,10 +286,11 @@
           <input id="kgQuery" class="input" placeholder="实体/关系查询，例如：小林、周五交付、测试风险">
           <select id="kgDepth" class="input kg-small"><option value="1">1 跳</option><option value="2" selected>2 跳</option><option value="3">3 跳</option></select>
           <input id="kgAsOf" class="input kg-date" type="date" title="查看某天有效的图（留空=现在）">
+          <select id="kgSession" class="input kg-session"><option value="">选择有转写的会话</option></select>
           <button id="btnKgSearch" class="btn btn-primary">查图</button>
           <button id="btnKgAsk" class="btn">GraphRAG 问答</button>
           <button id="btnKgBuild" class="btn">规则构图</button>
-          <button id="btnKgIngest" class="btn">LLM 抽取当前会话</button>
+          <button id="btnKgIngest" class="btn">LLM 抽取选中会话</button>
           <button id="btnKgMerge" class="btn">合并选中实体</button>
         </div>
         <div class="kg-layout">
@@ -530,6 +477,26 @@
       </section>
     </main>
   </div>
+
+  <aside class="agent-inspector" id="agentInspector">
+    <div class="inspector-head">
+      <div class="inspector-tabs">
+        <button class="inspector-tab selected" data-inspector-tab="files">文件</button>
+        <button class="inspector-tab" data-inspector-tab="notes">纪要</button>
+      </div>
+      <button class="icon-btn" id="btnInspectorCollapse" title="收起右侧栏">›</button>
+    </div>
+    <div class="inspector-pane" id="inspectorFiles">
+      <div class="inspector-label">当前项目 <button id="btnInspectorProject">打开项目 →</button></div>
+      <div class="inspector-project" id="inspectorProject">未选择项目</div>
+      <div class="inspector-label">项目文件</div>
+      <div class="inspector-tree" id="inspectorTree"><div class="inspector-empty">选择项目后显示文件。</div></div>
+    </div>
+    <div class="inspector-pane" id="inspectorNotes" hidden>
+      <div class="inspector-label">会议纪要 <button id="btnInspectorLibrary">打开会议库 →</button></div>
+      <div class="inspector-empty">打开一场会议查看纪要；生成后这里会显示最近摘要。</div>
+    </div>
+  </aside>
 </div>
 
 <div id="fileViewer" class="file-viewer" hidden>

@@ -135,6 +135,7 @@ class LiveInterestTests(unittest.TestCase):
 
     def test_missing_api_does_not_silently_fallback_to_hotwords(self):
         b = self.backend()
+        b._cfg["interest_mode"] = "api"
         with patch.object(desktop.subprocess, "Popen") as popen:
             result = b.start_meeting("", "record")
         self.assertFalse(result["ok"])
@@ -145,8 +146,11 @@ class LiveInterestTests(unittest.TestCase):
         b = self.backend()
         b._cfg.update(asr_engine="xfyun_rtasr", xfyun_dir=str(self.root), interest_mode="api",
                       llm_base_url="https://example.invalid/v1", llm_model="test-model", llm_api_key="fake-only")
-        with patch.object(desktop.subprocess, "Popen", side_effect=OSError("test stop")) as popen:
-            b.start_meeting("", "record")
+        with patch.object(desktop.subprocess, "Popen", side_effect=OSError("test stop")) as popen, \
+             patch.object(b, "_host_operation_begin", return_value={"ok": True, "folder": str(self.root), "operation_id": "test-start"}), \
+             patch.object(b, "_host_operation_finish", side_effect=lambda operation, receipt: receipt), \
+             patch.object(desktop, "CONFIG_DIR", self.root / "settings"):
+            b.start_meeting(str(self.root), "record")
         command = popen.call_args.args[0]
         self.assertEqual(command[command.index("--asr") + 1], "xfyun_rtasr")
         self.assertEqual(command[command.index("--interest") + 1], "api")

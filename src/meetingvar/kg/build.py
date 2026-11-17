@@ -6,6 +6,7 @@ value over RAG before investing in LLM extraction.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 from .. import config
 from ..agent.memory import FactStore
 from ..agent.sessions import SessionCatalog
+from ..memory.project_sessions import session_ids_for_project
 from .schema import norm_name
 from .store import GraphStore
 
@@ -30,6 +32,7 @@ _PREFIX = re.compile(
     re.I)
 _SPEAKER = re.compile(r"^spk\d+$", re.I)
 _OWNER = re.compile(r"(?:负责人|由|owner)\s*[:：]?\s*([\u4e00-\u9fffA-Za-z]{2,12})")
+_OWNER_STOP = re.compile(r"用户|显式|要求|记住|系统|助手|本人|大家|团队|负责人")
 _DUE = re.compile(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}月\d{1,2}日|周[一二三四五六日天]|下周[一二三四五六日天]?")
 
 
@@ -57,9 +60,20 @@ class GraphBuilder:
         end = str(meta.get("valid_to") or "")
         return start or _iso(), end
 
-    def build(self, *, include_meetings: bool = True, reset: bool = True) -> dict:
+    def build(self, *, include_meetings: bool = True, reset: bool = False) -> dict:
         if reset:
             self.store.reset()
+        # Retract generated fact projections first; current sources repopulate them.
+        with self.store._connect() as connection:
+            for row in connection.execute("SELECT id,status,metadata_json FROM kg_nodes").fetchall():
+                metadata = json.loads(row["metadata_json"] or "{}")
+                if (metadata.get("fact_name") and metadata.get("source") != "human"
+                        and row["status"] not in {"deleted", "merged"}):
+                    connection.execute("UPDATE kg_nodes SET status='inactive' WHERE id=?",(row["id"],))
+            for row in connection.execute("SELECT id,metadata_json,extractor,source_id FROM kg_edges WHERE source_type='fact'").fetchall():
+                metadata = json.loads(row["metadata_json"] or "{}")
+                if row["extractor"] != "human" and row["source_id"] != "ui" and not metadata.get("human_override"):
+                    connection.execute("UPDATE kg_edges SET status='retracted' WHERE id=?",(row["id"],))
         project = self.store.upsert_node(
             kind="Project", name=self.project_root.name or "项目",
             description=f"项目目录：{self.project_root}", confidence=1.0)
@@ -70,6 +84,8 @@ class GraphBuilder:
                 sessions = catalog.list_sessions(limit=200)
             except (OSError, ValueError):
                 sessions = []
+            allowed_sessions = session_ids_for_project(self.project_root, strict=True)
+            sessions = [row for row in sessions if row["session_id"] in allowed_sessions]
             for row in sessions:
                 try:
                     session = catalog.load(row["session_id"])
@@ -103,7 +119,19 @@ class GraphBuilder:
                         confidence=0.8, extractor="rule")
 
         facts = self.fact_store.list_facts(limit=5000, status="all", include_inactive=True)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+        def currently_active(fact):
+            start, end = self._fact_valid(fact)
+            return (fact.get("status", "active") == "active"
+                    and not ((start and start > now) or (end and end <= now)))
+
+        # Retain confirmed history without letting it overwrite a current projection.
+        facts.sort(key=currently_active)
         for fact in facts:
+            if fact.get("status", "active") not in {"active", "expired", "superseded"}:
+                continue
+            is_current = currently_active(fact)
             kind = _FACT_KIND.get(str(fact.get("type", "")), "Topic")
             display = self._display_name(fact)
             aliases = []
@@ -117,7 +145,7 @@ class GraphBuilder:
             if meeting and (meeting.get("metadata") or {}).get("mtime"):
                 start = _iso(meeting["metadata"]["mtime"])
             fact_status = str(fact.get("status", "active"))
-            node_status = "provisional" if fact_status == "pending-conflict" else "active"
+            node_status = "active" if is_current else "inactive"
             node = self.store.upsert_node(
                 kind=kind, name=display,
                 description=str(fact.get("body", ""))[:800],
@@ -129,7 +157,7 @@ class GraphBuilder:
                           "owner": fact.get("owner", ""),
                           "due": fact.get("due", "")},
                 observed_at=start)
-            edge_status = "pending" if fact_status == "pending-conflict" else "asserted"
+            edge_status = "asserted" if is_current else "retracted"
             self.store.upsert_edge(
                 src_id=node["id"], dst_id=project["id"], relation="part_of",
                 valid_from=start, valid_to=end, status=edge_status,
@@ -147,7 +175,8 @@ class GraphBuilder:
                 meetings[origin_id] = meeting
                 self.store.upsert_edge(
                     src_id=meeting["id"], dst_id=project["id"], relation="part_of",
-                    valid_from=start, source_type="fact", source_id=raw_name,
+                    valid_from=start, valid_to=end, status=edge_status,
+                    source_type="fact", source_id=raw_name,
                     session_id=origin_id, confidence=0.7, extractor="rule")
             if meeting:
                 self.store.upsert_edge(
@@ -167,6 +196,8 @@ class GraphBuilder:
             if not owner:
                 match = _OWNER.search(str(fact.get("body", "")))
                 owner = match.group(1) if match else ""
+            if owner and _OWNER_STOP.search(owner):
+                owner = ""
             if owner and kind in {"Action", "Commitment", "Decision"}:
                 person = self.store.upsert_node(
                     kind="Person", name=owner, confidence=0.8,

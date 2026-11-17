@@ -1,19 +1,25 @@
 """Pruned project scanning + robust text extraction for project understanding."""
 from __future__ import annotations
 
+import gzip
 import hashlib
+import json
 import os
 import re
+import subprocess
 import tempfile
 import zipfile
 import zlib
 from pathlib import Path
 
+from .source_policy import excluded
 from .legacy_office import (extract_doc_text, extract_ppt_text, extract_rtf_text,
                             extract_xls_text)
 
 SKIP_DIRS = {".git", ".venv", "venv", ".tools", ".runtimes", "node_modules",
              "__pycache__", "dist", "build", ".zcode", ".secrets"}
+# The root-level <project>/meetingvar engine archive is excluded by
+# source_policy; a nested src/meetingvar is ordinary project source code.
 
 # Text-like files the agent may read. PDF/Office are converted to text.
 SUPPORTED_TEXT_SUFFIXES = frozenset({
@@ -46,7 +52,7 @@ def project_files(root: Path, suffixes: set[str]):
                              and not (Path(directory) / name).is_symlink())
         for name in sorted(files):
             path = Path(directory) / name
-            if path.suffix.lower() in suffixes and not path.is_symlink():
+            if path.suffix.lower() in suffixes and not excluded(root,path,automatic=True):
                 yield path
 
 
@@ -192,14 +198,25 @@ def _cache_dir() -> Path:
 
 def _cache_key(path: Path) -> str:
     try:
-        st = path.stat()
-        raw = f"{path.resolve()}|{st.st_mtime_ns}|{st.st_size}|{path.suffix.lower()}"
+        from .document_read import EXTRACTOR_VERSION, source_hash
+        raw = f"{source_hash(path)}|{EXTRACTOR_VERSION}|{path.suffix.lower()}"
     except OSError:
         raw = f"{path}|missing"
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
 
 
+def read_document(path: Path, **settings) -> dict:
+    """Coverage-aware API. Pipelines must check complete before publishing."""
+    from .document_read import read_document as extract
+    return extract(path, **settings)
+
+
 def read_text_safely(path: Path, max_bytes: int = 8_000_000) -> str | None:
+    """Compatibility preview API; use read_document for completeness decisions."""
+    return read_document(path, max_bytes=max_bytes)["text"] or None
+
+
+def _read_text_legacy(path: Path, max_bytes: int = 8_000_000) -> str | None:
     """Extract readable text; never raise for binary/corrupt/unsupported files.
 
     Content wins over extension: a renamed DOCX/PPTX is still parsed, while a
@@ -227,6 +244,23 @@ def read_text_safely(path: Path, max_bytes: int = 8_000_000) -> str | None:
         data = path.read_bytes()[:max_bytes]
     except OSError:
         return None
+    if data.startswith(b"\x1f\x8b"):
+        # Some tools store JSON/HTTP responses gzip-compressed under a plain
+        # .json name. Decode within the same budget; a bomb or over-budget
+        # expansion stays unreadable rather than silently truncated.
+        try:
+            if path.stat().st_size > max_bytes:
+                return None
+            with gzip.GzipFile(fileobj=path.open("rb")) as stream:
+                data = stream.read(max_bytes + 1)
+        except (OSError, EOFError):
+            return None
+        if len(data) > max_bytes:
+            return None
+    return _decode_text_bytes(data)
+
+
+def _decode_text_bytes(data: bytes) -> str | None:
     if not data:
         return None
     for bom, enc in ((b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
@@ -386,30 +420,46 @@ def _read_pdf_basic(path: Path) -> str | None:
     return result if printable / max(1, len(result)) > 0.75 else None
 
 
+def _clean_ocr_text(text: str) -> str:
+    """Tesseract inserts spaces between Chinese glyphs; restore readable text."""
+    lines = []
+    for raw in str(text or "").splitlines():
+        line = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", raw)
+        line = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[，。；：、！？）】》」』])", "", line)
+        line = re.sub(r"(?<=[（【《「『])\s+(?=[\u4e00-\u9fff])", "", line)
+        line = re.sub(r"(?<=[\u4e00-\u9fff])\s*([:：])\s*", r"\1", line)
+        line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _find_tesseract() -> str:
+    configured = os.environ.get("MEETINGVAR_TESSERACT", "").strip()
+    candidates = [configured] if configured else []
+    candidates += [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+    from shutil import which
+    found = which("tesseract")
+    if found:
+        candidates.append(found)
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return ""
+
+
+def _ocr_pdf(path: Path, *, max_pages: int | None = None) -> str | None:
+    return read_document(path, max_pages=max_pages, force_ocr=True)["text"] or None
+
+
 def _read_pdf(path: Path) -> str | None:
-    # pdfminer.six is MIT-licensed; PyMuPDF is AGPL/commercial and therefore
-    # deliberately not a dependency of the commercial build.
-    try:
-        from pdfminer.high_level import extract_text
+    return read_document(path)["text"] or None
 
-        text = extract_text(str(path))
-        if text and text.strip():
-            return text
-    except Exception:
-        pass
-    try:
-        from pypdf import PdfReader
 
-        reader = PdfReader(str(path))
-        text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        if text.strip():
-            return text
-    except Exception:
-        pass
-    try:
-        return _read_pdf_basic(path)
-    except (OSError, ValueError, zlib.error):
-        return None
+def _extract_pdf_text(path: Path) -> str | None:
+    return _read_pdf(path)
 
 
 def _read_legacy_office(path: Path) -> str | None:

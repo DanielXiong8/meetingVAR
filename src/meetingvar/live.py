@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from contextlib import ExitStack
@@ -107,27 +108,72 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
         print("[rec] 会议采集开始。回车或 :var=手动 VAR，:stop 结束。"
               + ("新说话人出现时会询问名字。" if ask_speakers else "不自动弹出说话人点名。"), flush=True)
 
+        def handle_command(line):
+            if line.strip() in (":stop", ":quit"):
+                stop.set()
+                return True
+            if line.strip() == ":var":
+                session.manual.fire()
+                return False
+            msg = session.submit_answer(line) if ask_speakers else None
+            if msg is None:
+                session.manual.fire()
+            else:
+                print(msg, flush=True)
+            return False
+
         def wait_enter():
+            # Windows 上对管道调用 input() 会阻塞并占着 GIL：桌面壳用 stdin=PIPE
+            # 发 :stop，结果主线程在加载模型时被饿死几十秒，表现为“点了录音没有字幕”。
+            # 管道用 os.read（读等待期间释放 GIL），只有真正的控制台才走 input()。
             try:
+                if sys.stdin is None or not sys.stdin.isatty():
+                    fd = sys.stdin.fileno() if sys.stdin is not None else 0
+                    buf = b""
+                    while not stop.is_set():
+                        chunk = os.read(fd, 4096)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while b"\n" in buf and not stop.is_set():
+                            raw, buf = buf.split(b"\n", 1)
+                            if handle_command(raw.decode("utf-8", "replace").rstrip("\r")):
+                                return
+                    return
                 while not stop.is_set():
                     line = input()
                     if stop.is_set():
                         break
-                    if line.strip() in (":stop", ":quit"):
-                        stop.set()
+                    if handle_command(line):
                         break
-                    if line.strip() == ":var":
-                        session.manual.fire()
-                        continue
-                    msg = session.submit_answer(line) if ask_speakers else None
-                    if msg is None:
-                        session.manual.fire()
-                    else:
-                        print(msg, flush=True)
-            except EOFError:
+            except (EOFError, OSError, ValueError):
                 pass
 
-        threading.Thread(target=wait_enter, daemon=True).start()
+        # 桌面壳用控制文件发 :stop / :var，不启动 stdin 读线程。
+        # Windows 上任何持续阻塞在 stdin 管道上的读线程都会让主线程在
+        # FunASR 导入/加载阶段被饿死几十秒（实测：同样命令 8s → 30s+），
+        # 用户看到的就是“点了录音、一直没有字幕”。命令行/终端仍走 stdin。
+        if not desktop_events():
+            threading.Thread(target=wait_enter, daemon=True).start()
+
+        control_path = os.environ.get("MEETINGVAR_CONTROL_FILE", "") if desktop_events() else ""
+        control_pos = 0
+
+        def drain_control():
+            nonlocal control_pos
+            if not control_path:
+                return
+            try:
+                with open(control_path, "rb") as fh:
+                    fh.seek(control_pos)
+                    data = fh.read()
+                    control_pos = fh.tell()
+            except OSError:
+                return
+            for raw in data.split(b"\n"):
+                line = raw.decode("utf-8", "replace").strip()
+                if line:
+                    handle_command(line)
 
         def receive_stream(events):
             for event in events:
@@ -172,9 +218,11 @@ def record_session(args, session_id, terms, focus_docs, l2_threshold, on_session
             if desktop_events() and engine == "local":
                 emit("capture_state", phase="loading", text="采集已打开，正在加载本地识别模型")
                 session.asr._ensure_loaded()
+                drain_control()
             if stream is None and not stop.is_set():
                 emit("capture_state", phase="ready", text="采集已打开，按音频块转写（非连续流式）")
             while (args.duration <= 0 or time.monotonic() - t0 < args.duration) and not stop.is_set():
+                drain_control()
                 pcm, since = audio.ingest_since(last_ts)
                 if pcm:
                     ingest(pcm, since)
