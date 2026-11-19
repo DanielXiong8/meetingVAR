@@ -179,19 +179,21 @@ class RagIndex:
             if page["status"] != "ok":
                 continue
             text = page["text"]
-            start = 0
-            while start < len(text):
-                end = min(len(text), start + _CHUNK_SIZE)
-                body = text[start:end]
+            # Paragraph-aware split with overlap. The old fixed-stride slice cut
+            # headings, references, and sentences at arbitrary character offsets,
+            # which split the exact sentence a query was about across two chunks.
+            offset = 0
+            for body in _chunk_text(text):
+                start = text.find(body, offset)
+                start = max(start, offset) if start >= 0 else offset
+                end = start + len(body)
+                offset = end
                 if body.strip():
                     chunks.append({"text": body, "meta": {
                         "path": rel, "title": title, "page": page["number"],
                         "line_start": text.count("\n", 0, start) + 1,
                         "line_end": text.count("\n", 0, max(start, end - 1)) + 1,
                         "char_start": start, "char_end": end, "method": page["method"]}})
-                if end == len(text):
-                    break
-                start = max(start + 1, end - _CHUNK_OVERLAP)
         return chunks
 
     @staticmethod
@@ -442,6 +444,25 @@ class RagIndex:
         denom = (sum(x * x for x in a) ** 0.5) * (sum(x * x for x in b) ** 0.5)
         return sum(x * y for x, y in zip(a, b)) / denom if denom else 0.0
 
+    def _layered_fts(self, connection: sqlite3.Connection, query: str, where: str,
+                     params: list, fetch: int) -> list[sqlite3.Row]:
+        """Run layered MATCH expressions (phrase → bigram phrases → flat OR),
+        stopping at the first layer that returns rows. A flat OR of every query
+        bigram otherwise floods BM25 with chunks that share a single 2-gram."""
+        from .agent.memory_index import fts_match
+
+        sql = ("SELECT c.*, d.source_type, d.source_id, d.title, d.path, d.mtime AS source_mtime, "
+               "d.size AS source_size, d.content_hash AS source_revision, "
+               "bm25(chunks_fts) AS rank FROM chunks_fts "
+               "JOIN chunks c ON c.id = chunks_fts.chunk_id "
+               "JOIN documents d ON d.id = c.document_id "
+               "WHERE chunks_fts MATCH ?" + where + " ORDER BY rank LIMIT ?")
+        for layer in fts_match(query).splitlines():
+            rows = connection.execute(sql, [layer] + params + [fetch]).fetchall()
+            if rows:
+                return rows
+        return []
+
     def search(self, query: str, *, limit: int = 8, source_type: str | None = None,
                rerank: bool = True, strict: bool = False) -> list[dict]:
         search_text = str(query or "")
@@ -452,39 +473,64 @@ class RagIndex:
             clauses.append("d.source_type = ?")
             params.append(source_type)
         where = (" AND " + " AND ".join(clauses)) if clauses else ""
-        match = " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens[:32])
-        rows = []
+        lexical: dict[str, sqlite3.Row] = {}
         try:
             with self._connection() as connection:
-                if match:
-                    rows = connection.execute(
-                        "SELECT c.*, d.source_type, d.source_id, d.title, d.path, d.mtime AS source_mtime, d.size AS source_size, d.content_hash AS source_revision, "
-                        "bm25(chunks_fts) AS rank FROM chunks_fts "
-                        "JOIN chunks c ON c.id = chunks_fts.chunk_id "
-                        "JOIN documents d ON d.id = c.document_id "
-                        "WHERE chunks_fts MATCH ?" + where +
-                        " ORDER BY rank LIMIT ?",
-                        [match] + params + [max(20, limit * 4)]).fetchall()
-                if not rows:
-                    rows = connection.execute(
-                        "SELECT c.*, d.source_type, d.source_id, d.title, d.path, d.mtime AS source_mtime, d.size AS source_size, d.content_hash AS source_revision, 0 AS rank "
-                        "FROM chunks c JOIN documents d ON d.id = c.document_id "
-                        "WHERE 1=1" + where + " LIMIT 200", params).fetchall()
+                for row in self._layered_fts(connection, search_text, where, params,
+                                             max(40, limit * 8)):
+                    lexical[str(row["id"])] = row
+                query_vector = (self.embedder.encode_one(search_text)
+                                if self.embedder.available else None)
+                rows: dict[str, sqlite3.Row] = dict(lexical)
+                if query_vector:
+                    # Dense recall over the whole index: a semantically relevant
+                    # chunk that shares no query bigram must still compete, so
+                    # the vector side is not capped by the BM25 candidate pool.
+                    vectors = self._vectors(source_type=source_type)
+                    ranked = sorted(((self._cosine(query_vector, vector), chunk_id)
+                                     for chunk_id, vector in vectors.items()), reverse=True)
+                    # No global cosine floor exists: unrelated BGE pairs sit
+                    # around 0.35-0.45 depending on domain. Relative admission
+                    # (top-k of the ranking) plus the reranker's own relevance
+                    # judgement does the filtering; the floor only prunes an
+                    # obviously empty result set.
+                    semantic = {chunk_id for cosine, chunk_id in
+                                ranked[:max(20, limit * 3)] if cosine >= 0.30}
+                    missing = sorted(semantic - set(rows))
+                    if missing:
+                        placeholders = ",".join("?" for _ in missing)
+                        for row in connection.execute(
+                            "SELECT c.*, d.source_type, d.source_id, d.title, d.path, "
+                            "d.mtime AS source_mtime, d.size AS source_size, "
+                            "d.content_hash AS source_revision, 0 AS rank "
+                            "FROM chunks c JOIN documents d ON d.id = c.document_id "
+                            "WHERE c.id IN (" + placeholders + ")" + where.replace("d.", "d."),
+                                missing + params).fetchall():
+                            rows[str(row["id"])] = row
         except sqlite3.DatabaseError as exc:
             if strict:
                 raise RagUnavailable("检索索引不可读") from exc
             return []
-        query_vector = self.embedder.encode_one(search_text) if self.embedder.available else None
-        vectors = self._vectors() if query_vector else {}
+        vectors = (self._vectors(source_type=source_type) if query_vector else {})
         output = []
-        for row in rows:
+        best_bm25 = max((abs(float(row["rank"] or 0)) for row in rows.values()
+                         if float(row["rank"] or 0) < 0), default=0.0)
+        for row_id, row in rows.items():
             if not self._source_current(row):
                 continue
-            cosine = self._cosine(query_vector, vectors.get(str(row["id"]), [])) if query_vector else 0.0
-            if row["rank"] == 0 and cosine < 0.35:
+            cosine = 0.0
+            if query_vector:
+                cosine = self._cosine(query_vector, vectors.get(row_id, []))
+            rank = float(row["rank"] or 0)
+            # bm25() is log-scale unbounded; mixing its raw value with a bounded
+            # cosine let the lexical term dominate arbitrarily. Normalise both
+            # to [0,1] so each contributes on a comparable scale.
+            lexical_score = (abs(rank) / best_bm25) if rank < 0 else 0.0
+            semantic_ok = cosine >= (0.35 if rank < 0 else 0.2)
+            if rank >= 0 and not semantic_ok:
                 continue
-            base = max(0.0, -float(row["rank"] or 0))
-            score = base * 2 + cosine * 2.4 + (0.2 if row["source_type"] == "document" else 0.1)
+            score = (lexical_score + max(0.0, cosine) * 1.2
+                     + (0.05 if row["source_type"] == "document" else 0.0))
             meta = json.loads(row["meta"] or "{}")
             output.append({
                 "chunk_id": row["id"], "text": row["text"], "source_revision": row["source_revision"],
@@ -503,10 +549,17 @@ class RagIndex:
             output = llm_rerank(query, output, top_k=limit)
         return output[:max(1, int(limit))]
 
-    def _vectors(self) -> dict[str, list[float]]:
+    def _vectors(self, source_type: str | None = None) -> dict[str, list[float]]:
+        sql = ("SELECT cv.chunk_id, cv.vector FROM chunk_vectors cv "
+               "JOIN chunks c ON c.id = cv.chunk_id "
+               "JOIN documents d ON d.id = c.document_id")
+        params: list = []
+        if source_type:
+            sql += " WHERE d.source_type = ?"
+            params.append(source_type)
         try:
             with self._connection() as connection:
-                rows = connection.execute("SELECT chunk_id,vector FROM chunk_vectors").fetchall()
+                rows = connection.execute(sql, params).fetchall()
         except sqlite3.DatabaseError:
             return {}
         import array
@@ -560,7 +613,7 @@ class RagIndex:
 
         calls = ToolModelCalls(model_client=model_client, model_budget=model_budget)
         try:
-            sources = self.search(question, limit=limit, rerank=False, strict=True)
+            sources = self.search(question, limit=limit, strict=True)
         except RagUnavailable as exc:
             return calls.report({"ok": False, "answered": False, "answer_status": "failed",
                     "grounded": False, "answer": "", "sources": [], "citations": [],

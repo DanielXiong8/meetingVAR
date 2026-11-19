@@ -68,6 +68,36 @@ def _quote(token: str) -> str:
     return '"' + token.replace('"', '""') + '"'
 
 
+def fts_match(query: str) -> str:
+    """Layered FTS5 MATCH expression for a raw query.
+
+    A whole phrase is tried first, then per-CJK-run bigram phrases (so adjacent
+    bigrams must occur adjacent in the text, instead of an OR of every bigram
+    matching any unrelated chunk), and finally the flat bigram OR as fallback.
+    Callers execute the clauses in order until one returns rows, which keeps
+    recall while ranking precision first.
+    """
+    value = _norm(query)
+    if not value:
+        return ""
+    layers: list[str] = []
+    if value:
+        layers.append(_quote(value))
+    exact_runs = [run for run in _CJK.findall(value) if 2 <= len(run) <= 8]
+    latin_words = [w for w in _LATIN.findall(value) if len(w) >= 2]
+    if exact_runs or latin_words:
+        parts = [_quote(" ".join(run[i:i + 2] for i in range(len(run) - 1)))
+                 for run in exact_runs]
+        parts += [_quote(w) for w in latin_words]
+        layers.append(" OR ".join(parts))
+    tokens = query_tokens(value)
+    if tokens and len(tokens) > 32:
+        # Bigrams from runs longer than 8 chars are not in the bigram-phrase
+        # layer; only then does the flat (truncated) OR add coverage.
+        layers.append(" OR ".join(_quote(token) for token in tokens[:32]))
+    return "\n".join(layers)
+
+
 class MemoryIndex:
     def __init__(self, root: Path):
         self.root = Path(root)

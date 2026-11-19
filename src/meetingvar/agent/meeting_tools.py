@@ -195,7 +195,7 @@ def _read_search_knowledge(args: dict, context: ToolContext) -> dict:
     try:
         chunks = index.search(
             args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
-            source_type=args.get("source_type") or None, rerank=False, strict=True)
+            source_type=args.get("source_type") or None, strict=True)
     except RagUnavailable as exc:
         # A broken index is an execution failure, never evidence of absence.
         raise ToolError("rag_unavailable", str(exc)) from None

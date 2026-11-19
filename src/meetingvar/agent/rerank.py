@@ -42,6 +42,32 @@ def _llm_available() -> bool:
                 and str(getattr(config, "LLM_MODEL", "") or "").strip())
 
 
+def _ranking_from_text(text: str, candidates: list[dict]) -> list[int]:
+    """Parse the ranking JSON, tolerating a truncated (max-token-capped) reply."""
+    content = str(text or "")
+    match = re.search(r"\{.*\}", content, re.S)
+    raw = match.group() if match else content
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # A reply cut off mid-list is still usable up to the last valid index.
+        raw = re.sub(r",\s*\d*\s*$", "", raw.strip().rstrip("]}")) + "]}"
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    ranking = data.get("ranking") if isinstance(data, dict) else None
+    order: list[int] = []
+    for value in ranking or []:
+        try:
+            index = int(value) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < len(candidates) and index not in order:
+            order.append(index)
+    return order
+
+
 def llm_rerank(query: str, candidates: list[dict], *, top_k: int = 8,
                text_key: str = "text", timeout: int = 20) -> list[dict]:
     if len(candidates) <= 1:
@@ -50,8 +76,10 @@ def llm_rerank(query: str, candidates: list[dict], *, top_k: int = 8,
         return embedding_rerank(query, candidates, top_k=top_k, text_key=text_key)
     from ..llm import chat_result
 
+    scored = embedding_rerank(query, candidates, top_k=len(candidates), text_key=text_key)
+    window = scored[:20]
     lines = []
-    for index, item in enumerate(candidates[:20], 1):
+    for index, item in enumerate(window, 1):
         title = item.get("name") or item.get("title") or item.get("source_id") or ""
         lines.append(f"[{index}] {title}\n{_text(item, text_key)[:700]}")
     prompt = f"""你是检索重排器。根据问题，对候选资料按“能否直接回答问题”排序。
@@ -60,24 +88,16 @@ def llm_rerank(query: str, candidates: list[dict], *, top_k: int = 8,
 候选：
 {chr(10).join(lines)}
 """
-    result = chat_result(prompt, temperature=0, timeout=timeout, max_tokens=300)
+    # The ranking list for 20 candidates needs far more than a chat default;
+    # a truncated JSON used to fail parsing and silently drop to fallback.
+    result = chat_result(prompt, temperature=0, timeout=timeout, max_tokens=1200)
     if not result.get("ok"):
-        return embedding_rerank(query, candidates, top_k=top_k, text_key=text_key)
+        return window[:top_k]
     try:
-        match = re.search(r"\{.*\}", str(result.get("content", "")), re.S)
-        data = json.loads(match.group()) if match else {}
-        ranking = data.get("ranking") if isinstance(data, dict) else None
-        order = []
-        for value in ranking or []:
-            try:
-                index = int(value) - 1
-            except (TypeError, ValueError):
-                continue
-            if 0 <= index < len(candidates) and index not in order:
-                order.append(index)
+        order = _ranking_from_text(result.get("content", ""), window)
         if not order:
-            return embedding_rerank(query, candidates, top_k=top_k, text_key=text_key)
-        order.extend(index for index in range(len(candidates)) if index not in order)
-        return [candidates[index] for index in order[:top_k]]
+            return window[:top_k]
+        order.extend(index for index in range(len(window)) if index not in order)
+        return [window[index] for index in order[:top_k]]
     except Exception:
-        return embedding_rerank(query, candidates, top_k=top_k, text_key=text_key)
+        return window[:top_k]
