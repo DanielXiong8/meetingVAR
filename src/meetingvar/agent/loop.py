@@ -194,7 +194,8 @@ class AgentLoop:
         self.registry = build_meeting_registry(trace=self.trace)
         self.context = ToolContext(project_root=self.project_root, fact_store=self.fact_store,
                                    principal=self.principal,
-                                   extra={"catalog": self.catalog, "fact_store": self.fact_store})
+                                   extra={"catalog": self.catalog, "fact_store": self.fact_store,
+                                          "agent_loop": True})
         self.state_dir = trace_dir / "loops"
         self.budget = AgentBudget(max_steps=self.max_steps,
                                   max_tool_calls=self.max_tool_calls,

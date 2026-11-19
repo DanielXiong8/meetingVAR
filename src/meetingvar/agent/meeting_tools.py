@@ -192,10 +192,15 @@ def _read_search_knowledge(args: dict, context: ToolContext) -> dict:
     from ..rag import RagUnavailable
 
     index = _rag(context)
+    # Retrieval tools run *inside* a model turn. The loop declares itself via
+    # context.extra; a global LLM rerank would then be a nested call billed to
+    # the parent budget, so the flag stays explicit (False) and the search
+    # keeps local dense ordering. Standalone callers keep the full rerank path.
+    nested = bool((context.extra or {}).get("model_budget"))
     try:
         chunks = index.search(
             args["query"], limit=max(1, min(20, int(args.get("limit", 6)))),
-            source_type=args.get("source_type") or None, strict=True)
+            source_type=args.get("source_type") or None, rerank=not nested, strict=True)
     except RagUnavailable as exc:
         # A broken index is an execution failure, never evidence of absence.
         raise ToolError("rag_unavailable", str(exc)) from None
