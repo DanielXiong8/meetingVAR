@@ -37,7 +37,7 @@ from urllib.parse import quote, unquote, urlsplit
 # 测试环境（CI model-free）里可 import，后端逻辑可单测。
 
 APP_NAME = "meetingVAR"
-APP_VERSION = "0.28.4"
+APP_VERSION = "0.28.5"
 
 # 冻结（PyInstaller onefile）时资源在 _MEIPASS；源码运行时在本目录
 _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -132,6 +132,7 @@ CONFIG_DEFAULTS = {
 }
 
 SESSMAP_FILE = CONFIG_DIR / "sessions_map.json"
+SESSION_TITLES_FILE = CONFIG_DIR / "session_titles.json"
 LLM_LOG_FILE = CONFIG_DIR / "llm_server.log"
 LLM_PORT = 11439
 
@@ -366,6 +367,15 @@ class Backend:
                     self._session_projects = {str(k): str(v) for k, v in data.items()}
         except (OSError, ValueError):
             pass
+        # 会话自定义标题（会议重命名）：独立文件，绝不写进带 API Key 的 ui_config.json
+        self._session_titles: dict[str, str] = {}
+        try:
+            if SESSION_TITLES_FILE.exists():
+                titles = json.loads(SESSION_TITLES_FILE.read_text(encoding="utf-8"))
+                if isinstance(titles, dict):
+                    self._session_titles = {str(k): str(v).strip() for k, v in titles.items() if str(v).strip()}
+        except (OSError, ValueError):
+            pass
         self._autodetect()
 
     def _save_session_map(self) -> None:
@@ -373,6 +383,15 @@ class Backend:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             SESSMAP_FILE.write_text(
                 json.dumps(self._session_projects, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def _save_session_titles(self) -> None:
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            SESSION_TITLES_FILE.write_text(
+                json.dumps(self._session_titles, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except OSError:
             pass
@@ -385,7 +404,7 @@ class Backend:
             self._cfg["repo_dir"] = _first_existing(REPO_CANDIDATES)
         if not self._cfg.get("llm_gguf") or not Path(self._cfg["llm_gguf"]).exists():
             hits = []
-            for base in (_RUNTIME / "models", Path("D:/env/models/models")):
+            for base in (_RUNTIME / "models", Path(os.environ.get("MEETINGVAR_MODELS", str(Path.home() / "meetingVAR" / "models")))):
                 try:
                     hits.extend(sorted(base.glob("**/*.gguf")))
                 except OSError:
@@ -834,7 +853,7 @@ class Backend:
                 return "已选讯飞识别，但未配置讯飞文件夹（设置页 → 识别引擎）"
         return ""
 
-    def start_meeting(self, folder: str = "", mode: str = "go") -> dict:
+    def start_meeting(self, folder: str = "", mode: str = "go", ask_speakers: bool | None = None) -> dict:
         with self._meeting_lock:
             error = self._meeting_start_error(folder, mode)
             if error:
@@ -844,7 +863,7 @@ class Backend:
             if not operation.get("ok"):
                 return operation
             try:
-                receipt=self._start_meeting(project,mode)
+                receipt=self._start_meeting(project,mode,ask_speakers=ask_speakers)
                 receipt["confirmation"]="start_request_only_not_complete_recording"
                 if receipt.get("ok"):
                     receipt["pid"]=self._proc.pid if self._proc else None
@@ -852,7 +871,7 @@ class Backend:
                 receipt={"ok":False,"error":"会议启动异常","outcome_unknown":True}
             return self._host_operation_finish(operation,receipt)
 
-    def _start_meeting(self, folder: str = "", mode: str = "go") -> dict:
+    def _start_meeting(self, folder: str = "", mode: str = "go", ask_speakers: bool | None = None) -> dict:
         if self.is_running():
             return {"ok": False, "error": "会议已在运行"}
         py = self._cfg.get("engine_python") or ""
@@ -885,7 +904,9 @@ class Backend:
             parsed = urlparse(base)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
                 return {"ok": False, "error": "API地址须为http/https地址，不要将密钥写入URL"}
-        cmd += ["--device", self._cfg.get("device", "auto"), "--no-ask-speakers", "--interest", interest]
+        cmd += ["--device", self._cfg.get("device", "auto"), "--interest", interest]
+        if not bool(ask_speakers):
+            cmd.append("--no-ask-speakers")
         cmd += ["--source", self._cfg.get("audio_source", "both")]
         engine = self._cfg.get("asr_engine", "local")
         if engine not in {"local", "xfyun", "xfyun_rtasr"}:
@@ -1100,9 +1121,28 @@ class Backend:
                 except OSError:
                     mtime = 0
                 out.append({"sid": sid, "lines": lines, "clips": clips, "minutes": minutes,
-                            "mtime": mtime, "has_transcript": tj.exists()})
+                            "mtime": mtime, "has_transcript": tj.exists(),
+                            "title": self._session_titles.get(sid, "")})
         out.sort(key=lambda x: -x["mtime"])
         return out[:100]
+
+    def rename_session(self, sid: str, title: str) -> dict:
+        """给会议一个可读名字；空标题=清除自定义名（回退到默认名）。
+
+        只写本机配置目录，不动 data/（真实会议音频/转写）。
+        """
+        if not self._agent_valid_session(sid):
+            return {"ok": False, "error": "会话 ID 无效"}
+        data = Path(self._cfg["repo_dir"] or ".") / "data"
+        if not (data / "pool" / sid).is_dir():
+            return {"ok": False, "error": "找不到这场会议"}
+        name = " ".join(str(title or "").split())[:80]
+        if name:
+            self._session_titles[sid] = name
+        else:
+            self._session_titles.pop(sid, None)
+        self._save_session_titles()
+        return {"ok": True, "sid": sid, "title": name}
 
     def usage_stats(self) -> dict:
         """Aggregate local Agent LLM traces for the usage dashboard.
@@ -2845,8 +2885,8 @@ def main() -> None:
             partial(_NextWebHandler, directory=str(WEB_NEXT)),
         )
         threading.Thread(target=web_server.serve_forever, daemon=True).start()
-        page_url = f"http://127.0.0.1:{web_server.server_port}/index.html"
-        log(f"[ui] Next UI {page_url}")
+        page_url = f"http://127.0.0.1:{web_server.server_port}/workspace/index.html"
+        log(f"[ui] Next UI（对话页）{page_url}")
 
     window = webview.create_window(
         f"{APP_NAME} {APP_VERSION}",

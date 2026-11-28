@@ -48,3 +48,8 @@ meetingVAR-setup.spec
 
 # Next UI generated export; reproducible from desktop/agent-ui
 /desktop/web-next/
+
+# ===== 本地生成物/误建目录/代理工具 =====
+%LOCALAPPDATA%/
+node_modules/
+.zcode/

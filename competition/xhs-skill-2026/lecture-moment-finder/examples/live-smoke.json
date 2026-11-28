@@ -1,0 +1,46 @@
+{
+  "session_id": "live-smoke",
+  "title": "采集链路冒烟测试",
+  "consent": true,
+  "save_transcript": false,
+  "interests": [
+    {
+      "id": "smoke",
+      "question": "动态规划",
+      "keywords": ["动态规划"],
+      "min_score": 25.0,
+      "min_keyword_hits": 1,
+      "consecutive_hits": 1,
+      "cooldown_seconds": 60
+    }
+  ],
+  "capture": {
+    "source": "loopback",
+    "screen": false,
+    "fps": 1.0,
+    "video_fps": 5.0,
+    "video_width": 1280,
+    "video_crf": 28,
+    "monitor": 1,
+    "audio_device": null,
+    "mic_device": null
+  },
+  "asr": {
+    "model": "none",
+    "language": "zh",
+    "device": "cpu",
+    "chunk_seconds": 3.0,
+    "step_seconds": 1.0,
+    "vad_rms": 250
+  },
+  "trigger": {
+    "window_seconds": 20.0,
+    "ring_seconds": 180.0,
+    "min_span": 15.0,
+    "max_span": 600.0,
+    "end_grace_seconds": 30.0,
+    "rel_threshold": 0.15,
+    "bridge": 2,
+    "max_gap": 20.0
+  }
+}

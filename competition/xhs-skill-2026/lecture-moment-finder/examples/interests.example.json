@@ -1,0 +1,66 @@
+{
+  "session_id": "lecture-2026-11-17",
+  "title": "数据结构 第 7 讲",
+  "consent": false,
+  "save_transcript": true,
+  "interests": [
+    {
+      "id": "dp",
+      "question": "老师讲动态规划状态转移方程的那几分钟",
+      "keywords": [
+        "动态规划",
+        "状态转移方程",
+        "状态定义",
+        "背包"
+      ],
+      "min_score": 25.0,
+      "min_keyword_hits": 1,
+      "consecutive_hits": 1,
+      "cooldown_seconds": 180
+    },
+    {
+      "id": "exam",
+      "question": "期末考试范围",
+      "keywords": [
+        "考试范围",
+        "考点",
+        "必考",
+        "复习"
+      ],
+      "min_score": 18.0,
+      "min_keyword_hits": 1,
+      "consecutive_hits": 1,
+      "cooldown_seconds": 300
+    }
+  ],
+  "capture": {
+    "source": "loopback",
+    "screen": true,
+    "fps": 1.0,
+    "video_fps": 5.0,
+    "video_width": 1280,
+    "video_crf": 28,
+    "monitor": 1,
+    "audio_device": null,
+    "mic_device": null
+  },
+  "asr": {
+    "model": "base",
+    "language": "zh",
+    "device": "cpu",
+    "chunk_seconds": 10.0,
+    "step_seconds": 3.0,
+    "vad_rms": 250,
+    "vad_filter": true
+  },
+  "trigger": {
+    "window_seconds": 20.0,
+    "ring_seconds": 300.0,
+    "min_span": 45.0,
+    "max_span": 600.0,
+    "end_grace_seconds": 60.0,
+    "rel_threshold": 0.15,
+    "bridge": 2,
+    "max_gap": 20.0
+  }
+}

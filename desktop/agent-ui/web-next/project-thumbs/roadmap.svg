@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="640" viewBox="0 0 400 640">
+<rect width="400" height="640" rx="18" fill="#f4f4f5"/>
+<rect x="28" y="32" width="344" height="576" rx="10" fill="#fff" stroke="#d4d4d8"/>
+<text x="54" y="76" font-family="Arial, sans-serif" font-weight="700" font-size="22" fill="#18181b">Q4 Review</text>
+<rect x="54" y="92" width="128" height="4" rx="2" fill="#a1a1aa"/>
+<rect x="54" y="136" width="292" height="152" rx="6" fill="#f4f4f5" stroke="#e4e4e7"/>
+<rect x="72" y="232" width="34" height="34" rx="2" fill="#d4d4d8"/>
+<rect x="116" y="198" width="34" height="68" rx="2" fill="#a1a1aa"/>
+<rect x="160" y="214" width="34" height="52" rx="2" fill="#71717a"/>
+<rect x="204" y="170" width="34" height="96" rx="2" fill="#3f3f46"/>
+<rect x="248" y="188" width="34" height="78" rx="2" fill="#52525b"/>
+<rect x="292" y="150" width="34" height="116" rx="2" fill="#18181b"/>
+<rect x="54" y="316" width="120" height="6" rx="3" fill="#18181b"/>
+<rect x="54" y="340" width="290" height="4" rx="2" fill="#e4e4e7"/>
+<rect x="54" y="353" width="262" height="4" rx="2" fill="#e4e4e7"/>
+<rect x="54" y="366" width="276" height="4" rx="2" fill="#e4e4e7"/>
+<rect x="54" y="404" width="140" height="90" rx="6" fill="#fafafa" stroke="#e4e4e7"/>
+<circle cx="78" cy="430" r="10" fill="#d4d4d8"/>
+<rect x="96" y="424" width="64" height="5" rx="2.5" fill="#71717a"/><rect x="96" y="438" width="48" height="4" rx="2" fill="#d4d4d8"/>
+<rect x="72" y="462" width="96" height="4" rx="2" fill="#e4e4e7"/><rect x="72" y="475" width="74" height="4" rx="2" fill="#e4e4e7"/>
+<rect x="206" y="404" width="140" height="90" rx="6" fill="#fafafa" stroke="#e4e4e7"/>
+<circle cx="230" cy="430" r="10" fill="#d4d4d8"/>
+<rect x="248" y="424" width="64" height="5" rx="2.5" fill="#71717a"/><rect x="248" y="438" width="48" height="4" rx="2" fill="#d4d4d8"/>
+<rect x="224" y="462" width="96" height="4" rx="2" fill="#e4e4e7"/><rect x="224" y="475" width="74" height="4" rx="2" fill="#e4e4e7"/>
+<text x="54" y="584" font-family="Arial, sans-serif" font-size="10" fill="#71717a">ROADMAP · PRESENTATION</text>
+</svg>

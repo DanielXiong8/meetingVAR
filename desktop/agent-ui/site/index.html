@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>meetingVAR · 会议证据层</title>
+  <meta name="description" content="本地优先的会议证据代理。只记录与项目相关的片段，把每个决定、承诺和原话变成可离线校验的证据。">
+  <meta name="theme-color" content="#0a0b0d">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="meetingVAR · 会议证据层">
+  <meta property="og:description" content="别人帮你记下来，meetingVAR 帮你证出来。">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="preload" as="image" href="assets/sky-hero.webp" imagesrcset="assets/sky-hero.webp 1920w, assets/sky-hero@2x.webp 2560w" imagesizes="100vw" type="image/webp">
+  <link rel="preload" as="font" href="assets/fonts/instrument-serif-italic.woff2" type="font/woff2" crossorigin>
+  <link rel="preload" as="font" href="assets/fonts/geist-500.woff2" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+
+  <header class="nav" id="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="#top" aria-label="meetingVAR 首页">
+        <img src="assets/icon.svg" alt="" width="26" height="26">
+        <span>meetingVAR</span>
+      </a>
+      <nav class="nav-links" id="navLinks" aria-label="主导航">
+        <a href="#why">为什么是证据</a>
+        <a href="#evidence">证据能力</a>
+        <a href="#how">如何工作</a>
+        <a href="#privacy">隐私边界</a>
+        <a href="#faq">常见问题</a>
+      </nav>
+      <div class="nav-actions">
+        <button class="btn btn-glass btn-sm nav-cta" type="button" data-dialog-open="downloadDialog">Windows 桌面版</button>
+        <button class="nav-toggle" id="navToggle" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="navLinks">
+          <span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <picture class="hero-media">
+        <source type="image/webp" srcset="assets/sky-hero.webp 1920w, assets/sky-hero@2x.webp 2560w" sizes="100vw">
+        <img src="assets/sky-hero.jpg" alt="" width="2560" height="1440" fetchpriority="high" decoding="async">
+      </picture>
+      <div class="hero-shade" aria-hidden="true"></div>
+
+      <div class="hero-content">
+        <h1 class="wordmark">meetingVAR</h1>
+
+        <div class="hero-controls">
+          <form class="workspace-form" id="workspaceForm" novalidate>
+            <label class="sr-only" for="workspaceName">Workspace name</label>
+            <input id="workspaceName" name="workspace" type="text" placeholder="Name this workspace" autocomplete="off" maxlength="40" spellcheck="false">
+            <button class="workspace-submit" type="submit" aria-label="进入演示工作区">
+              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M8.146 3.146a.5.5 0 0 1 .708 0l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L11.293 8H2.5a.5.5 0 0 1 0-1h8.793L8.146 3.854a.5.5 0 0 1 0-.708Z" fill="currentColor"/></svg>
+            </button>
+          </form>
+          <p class="hero-hint">给工作区起个名字 · 留空直接进入</p>
+
+          <p class="hero-tagline">Meetings, remembered beautifully.<br>Every decision has a source.</p>
+          <p class="hero-tagline-zh">把每句话、每个决定，和它们发生的那一刻连接起来。</p>
+
+          <div class="hero-actions">
+            <button class="btn btn-how" id="howBtn" type="button" aria-expanded="false" aria-controls="manifesto">
+              <span>How it works</span>
+              <svg class="how-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="m2.5 4.5 3.5 3.5 3.5-3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+
+          <div class="manifesto-wrap" id="manifesto" aria-hidden="true">
+            <div class="manifesto-clip">
+              <article class="manifesto">
+                <p>问一场会议：一个决定为什么改了。跟着一个承诺穿过多个版本。回到它被说出来的那句话，和那一刻。</p>
+                <p>meetingVAR 把会议证据留在本地。从一个项目开始，只保留真正重要的片段，让每个答案都紧挨着它的出处。</p>
+                <p>先给工作区起个名字，或者留空直接进入。下面的演示里，承诺台账、找回那一刻、证据包都可以点开看。</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <a class="hero-scroll" href="#why">
+        <span>向下看它如何作证</span>
+        <span class="hero-scroll-line" aria-hidden="true"></span>
+      </a>
+    </section>
+
+    <section class="section intro" id="why">
+      <div class="wrap intro-grid">
+        <div class="intro-copy reveal">
+          <p class="eyebrow">WHY EVIDENCE</p>
+          <h2 class="display">别人帮你记下来，<br><em>meetingVAR</em> 帮你证出来。</h2>
+          <p class="lead">会议里最贵的不是没记笔记，是事后没人能证明当时到底说了什么。meetingVAR 不生成又一份摘要，它留下可回放、可校验、可追溯的片段。</p>
+        </div>
+        <div class="contrast-list">
+          <article class="contrast-item reveal" style="--d:60ms">
+            <span class="num">01</span>
+            <h3>不是摘要，是证据链</h3>
+            <p>每个结论都带着说话人、时间戳、原话和屏幕帧。点开，就回到现场。</p>
+          </article>
+          <article class="contrast-item reveal" style="--d:120ms">
+            <span class="num">02</span>
+            <h3>不是整场录音，是命中片段</h3>
+            <p>只有内容与项目兴趣相关时才保留。30–90 秒一段，不把整场会议变成负担。</p>
+          </article>
+          <article class="contrast-item reveal" style="--d:180ms">
+            <span class="num">03</span>
+            <h3>不是关键词搜索，是定位到秒</h3>
+            <p>问一句「为什么改期」，它把决定、理由和上下文一起找出来，而不是丢给你十篇纪要。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section evidence" id="evidence">
+      <div class="wrap">
+        <header class="section-head reveal">
+          <p class="eyebrow">EVIDENCE SKILLS</p>
+          <h2>一个决定，三种证据</h2>
+          <p class="lead">三种能力共用同一条证据链：台账告诉你谁改了什么，找回那一刻把原话递给你，证据包让第三方离线复验。</p>
+        </header>
+
+        <div class="demo-shell reveal" style="--d:80ms">
+          <div class="demo-bar">
+            <span class="demo-status" aria-hidden="true"></span>
+            <span class="demo-title">meetingVAR · <strong data-workspace>证据工作区</strong></span>
+            <span class="badge badge-amber">界面演示 · 示例数据</span>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="证据能力演示">
+            <button class="tab is-active" id="tab-ledger" type="button" role="tab" aria-selected="true" aria-controls="panel-ledger" data-tab="ledger" tabindex="0">
+              <span class="tab-num">01</span>承诺台账
+            </button>
+            <button class="tab" id="tab-moment" type="button" role="tab" aria-selected="false" aria-controls="panel-moment" data-tab="moment" tabindex="-1">
+              <span class="tab-num">02</span>找回那一刻
+            </button>
+            <button class="tab" id="tab-pack" type="button" role="tab" aria-selected="false" aria-controls="panel-pack" data-tab="pack" tabindex="-1">
+              <span class="tab-num">03</span>证据包
+            </button>
+          </div>
+
+          <div class="panels">
+            <section class="panel is-active" id="panel-ledger" role="tabpanel" aria-labelledby="tab-ledger">
+              <div class="panel-head">
+                <div>
+                  <h3>谁承诺了什么，什么时候改的</h3>
+                  <p>点一行，看当时的原话。改期、改口径、改负责人，都保留旧值。</p>
+                </div>
+                <span class="badge badge-quiet">3 条承诺 · 示例台账</span>
+              </div>
+
+              <div class="ledger-layout">
+                <div class="ledger-scroll">
+                  <div class="ledger" aria-label="承诺台账，示例数据">
+                    <div class="ledger-head" aria-hidden="true">
+                      <span>承诺</span><span>负责人</span><span>期限</span><span>状态</span><span>最近变更</span>
+                    </div>
+                    <button class="ledger-row is-selected" type="button" aria-pressed="true"
+                      data-speaker="林晓" data-time="00:18:42" data-diff-label="期限"
+                      data-diff-old="11-26" data-diff-new="11-28"
+                      data-quote="视觉稿不用赶周五，先把两版方向做出来，下周二我们一起看。">
+                      <span class="cell promise"><strong>周五前给出 A/B 两版视觉稿</strong><small>产品周会 · 11-18</small></span>
+                      <span class="cell owner"><span class="avatar avatar-blue">林</span>林晓</span>
+                      <span class="cell due">11-28</span>
+                      <span class="cell"><span class="status status-progress"><i></i>进行中</span></span>
+                      <span class="cell change">期限 <s>11-26</s> <span class="arrow">→</span> <b>11-28</b></span>
+                    </button>
+                    <button class="ledger-row" type="button" aria-pressed="false"
+                      data-speaker="周牧" data-time="00:42:16" data-diff-label="状态"
+                      data-diff-old="未建立" data-diff-new="待开始"
+                      data-quote="离线校验这一步得写进说明里，不然评委拿到 ZIP 不知道从哪开始。">
+                      <span class="cell promise"><strong>补齐离线证据包校验说明</strong><small>SDG 备赛会 · 11-20</small></span>
+                      <span class="cell owner"><span class="avatar avatar-amber">周</span>周牧</span>
+                      <span class="cell due">12-02</span>
+                      <span class="cell"><span class="status status-todo"><i></i>待开始</span></span>
+                      <span class="cell change">新增于 <b>11-24</b></span>
+                    </button>
+                    <button class="ledger-row" type="button" aria-pressed="false"
+                      data-speaker="陈屿" data-time="00:55:03" data-diff-label="状态"
+                      data-diff-old="待开始" data-diff-new="已完成"
+                      data-quote="演示数据今天就换掉，用上周评审会那段，时间戳对得上。">
+                      <span class="cell promise"><strong>把演示数据换成真实录制的片段</strong><small>演示彩排 · 11-22</small></span>
+                      <span class="cell owner"><span class="avatar avatar-green">陈</span>陈屿</span>
+                      <span class="cell due">11-30</span>
+                      <span class="cell"><span class="status status-done"><i></i>已完成</span></span>
+                      <span class="cell change">状态 <s>待开始</s> <span class="arrow">→</span> <b>已完成</b></span>
+                    </button>
+                  </div>
+                </div>
+
+                <aside class="quote-card" id="quoteCard" aria-live="polite">
+                  <div class="quote-meta">
+                    <span class="avatar avatar-blue" id="quoteAvatar">林</span>
+                    <span class="quote-who"><strong id="quoteSpeaker">林晓</strong><span id="quoteTime">00:18:42</span></span>
+                    <span class="badge badge-quiet">原始发言</span>
+                  </div>
+                  <blockquote id="quoteText">视觉稿不用赶周五，先把两版方向做出来，下周二我们一起看。</blockquote>
+                  <div class="diff-strip"><span id="diffLabel">期限</span> <s id="diffOld">11-26</s> <span class="arrow">→</span> <b id="diffNew">11-28</b></div>
+                  <div class="quote-foot">
+                    <button class="btn btn-sm btn-quiet" id="jumpBtn" type="button">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      跳到这一刻
+                    </button>
+                    <span class="tiny">演示不会播放本地音频</span>
+                  </div>
+                </aside>
+              </div>
+            </section>
+
+            <section class="panel" id="panel-moment" role="tabpanel" aria-labelledby="tab-moment" hidden>
+              <div class="panel-head">
+                <div>
+                  <h3>用一句话，找回那一刻</h3>
+                  <p>只返回最相关的 30–90 秒，而不是整场会议。片段里包含决定、理由和上下文。</p>
+                </div>
+                <span class="badge badge-quiet">示例检索</span>
+              </div>
+
+              <div class="moment-layout">
+                <div class="ask">
+                  <label for="momentQuery">问一个决定</label>
+                  <form class="ask-form" id="momentForm">
+                    <input id="momentQuery" type="text" value="我们最后为什么把发布时间推到了十二月？" autocomplete="off">
+                    <button class="btn btn-primary" type="submit" id="momentSubmit">找回那一刻</button>
+                  </form>
+                  <div class="chips" aria-label="示例问题">
+                    <button class="chip" type="button" data-q="视觉稿的交付时间是怎么定的？">视觉稿交付时间</button>
+                    <button class="chip" type="button" data-q="谁负责离线校验说明？">离线校验说明</button>
+                    <button class="chip" type="button" data-q="发布时间为什么改了？">发布时间为什么改</button>
+                  </div>
+                  <p class="tiny">输入任意问题试试；官网只演示交互，不连接你的会议库。</p>
+                </div>
+
+                <article class="moment-card" id="momentCard">
+                  <header class="moment-head">
+                    <span class="moment-range" id="momentRange">00:31:07 – 00:31:49 <em>42 秒</em></span>
+                    <span class="badge badge-quiet" id="momentSpeaker">说话人 2 · 陈屿</span>
+                  </header>
+                  <blockquote id="momentQuote">“发布还是放到十二月。十一月的版本先给内测用户，别为了赶这个节点把证据链做薄了。”</blockquote>
+                  <p class="why"><span>为什么是这段</span><span id="momentWhy">命中「发布时间 / 十二月 / 内测」；片段里同时包含决定、理由和生效范围。</span></p>
+
+                  <div class="wave" id="wave" aria-hidden="true"></div>
+
+                  <div class="player">
+                    <button class="play" id="playBtn" type="button" aria-label="播放示例片段">
+                      <svg class="icon-play" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3.5 2.2v7.6L9.8 6 3.5 2.2Z" fill="currentColor"/></svg>
+                      <svg class="icon-pause" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3.2 2.4h2v7.2h-2zM6.8 2.4h2v7.2h-2z" fill="currentColor"/></svg>
+                    </button>
+                    <div class="playbar" aria-hidden="true"><span id="playFill"></span></div>
+                    <span class="clock" id="playClock">00:31:07</span>
+                  </div>
+
+                  <ol class="transcript" id="transcript">
+                    <li><time>00:31:07</time><span>陈屿：发布还是放到十二月。</span></li>
+                    <li><time>00:31:24</time><span>林晓：那十一月的版本呢？</span></li>
+                    <li><time>00:31:36</time><span>陈屿：先给内测用户，别为了赶节点把证据链做薄了。</span></li>
+                  </ol>
+                  <p class="tiny player-note">播放为演示动画，不包含真实音频。</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="panel" id="panel-pack" role="tabpanel" aria-labelledby="tab-pack" hidden>
+              <div class="panel-head">
+                <div>
+                  <h3>把证据装进一个 ZIP</h3>
+                  <p>manifest 记录每个文件的 SHA256。拿到包的人不需要联网，也不需要信任我们。</p>
+                </div>
+                <span class="badge badge-quiet">可离线校验</span>
+              </div>
+
+              <div class="pack-layout">
+                <div class="pack-files">
+                  <div class="pack-head">
+                    <span class="file-icon" aria-hidden="true">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5A1.5 1.5 0 0 1 4 3h2.2l1.2 1.4H13a1.5 1.5 0 0 1 1.5 1.5v5.6A1.5 1.5 0 0 1 13 13H4a1.5 1.5 0 0 1-1.5-1.5v-7Z" stroke="currentColor" stroke-width="1.1"/></svg>
+                    </span>
+                    <strong>evidence-pack-0031.zip</strong>
+                    <span class="badge badge-quiet">4 个文件</span>
+                  </div>
+
+                  <ul class="file-list" id="packList">
+                    <li class="file-row is-manifest" data-key="manifest">
+                      <span class="file-kind" aria-hidden="true">JSON</span>
+                      <span class="file-name"><strong>manifest.json</strong><small>1.4 KB · 根清单</small></span>
+                      <code class="file-hash" data-hash>计算中…</code>
+                      <span class="file-mark" data-mark aria-hidden="true"></span>
+                    </li>
+                    <li class="file-row" data-key="audio">
+                      <span class="file-kind" aria-hidden="true">M4A</span>
+                      <span class="file-name"><strong>audio/clip-0031.m4a</strong><small>612 KB · 片段音频</small></span>
+                      <code class="file-hash" data-hash>计算中…</code>
+                      <span class="file-mark" data-mark aria-hidden="true"></span>
+                    </li>
+                    <li class="file-row" data-key="transcript">
+                      <span class="file-kind" aria-hidden="true">SRT</span>
+                      <span class="file-name"><strong>transcript/clip-0031.srt</strong><small>2.1 KB · 时间轴字幕</small></span>
+                      <code class="file-hash" data-hash>计算中…</code>
+                      <span class="file-mark" data-mark aria-hidden="true"></span>
+                    </li>
+                    <li class="file-row" data-key="frame">
+                      <span class="file-kind" aria-hidden="true">JPG</span>
+                      <span class="file-name"><strong>frames/clip-0031-01.jpg</strong><small>184 KB · 屏幕帧</small></span>
+                      <code class="file-hash" data-hash>计算中…</code>
+                      <span class="file-mark" data-mark aria-hidden="true"></span>
+                    </li>
+                  </ul>
+
+                  <div class="pack-actions">
+                    <button class="btn btn-primary" id="verifyBtn" type="button">一键校验 SHA256</button>
+                    <button class="btn btn-quiet btn-sm" id="tamperBtn" type="button">模拟篡改一个文件</button>
+                  </div>
+                  <p class="tiny" id="verifyNote">哈希在浏览器内实时计算。示例内容，不是真实会议文件。</p>
+                </div>
+
+                <aside class="manifest-panel">
+                  <div class="manifest-head"><span>manifest.json</span><span class="tiny">只读</span></div>
+                  <pre class="manifest-code"><code id="manifestCode">正在生成示例 manifest…</code></pre>
+                  <div class="verify-result" id="verifyResult" role="status" aria-live="polite" hidden></div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+        <p class="demo-disclaimer">以上为界面演示数据；真实证据包由 Windows 桌面端在你的电脑上生成。</p>
+      </div>
+    </section>
+
+    <section class="section how" id="how">
+      <div class="wrap">
+        <header class="section-head section-head-row reveal">
+          <div>
+            <p class="eyebrow">HOW IT WORKS</p>
+            <h2>从一场会，到一份能复验的证据</h2>
+          </div>
+          <p class="side-note">不需要改变开会的习惯。它在你身后判断什么值得留下。</p>
+        </header>
+
+        <ol class="steps">
+          <li class="step reveal" style="--d:0ms">
+            <span class="step-num">01</span>
+            <h3>建一个项目</h3>
+            <p>告诉它你在做什么：哪些人、哪些议题、哪些词与你有关。兴趣清单决定什么会被保留。</p>
+            <span class="step-tag">项目记忆 · 兴趣清单</span>
+          </li>
+          <li class="step reveal" style="--d:70ms">
+            <span class="step-num">02</span>
+            <h3>只在相关时记录</h3>
+            <p>系统声音、麦克风、屏幕同时在场；内容命中项目兴趣，才留下一段可回放的证据。</p>
+            <span class="step-tag">音频 + 屏幕帧 + 字幕</span>
+          </li>
+          <li class="step reveal" style="--d:140ms">
+            <span class="step-num">03</span>
+            <h3>生成证据包</h3>
+            <p>ZIP、manifest、每个文件的 SHA256。音频、字幕、屏幕帧和原话装在一起，离线也能验。</p>
+            <span class="step-tag">ZIP + manifest + SHA256</span>
+          </li>
+          <li class="step reveal" style="--d:210ms">
+            <span class="step-num">04</span>
+            <h3>用一句话找回</h3>
+            <p>问「为什么改期」「谁答应过什么」，它给出 30–90 秒的片段，而不是整场录音。</p>
+            <span class="step-tag">Find Moment · 定位到秒</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section privacy" id="privacy">
+      <div class="wrap privacy-grid">
+        <div class="privacy-copy reveal">
+          <p class="eyebrow">LOCAL-FIRST</p>
+          <h2>证据留在<br>你的电脑里。</h2>
+          <p class="lead">会议内容默认不出本机。需要给别人时，你交出去的是一个可独立校验的证据包，而不是一个需要登录的账号。</p>
+          <div class="privacy-actions">
+            <button class="btn btn-primary" type="button" data-dialog-open="downloadDialog">获取 Windows 桌面版</button>
+            <a class="btn btn-quiet" href="#faq">先看常见问题</a>
+          </div>
+        </div>
+
+        <ul class="privacy-list">
+          <li class="reveal" style="--d:0ms">
+            <span class="num">01</span>
+            <div><h3>默认不上传</h3><p>系统声音、麦克风、屏幕帧和字幕都在本地处理；是否使用云端 ASR 由你配置。</p></div>
+          </li>
+          <li class="reveal" style="--d:60ms">
+            <span class="num">02</span>
+            <div><h3>只保留相关片段</h3><p>命中的内容进入证据池，未命中的不落盘。证据池属于项目，不属于某一场会议。</p></div>
+          </li>
+          <li class="reveal" style="--d:120ms">
+            <span class="num">03</span>
+            <div><h3>离线可校验</h3><p>SHA256 写在 manifest 里。断网、换电脑、交给第三方，都能重新算一遍。</p></div>
+          </li>
+          <li class="reveal" style="--d:180ms">
+            <span class="num">04</span>
+            <div><h3>随时可删除</h3><p>项目与衍生数据由你保管。删掉项目，证据池、索引和记忆一并移除。</p></div>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section faq" id="faq">
+      <div class="wrap faq-grid">
+        <header class="faq-head reveal">
+          <p class="eyebrow">FAQ</p>
+          <h2>它不做什么，<br>和它做什么一样重要。</h2>
+          <p class="lead">如果你在找一个「自动写纪要」的工具，它可能不是。如果你需要证明一个决定怎么发生的，继续看。</p>
+        </header>
+
+        <div class="faq-list">
+          <details class="reveal" open>
+            <summary>它会一直录音吗？</summary>
+            <p>不会。它持续判断内容是否与项目兴趣相关，只有命中时才保留片段。证据池里是 30–90 秒的片段，不是整场会议的录音。</p>
+          </details>
+          <details class="reveal">
+            <summary>数据会上传到云端吗？</summary>
+            <p>默认不上传。ASR 可以本地运行，也可以按你的配置走云端；会议内容、证据包和项目记忆默认留在本机。</p>
+          </details>
+          <details class="reveal">
+            <summary>拿到证据包的人怎么验证？</summary>
+            <p>解压后按 manifest 逐个文件计算 SHA256，与清单里的值比对即可。全程离线，不需要安装 meetingVAR，也不需要信任生成方。</p>
+          </details>
+          <details class="reveal">
+            <summary>现在可以下载吗？</summary>
+            <p>可以。最新 Windows 安装包发布在 <a href="https://github.com/DanielXiong8/meetingVAR/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>。网站只做产品说明和交互演示，不托管安装包，也不连接你的会议数据。</p>
+          </details>
+          <details class="reveal">
+            <summary>支持 macOS 或 Linux 吗？</summary>
+            <p>当前只提供 Windows 10/11 桌面版，依赖 WebView2 与 Windows 的音频捕获能力。其他平台尚未验证。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing">
+      <img class="closing-media" src="assets/sky-hero.webp" alt="" loading="lazy" decoding="async">
+      <div class="closing-shade" aria-hidden="true"></div>
+      <div class="wrap closing-inner reveal">
+        <p class="eyebrow eyebrow-light">MEETING EVIDENCE AGENT</p>
+        <h2>下一次有人说<br class="closing-break">「我们不是这么定的」，<br><em>把那一刻找出来。</em></h2>
+        <div class="closing-actions">
+          <button class="btn btn-light" type="button" data-dialog-open="downloadDialog">获取 Windows 桌面版</button>
+          <a class="btn btn-glass" href="#evidence">再看一遍演示</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div class="footer-brand">
+        <span class="footer-wordmark">meetingVAR</span>
+        <p>本地优先的会议证据代理。<br>别人帮你记下来，我们帮你证出来。</p>
+      </div>
+      <nav class="footer-links" aria-label="页脚导航">
+        <a href="#why">为什么是证据</a>
+        <a href="#evidence">证据能力</a>
+        <a href="#how">如何工作</a>
+        <a href="#privacy">隐私边界</a>
+        <a href="https://github.com/DanielXiong8/meetingVAR/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a>
+      </nav>
+      <div class="footer-meta">
+        <p>SDG Open Hack 2026 · Hack16 · Lenovo track</p>
+        <p>Windows 10/11 · v0.28.5 · 本地优先 · 可离线校验</p>
+        <p class="footer-copy">© 2026 meetingVAR</p>
+      </div>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog class="dialog" id="downloadDialog" aria-labelledby="downloadTitle">
+    <div class="dialog-head">
+      <span class="badge badge-amber">Windows 桌面版 · GitHub Release</span>
+      <button class="dialog-close" type="button" data-dialog-close aria-label="关闭">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="m3 3 8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="dialog-body">
+      <h2 id="downloadTitle">下载 meetingVAR 0.28.5</h2>
+      <p>安装包发布在 GitHub Releases 的 latest release。下载后本地安装；网站只做展示，不托管安装包。安装包未做代码签名，Windows 可能提示未知发布者，请核对下方 SHA256。</p>
+      <ul class="dialog-list">
+        <li>系统：Windows 10/11（需要 WebView2）</li>
+        <li>版本：0.28.5 · 安装包约 38 MB</li>
+        <li>安装后首次运行，在设置页配置引擎 Python 和项目路径</li>
+        <li>SHA256：<code>aebdf3a7e4255dea83e592a7415a54febc41f03c6aacac8234a6038ed4b89016</code></li>
+      </ul>
+      <div class="dialog-actions">
+        <a class="btn btn-primary" href="https://github.com/DanielXiong8/meetingVAR/releases/latest/download/meetingVAR-setup.exe" target="_blank" rel="noopener noreferrer" data-dialog-close>下载 Windows 安装包</a>
+        <a class="btn btn-quiet" href="https://github.com/DanielXiong8/meetingVAR/releases/latest" target="_blank" rel="noopener noreferrer" data-dialog-close>查看 release 说明</a>
+        <button class="btn btn-quiet" type="button" data-dialog-close>关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

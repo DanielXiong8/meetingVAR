@@ -13,7 +13,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APP_HOME = (Path(sys.executable).resolve().parent
              if getattr(sys, "frozen", False) else _REPO_ROOT)
 _RUNTIME = _APP_HOME / "runtime"
-_SERVER_ROOT = Path("D:/env/llama.cpp")
+_SERVER_ROOT = Path(os.environ.get("MEETINGVAR_LLAMA_CPP", str(Path.home() / "meetingVAR" / "llama.cpp")))
 _SERVER_NAMES = ("llama-server.exe", "llama-server")
 _MODEL_ALIAS = "meetingvar-local"
 _MAX_VERSION_DIRS = 32

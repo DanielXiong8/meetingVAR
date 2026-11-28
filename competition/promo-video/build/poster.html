@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>meetingVAR · cover</title>
+    <link rel="stylesheet" href="promo.css" />
+    <style>
+      .wrap { position: absolute; inset: 0; }
+      .lead { position: absolute; left: 72px; top: 286px; width: 1260px; }
+      .meta { position: absolute; left: 72px; bottom: 64px; display: flex; align-items: center; gap: 18px; }
+      .tag {
+        border: 1px solid rgba(17, 17, 16, 0.18);
+        border-radius: 999px;
+        padding: 11px 22px;
+        font-size: 21px;
+        font-weight: 600;
+      }
+      .tag.solid { background: var(--ink); color: var(--cream); border-color: var(--ink); }
+      .brand { position: absolute; left: 72px; top: 62px; display: flex; align-items: center; gap: 16px; }
+      .brand img { width: 52px; height: 52px; border-radius: 14px; }
+      .brand .wm { font-weight: 800; font-size: 32px; letter-spacing: -0.025em; }
+      .brand .wm i { font-family: "MVSerif"; font-style: italic; font-weight: 600; margin-left: -0.035em; }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div class="wrap">
+        <!-- 渐变块 -->
+        <div class="blob b-peach" style="left: 1420px; top: 40px; width: 340px; height: 340px; transform: rotate(-11deg)"></div>
+        <div class="blob b-sky" style="left: 1600px; top: 380px; width: 290px; height: 290px; transform: rotate(16deg)"></div>
+        <div class="blob b-butter" style="left: 1230px; top: 540px; width: 200px; height: 200px; transform: rotate(28deg); opacity: 0.7"></div>
+
+        <div class="brand">
+          <img src="assets/logo.png" />
+          <div class="wm">meeting<i>VAR</i></div>
+        </div>
+
+        <div class="lead">
+          <div class="kicker">MEETING EVIDENCE LAYER</div>
+          <div class="h1" style="margin-top: 34px; font-size: 98px; line-height: 1.1">
+            别人帮你记下来。<br />
+            meetingVAR 帮你<em class="em em-red">证</em>出来。
+          </div>
+          <div class="cap" style="margin-top: 44px; font-size: 34px">
+            可校验的证据包 · 承诺账本 · 精确到秒的原话
+          </div>
+        </div>
+
+        <div class="meta">
+          <div class="tag solid">3:56</div>
+          <div class="tag">SDG Open Hack 2026 · Hack16</div>
+          <div class="tag">Lenovo track</div>
+        </div>
+      </div>
+      <div class="grain"></div>
+      <div class="vignette"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="640" viewBox="0 0 400 640">
+<rect width="400" height="640" rx="18" fill="#e4e4e7"/>
+<rect x="24" y="28" width="352" height="584" rx="10" fill="#18181b"/>
+<circle cx="46" cy="50" r="4" fill="#52525b"/><circle cx="60" cy="50" r="4" fill="#52525b"/><circle cx="74" cy="50" r="4" fill="#52525b"/>
+<rect x="24" y="70" width="352" height="1" fill="#3f3f46"/>
+<rect x="44" y="92" width="46" height="4" rx="2" fill="#52525b"/><rect x="100" y="92" width="86" height="4" rx="2" fill="#a1a1aa"/>
+<rect x="44" y="112" width="196" height="4" rx="2" fill="#52525b"/>
+<rect x="44" y="132" width="280" height="4" rx="2" fill="#3f3f46"/><rect x="44" y="145" width="232" height="4" rx="2" fill="#3f3f46"/>
+<rect x="44" y="164" width="54" height="4" rx="2" fill="#71717a"/><rect x="106" y="164" width="126" height="4" rx="2" fill="#a1a1aa"/>
+<rect x="44" y="184" width="244" height="4" rx="2" fill="#3f3f46"/><rect x="44" y="197" width="160" height="4" rx="2" fill="#3f3f46"/>
+<rect x="44" y="222" width="94" height="6" rx="3" fill="#e4e4e7"/>
+<rect x="44" y="246" width="270" height="4" rx="2" fill="#3f3f46"/><rect x="44" y="259" width="210" height="4" rx="2" fill="#3f3f46"/>
+<rect x="44" y="278" width="46" height="4" rx="2" fill="#71717a"/><rect x="96" y="278" width="170" height="4" rx="2" fill="#a1a1aa"/>
+<rect x="44" y="298" width="282" height="4" rx="2" fill="#3f3f46"/><rect x="44" y="311" width="246" height="4" rx="2" fill="#3f3f46"/>
+<rect x="44" y="340" width="120" height="70" rx="5" fill="#27272a" stroke="#3f3f46"/>
+<rect x="58" y="354" width="56" height="4" rx="2" fill="#71717a"/><rect x="58" y="370" width="86" height="4" rx="2" fill="#52525b"/><rect x="58" y="383" width="72" height="4" rx="2" fill="#52525b"/>
+<rect x="176" y="340" width="150" height="70" rx="5" fill="#27272a" stroke="#3f3f46"/>
+<circle cx="216" cy="374" r="18" fill="#3f3f46"/><rect x="248" y="360" width="62" height="4" rx="2" fill="#71717a"/><rect x="248" y="376" width="48" height="4" rx="2" fill="#52525b"/>
+<rect x="44" y="442" width="256" height="4" rx="2" fill="#3f3f46"/><rect x="44" y="455" width="208" height="4" rx="2" fill="#3f3f46"/>
+<text x="44" y="582" font-family="monospace" font-size="10" fill="#71717a">repository / evidence.ts</text>
+</svg>

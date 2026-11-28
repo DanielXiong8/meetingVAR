@@ -27,6 +27,7 @@ class BackendTests(unittest.TestCase):
         desktop_app.CONFIG_DIR = self.tmp
         desktop_app.CONFIG_FILE = self.tmp / "ui_config.json"
         desktop_app.SESSMAP_FILE = self.tmp / "sessions_map.json"
+        desktop_app.SESSION_TITLES_FILE = self.tmp / "session_titles.json"
         desktop_app.LLM_LOG_FILE = self.tmp / "llm.log"
         self.b = desktop_app.Backend()
         self.b._cfg.update(interest_mode="manual", asr_engine="local")
@@ -75,6 +76,29 @@ class BackendTests(unittest.TestCase):
         self.assertIn("项目A", by_name)
         self.assertEqual(len(by_name["项目A"]["sessions"]), 2)
         self.assertIn("（未归属会话）", by_name, "无映射的会话应进未归属组")
+
+    def test_rename_session_persists_and_survives_reload(self) -> None:
+        pool = self.tmp / "repo" / "data" / "pool"
+        (pool / "go_1").mkdir(parents=True)
+        (pool / "go_1" / "summary.json").write_text(
+            json.dumps({"lines": 2, "clips": 1}), encoding="utf-8"
+        )
+        self.b._cfg["repo_dir"] = str(self.tmp / "repo")
+
+        result = self.b.rename_session("go_1", "  产品周会 · 11/24  ")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["title"], "产品周会 · 11/24")
+        self.assertEqual(self.b.list_sessions()[0]["title"], "产品周会 · 11/24")
+        self.assertTrue((self.tmp / "session_titles.json").exists(), "标题应持久化")
+
+        reloaded = desktop_app.Backend()
+        reloaded._cfg["repo_dir"] = str(self.tmp / "repo")
+        self.assertEqual(reloaded.list_sessions()[0]["title"], "产品周会 · 11/24",
+                         "重启后重命名必须还在")
+
+        self.b.rename_session("go_1", "   ")
+        self.assertEqual(self.b.list_sessions()[0]["title"], "", "空标题应清除自定义名")
+        self.assertFalse(self.b.rename_session("bad id", "x")["ok"], "非法会话 ID 必须拒绝")
 
     def test_library_backfills_from_archive_dirs(self) -> None:
         """历史映射回填：<项目>/meetingvar/minutes/<sid>/ 存在即算该项目。"""

@@ -444,6 +444,20 @@ class RagIndex:
         denom = (sum(x * x for x in a) ** 0.5) * (sum(x * x for x in b) ** 0.5)
         return sum(x * y for x, y in zip(a, b)) / denom if denom else 0.0
 
+    @staticmethod
+    def _semantic_floor(ranked: list[tuple[float, str]]) -> float:
+        """Admission threshold for the dense (no-lexical-hit) side.
+
+        BGE-zh scores unrelated pairs around 0.30–0.45 while relevant ones reach
+        0.55–0.75, so a small absolute floor (0.50) separates the signal from the
+        noise band, and a relative cap (80 % of the best hit) keeps a handful of
+        borderline chunks from flooding the candidate set.
+        """
+        scores = [cosine for cosine, _ in ranked[:30] if cosine > 0]
+        if not scores:
+            return 0.0
+        return max(0.50, 0.80 * scores[0])
+
     def _layered_fts(self, connection: sqlite3.Connection, query: str, where: str,
                      params: list, fetch: int) -> list[sqlite3.Row]:
         """Run layered MATCH expressions (phrase → bigram phrases → flat OR),
@@ -495,7 +509,8 @@ class RagIndex:
                     # judgement does the filtering; the floor only prunes an
                     # obviously empty result set.
                     semantic = {chunk_id for cosine, chunk_id in
-                                ranked[:max(20, limit * 3)] if cosine >= 0.30}
+                                ranked[:max(20, limit * 3)]
+                                if cosine >= self._semantic_floor(ranked)}
                     missing = sorted(semantic - set(rows))
                     if missing:
                         placeholders = ",".join("?" for _ in missing)

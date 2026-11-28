@@ -1,6 +1,6 @@
 """meetingVAR 全局配置：路径、模型、采集参数。
 
-模型优先从应用自带 ``runtime/models`` 读取；没有时才用本机开发路径。
+模型优先从应用自带 ``runtime/models`` 读取；没有时使用 ``MEETINGVAR_MODELS`` 或用户目录。
 运行期产物在 data/（gitignore）。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ def _models_root() -> Path:
     bundled = Path(__file__).resolve().parents[2] / "runtime" / "models"
     if bundled.is_dir():
         return bundled
-    return Path("D:/env/models")
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "meetingVAR" / "models"
 
 
 # ---- 模型 ----
