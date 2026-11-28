@@ -53,3 +53,4 @@ desktop/agent-ui/web-next/
 %LOCALAPPDATA%/
 node_modules/
 .zcode/
+desktop/web-next/
