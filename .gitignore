@@ -47,7 +47,7 @@ meetingVAR-setup.spec
 /runtime/
 
 # Next UI generated export; reproducible from desktop/agent-ui
-/desktop/web-next/
+desktop/agent-ui/web-next/
 
 # ===== 本地生成物/误建目录/代理工具 =====
 %LOCALAPPDATA%/
